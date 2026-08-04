@@ -102,71 +102,6 @@ func TestCodexDefaultRequiresToolCall(t *testing.T) {
 	}
 }
 
-// TestGeminiDefaultVersionBeatsChannel 版本优先于频道:3.1-pro-preview 胜 2.5-pro(stable)。
-func TestGeminiDefaultVersionBeatsChannel(t *testing.T) {
-	policy := newTestPolicy(t, "2026-07-28", fakeCatalogSource{
-		"google": {ID: "google", Models: map[string]modelpricing.RemoteModel{
-			"gemini-2.5-pro":         catalogModel("gemini-2.5-pro", "2025-06-17"),
-			"gemini-3.1-pro-preview": catalogModel("gemini-3.1-pro-preview", "2026-02-19"),
-			"gemini-3.1-pro-image":   catalogModel("gemini-3.1-pro-image", "2026-05-28"), // 非目标家族
-		}},
-	})
-	if got := policy.GeminiDefaultModel(); got != "gemini-3.1-pro-preview" {
-		t.Errorf("gemini 默认 = %s, want gemini-3.1-pro-preview", got)
-	}
-}
-
-// TestGeminiSameVersionStableBeatsPreview 同版本 stable 优先于 preview。
-func TestGeminiSameVersionStableBeatsPreview(t *testing.T) {
-	policy := newTestPolicy(t, "2026-07-28", fakeCatalogSource{
-		"google": {ID: "google", Models: map[string]modelpricing.RemoteModel{
-			"gemini-3.1-pro":         catalogModel("gemini-3.1-pro", "2026-05-19"),
-			"gemini-3.1-pro-preview": catalogModel("gemini-3.1-pro-preview", "2026-02-19"),
-		}},
-	})
-	if got := policy.GeminiDefaultModel(); got != "gemini-3.1-pro" {
-		t.Errorf("gemini 默认 = %s, want gemini-3.1-pro (同版本 stable 优先)", got)
-	}
-}
-
-// TestProbeStabilityWindow 探测模型要求发布满 30 天:gemini-3.6-flash(7 天)让位 3.5-flash。
-func TestProbeStabilityWindow(t *testing.T) {
-	policy := newTestPolicy(t, "2026-07-28", fakeCatalogSource{
-		"google": {ID: "google", Models: map[string]modelpricing.RemoteModel{
-			"gemini-3.6-flash": catalogModel("gemini-3.6-flash", "2026-07-21"),
-			"gemini-3.5-flash": catalogModel("gemini-3.5-flash", "2026-05-19"),
-		}},
-	})
-	if got := policy.ProbeModel("gemini"); got != "gemini-3.5-flash" {
-		t.Errorf("gemini 探测 = %s, want gemini-3.5-flash (3.6 未满稳定窗)", got)
-	}
-}
-
-// TestClaudeProbeDatedTieBreakWithinVersion 日期变体只在同版本内决胜,不高于版本比较。
-func TestClaudeProbeDatedTieBreakWithinVersion(t *testing.T) {
-	policy := newTestPolicy(t, "2026-07-28", fakeCatalogSource{
-		"anthropic": {ID: "anthropic", Models: map[string]modelpricing.RemoteModel{
-			"claude-haiku-4-5":          catalogModel("claude-haiku-4-5", "2025-10-15"),
-			"claude-haiku-4-5-20251001": catalogModel("claude-haiku-4-5-20251001", "2025-10-15"),
-			"claude-3-5-haiku-20241022": catalogModel("claude-3-5-haiku-20241022", "2024-10-22"),
-		}},
-	})
-	if got := policy.ProbeModel("claude"); got != "claude-haiku-4-5-20251001" {
-		t.Errorf("claude 探测 = %s, want claude-haiku-4-5-20251001 (同版本带日期优先)", got)
-	}
-
-	// 出现更高版本裸名时,版本优先于"带日期"
-	policy2 := newTestPolicy(t, "2026-07-28", fakeCatalogSource{
-		"anthropic": {ID: "anthropic", Models: map[string]modelpricing.RemoteModel{
-			"claude-haiku-5":            catalogModel("claude-haiku-5", "2026-05-01"),
-			"claude-haiku-4-5-20251001": catalogModel("claude-haiku-4-5-20251001", "2025-10-15"),
-		}},
-	})
-	if got := policy2.ProbeModel("claude"); got != "claude-haiku-5" {
-		t.Errorf("claude 探测 = %s, want claude-haiku-5 (版本高于日期偏好)", got)
-	}
-}
-
 // TestResolverExcludesFutureAndMissingRelease 未来日期与缺失 release_date 不入选。
 func TestResolverExcludesFutureAndMissingRelease(t *testing.T) {
 	policy := newTestPolicy(t, "2026-07-28", fakeCatalogSource{
@@ -187,11 +122,28 @@ func TestPolicyFallbacksWithoutSource(t *testing.T) {
 	if got := policy.CodexDefaultModel(); got != FallbackCodexDefaultModel {
 		t.Errorf("无源 codex 默认 = %s, want %s", got, FallbackCodexDefaultModel)
 	}
-	if got := policy.ProbeModel("claude"); got != FallbackClaudeProbeModel {
-		t.Errorf("无源 claude 探测 = %s, want %s", got, FallbackClaudeProbeModel)
+	if got := policy.ProbeModel(CodexPlatform); got != FallbackCodexProbeModel {
+		t.Errorf("无源 codex 探测 = %s, want %s", got, FallbackCodexProbeModel)
 	}
-	if got := policy.ProbeModel("gemini"); got != FallbackGeminiProbeModel {
-		t.Errorf("无源 gemini 探测 = %s, want %s", got, FallbackGeminiProbeModel)
+	for _, platform := range []string{"claude", "gemini", ""} {
+		if got := policy.ProbeModel(platform); got != "" {
+			t.Errorf("ProbeModel(%q) = %q, want empty", platform, got)
+		}
+	}
+}
+
+func TestProbeModelCannotBeChangedByCatalogSync(t *testing.T) {
+	policy := newTestPolicy(t, "2026-07-28", fakeCatalogSource{
+		"openai": {ID: "openai", Models: map[string]modelpricing.RemoteModel{
+			"gpt-99": catalogModel("gpt-99", "2026-07-01"),
+		}},
+	})
+	if got := policy.ProbeModel(CodexPlatform); got != "gpt-5.6-sol" {
+		t.Fatalf("ProbeModel = %q, want fixed gpt-5.6-sol", got)
+	}
+	candidates := policy.ProbeCandidates(CodexPlatform)
+	if len(candidates) != 1 || candidates[0] != "gpt-5.6-sol" {
+		t.Fatalf("ProbeCandidates = %v, want [gpt-5.6-sol]", candidates)
 	}
 }
 

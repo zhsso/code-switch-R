@@ -18,34 +18,34 @@ func TestMatchWildcard(t *testing.T) {
 		// 精确匹配
 		{
 			name:     "精确匹配-成功",
-			pattern:  "claude-sonnet-4",
-			text:     "claude-sonnet-4",
+			pattern:  "gpt-sonnet-4",
+			text:     "gpt-sonnet-4",
 			expected: true,
 		},
 		{
 			name:     "精确匹配-失败",
-			pattern:  "claude-sonnet-4",
-			text:     "claude-opus-4",
+			pattern:  "gpt-sonnet-4",
+			text:     "gpt-opus-4",
 			expected: false,
 		},
 
 		// 前缀通配符
 		{
 			name:     "前缀通配符-成功",
-			pattern:  "claude-*",
-			text:     "claude-sonnet-4",
+			pattern:  "gpt-*",
+			text:     "gpt-sonnet-4",
 			expected: true,
 		},
 		{
 			name:     "前缀通配符-多段匹配",
-			pattern:  "claude-*",
-			text:     "claude-sonnet-4-latest",
+			pattern:  "gpt-*",
+			text:     "gpt-sonnet-4-latest",
 			expected: true,
 		},
 		{
 			name:     "前缀通配符-失败",
-			pattern:  "claude-*",
-			text:     "gpt-4",
+			pattern:  "gpt-*",
+			text:     "o4-mini",
 			expected: false,
 		},
 
@@ -53,39 +53,39 @@ func TestMatchWildcard(t *testing.T) {
 		{
 			name:     "后缀通配符-成功",
 			pattern:  "*-4",
-			text:     "claude-sonnet-4",
+			text:     "gpt-sonnet-4",
 			expected: true,
 		},
 		{
 			name:     "后缀通配符-失败",
 			pattern:  "*-4",
-			text:     "claude-sonnet-3.5",
+			text:     "gpt-sonnet-3.5",
 			expected: false,
 		},
 
 		// 中间通配符
 		{
 			name:     "中间通配符-成功",
-			pattern:  "claude-*-4",
-			text:     "claude-sonnet-4",
+			pattern:  "gpt-*-4",
+			text:     "gpt-sonnet-4",
 			expected: true,
 		},
 		{
 			name:     "中间通配符-多段匹配",
-			pattern:  "claude-*-4",
-			text:     "claude-opus-mini-4",
+			pattern:  "gpt-*-4",
+			text:     "gpt-opus-mini-4",
 			expected: true,
 		},
 		{
 			name:     "中间通配符-失败前缀",
-			pattern:  "claude-*-4",
-			text:     "gpt-sonnet-4",
+			pattern:  "gpt-*-4",
+			text:     "o-sonnet-4",
 			expected: false,
 		},
 		{
 			name:     "中间通配符-失败后缀",
-			pattern:  "claude-*-4",
-			text:     "claude-sonnet-3",
+			pattern:  "gpt-*-4",
+			text:     "gpt-sonnet-3",
 			expected: false,
 		},
 
@@ -93,13 +93,13 @@ func TestMatchWildcard(t *testing.T) {
 		{
 			name:     "空前缀",
 			pattern:  "*-sonnet",
-			text:     "claude-sonnet",
+			text:     "gpt-sonnet",
 			expected: true,
 		},
 		{
 			name:     "空后缀",
-			pattern:  "claude-*",
-			text:     "claude-",
+			pattern:  "gpt-*",
+			text:     "gpt-",
 			expected: true,
 		},
 	}
@@ -128,51 +128,51 @@ func TestApplyWildcardMapping(t *testing.T) {
 		// 前缀通配符映射
 		{
 			name:        "前缀通配符映射",
-			pattern:     "claude-*",
-			replacement: "anthropic/claude-*",
-			input:       "claude-sonnet-4",
-			expected:    "anthropic/claude-sonnet-4",
+			pattern:     "gpt-*",
+			replacement: "gateway/gpt-*",
+			input:       "gpt-sonnet-4",
+			expected:    "gateway/gpt-sonnet-4",
 		},
 		{
 			name:        "前缀通配符映射-多段",
-			pattern:     "claude-*",
-			replacement: "anthropic/claude-*",
-			input:       "claude-opus-4-latest",
-			expected:    "anthropic/claude-opus-4-latest",
+			pattern:     "gpt-*",
+			replacement: "gateway/gpt-*",
+			input:       "gpt-opus-4-latest",
+			expected:    "gateway/gpt-opus-4-latest",
 		},
 
 		// 中间通配符映射
 		{
 			name:        "中间通配符映射",
-			pattern:     "claude-*-4",
-			replacement: "anthropic/claude-*-v4",
-			input:       "claude-sonnet-4",
-			expected:    "anthropic/claude-sonnet-v4",
+			pattern:     "gpt-*-4",
+			replacement: "gateway/gpt-*-v4",
+			input:       "gpt-sonnet-4",
+			expected:    "gateway/gpt-sonnet-v4",
 		},
 
 		// 无通配符（直接返回 replacement）
 		{
 			name:        "无通配符-pattern",
-			pattern:     "claude-sonnet-4",
-			replacement: "anthropic/claude-sonnet-4",
-			input:       "claude-sonnet-4",
-			expected:    "anthropic/claude-sonnet-4",
+			pattern:     "gpt-sonnet-4",
+			replacement: "gateway/gpt-sonnet-4",
+			input:       "gpt-sonnet-4",
+			expected:    "gateway/gpt-sonnet-4",
 		},
 		{
 			name:        "无通配符-replacement",
-			pattern:     "claude-*",
+			pattern:     "gpt-*",
 			replacement: "fixed-model",
-			input:       "claude-sonnet-4",
+			input:       "gpt-sonnet-4",
 			expected:    "fixed-model",
 		},
 
 		// 边界情况
 		{
 			name:        "空匹配部分",
-			pattern:     "claude-*",
-			replacement: "anthropic/claude-*",
-			input:       "claude-",
-			expected:    "anthropic/claude-",
+			pattern:     "gpt-*",
+			replacement: "gateway/gpt-*",
+			input:       "gpt-",
+			expected:    "gateway/gpt-",
 		},
 	}
 
@@ -209,18 +209,18 @@ func TestProvider_IsModelSupported(t *testing.T) {
 			name: "原生支持-精确匹配-成功",
 			provider: Provider{
 				SupportedModels: map[string]bool{
-					"claude-sonnet-4": true,
-					"claude-opus-4":   true,
+					"gpt-sonnet-4": true,
+					"gpt-opus-4":   true,
 				},
 			},
-			modelName: "claude-sonnet-4",
+			modelName: "gpt-sonnet-4",
 			expected:  true,
 		},
 		{
 			name: "原生支持-精确匹配-失败",
 			provider: Provider{
 				SupportedModels: map[string]bool{
-					"claude-sonnet-4": true,
+					"gpt-sonnet-4": true,
 				},
 			},
 			modelName: "gpt-4",
@@ -232,20 +232,20 @@ func TestProvider_IsModelSupported(t *testing.T) {
 			name: "原生支持-通配符匹配-成功",
 			provider: Provider{
 				SupportedModels: map[string]bool{
-					"claude-*": true,
+					"gpt-*": true,
 				},
 			},
-			modelName: "claude-sonnet-4",
+			modelName: "gpt-sonnet-4",
 			expected:  true,
 		},
 		{
 			name: "原生支持-通配符匹配-失败",
 			provider: Provider{
 				SupportedModels: map[string]bool{
-					"claude-*": true,
+					"gpt-*": true,
 				},
 			},
-			modelName: "gpt-4",
+			modelName: "o4-mini",
 			expected:  false,
 		},
 
@@ -254,13 +254,13 @@ func TestProvider_IsModelSupported(t *testing.T) {
 			name: "映射支持-精确匹配-成功",
 			provider: Provider{
 				SupportedModels: map[string]bool{
-					"anthropic/claude-sonnet-4": true,
+					"gateway/gpt-sonnet-4": true,
 				},
 				ModelMapping: map[string]string{
-					"claude-sonnet-4": "anthropic/claude-sonnet-4",
+					"gpt-sonnet-4": "gateway/gpt-sonnet-4",
 				},
 			},
-			modelName: "claude-sonnet-4",
+			modelName: "gpt-sonnet-4",
 			expected:  true,
 		},
 
@@ -269,13 +269,13 @@ func TestProvider_IsModelSupported(t *testing.T) {
 			name: "映射支持-通配符匹配-成功",
 			provider: Provider{
 				SupportedModels: map[string]bool{
-					"anthropic/claude-*": true,
+					"gateway/gpt-*": true,
 				},
 				ModelMapping: map[string]string{
-					"claude-*": "anthropic/claude-*",
+					"gpt-*": "gateway/gpt-*",
 				},
 			},
-			modelName: "claude-sonnet-4",
+			modelName: "gpt-sonnet-4",
 			expected:  true,
 		},
 
@@ -333,8 +333,8 @@ func TestProvider_GetEffectiveModel(t *testing.T) {
 		{
 			name:           "无映射-返回原名",
 			provider:       Provider{},
-			requestedModel: "claude-sonnet-4",
-			expected:       "claude-sonnet-4",
+			requestedModel: "gpt-sonnet-4",
+			expected:       "gpt-sonnet-4",
 		},
 
 		// 精确映射
@@ -342,17 +342,17 @@ func TestProvider_GetEffectiveModel(t *testing.T) {
 			name: "精确映射-成功",
 			provider: Provider{
 				ModelMapping: map[string]string{
-					"claude-sonnet-4": "anthropic/claude-sonnet-4",
+					"gpt-sonnet-4": "gateway/gpt-sonnet-4",
 				},
 			},
-			requestedModel: "claude-sonnet-4",
-			expected:       "anthropic/claude-sonnet-4",
+			requestedModel: "gpt-sonnet-4",
+			expected:       "gateway/gpt-sonnet-4",
 		},
 		{
 			name: "精确映射-无匹配",
 			provider: Provider{
 				ModelMapping: map[string]string{
-					"claude-sonnet-4": "anthropic/claude-sonnet-4",
+					"gpt-sonnet-4": "gateway/gpt-sonnet-4",
 				},
 			},
 			requestedModel: "gpt-4",
@@ -364,21 +364,21 @@ func TestProvider_GetEffectiveModel(t *testing.T) {
 			name: "通配符映射-前缀",
 			provider: Provider{
 				ModelMapping: map[string]string{
-					"claude-*": "anthropic/claude-*",
+					"gpt-*": "gateway/gpt-*",
 				},
 			},
-			requestedModel: "claude-sonnet-4",
-			expected:       "anthropic/claude-sonnet-4",
+			requestedModel: "gpt-sonnet-4",
+			expected:       "gateway/gpt-sonnet-4",
 		},
 		{
 			name: "通配符映射-中间",
 			provider: Provider{
 				ModelMapping: map[string]string{
-					"claude-*-4": "anthropic/claude-*-v4",
+					"gpt-*-4": "gateway/gpt-*-v4",
 				},
 			},
-			requestedModel: "claude-sonnet-4",
-			expected:       "anthropic/claude-sonnet-v4",
+			requestedModel: "gpt-sonnet-4",
+			expected:       "gateway/gpt-sonnet-v4",
 		},
 
 		// 精确优先于通配符
@@ -386,11 +386,11 @@ func TestProvider_GetEffectiveModel(t *testing.T) {
 			name: "精确映射优先",
 			provider: Provider{
 				ModelMapping: map[string]string{
-					"claude-sonnet-4": "exact-match",
-					"claude-*":        "wildcard-match",
+					"gpt-sonnet-4": "exact-match",
+					"gpt-*":        "wildcard-match",
 				},
 			},
-			requestedModel: "claude-sonnet-4",
+			requestedModel: "gpt-sonnet-4",
 			expected:       "exact-match",
 		},
 	}
@@ -480,10 +480,10 @@ func TestProvider_ValidateConfiguration(t *testing.T) {
 			provider: Provider{
 				Name: "test-provider",
 				SupportedModels: map[string]bool{
-					"anthropic/claude-*": true,
+					"gateway/gpt-*": true,
 				},
 				ModelMapping: map[string]string{
-					"claude-*": "anthropic/claude-*",
+					"gpt-*": "gateway/gpt-*",
 				},
 			},
 			expectErrors: false,
@@ -750,12 +750,13 @@ func TestDuplicateProvider(t *testing.T) {
 		{
 			name: "复制基础供应商",
 			source: Provider{
-				ID:      1,
-				Name:    "Test Provider",
-				APIURL:  "https://api.example.com",
-				APIKey:  "sk-test-key",
-				Enabled: true,
-				Level:   2,
+				ID:             1,
+				Name:           "Test Provider",
+				APIURL:         "https://api.example.com",
+				APIKey:         "sk-test-key",
+				Enabled:        true,
+				Level:          2,
+				CostMultiplier: 0.75,
 			},
 			expectName:  "Test Provider (副本)",
 			expectLevel: 2,
@@ -763,19 +764,20 @@ func TestDuplicateProvider(t *testing.T) {
 		{
 			name: "复制带模型映射的供应商",
 			source: Provider{
-				ID:      10,
-				Name:    "OpenRouter",
-				APIURL:  "https://openrouter.ai/api",
-				APIKey:  "sk-or-xxx",
-				Enabled: true,
-				Level:   3,
+				ID:             10,
+				Name:           "OpenRouter",
+				APIURL:         "https://openrouter.ai/api",
+				APIKey:         "sk-or-xxx",
+				Enabled:        true,
+				Level:          3,
+				CostMultiplier: 1.25,
 				SupportedModels: map[string]bool{
-					"anthropic/claude-*": true,
-					"openai/gpt-*":       true,
+					"gateway/gpt-*": true,
+					"openai/gpt-*":  true,
 				},
 				ModelMapping: map[string]string{
-					"claude-*": "anthropic/claude-*",
-					"gpt-*":    "openai/gpt-*",
+					"gpt-sonnet-*": "gateway/gpt-sonnet-*",
+					"gpt-*":        "openai/gpt-*",
 				},
 			},
 			expectName:  "OpenRouter (副本)",
@@ -789,7 +791,7 @@ func TestDuplicateProvider(t *testing.T) {
 			ps := NewProviderService()
 			saveProviderFixture(t, ps, []Provider{tt.source})
 
-			cloned, err := ps.DuplicateProvider("claude", tt.source.ID)
+			cloned, err := ps.DuplicateProvider(CodexPlatform, tt.source.ID)
 			if err != nil {
 				t.Fatalf("DuplicateProvider 失败: %v", err)
 			}
@@ -807,6 +809,9 @@ func TestDuplicateProvider(t *testing.T) {
 			// 验证 Level 继承
 			if cloned.Level != tt.expectLevel {
 				t.Errorf("期望 Level %d，实际 %d", tt.expectLevel, cloned.Level)
+			}
+			if cloned.CostMultiplier != tt.source.CostMultiplier {
+				t.Errorf("期望费用倍率 %v，实际 %v", tt.source.CostMultiplier, cloned.CostMultiplier)
 			}
 
 			// 验证新 ID 为当前最大 ID + 1
@@ -840,7 +845,7 @@ func TestDuplicateProvider(t *testing.T) {
 			}
 
 			// 验证副本已落盘且源供应商未被改动
-			providers, err := ps.LoadProviders("claude")
+			providers, err := ps.LoadProviders(CodexPlatform)
 			if err != nil {
 				t.Fatalf("LoadProviders 失败: %v", err)
 			}
@@ -862,7 +867,8 @@ func TestDuplicateProvider(t *testing.T) {
 			if diskSource.Name != tt.source.Name || !diskSource.Enabled || diskSource.Level != tt.source.Level {
 				t.Errorf("源供应商不应被修改，实际 %+v", diskSource)
 			}
-			if diskClone.Name != tt.expectName || diskClone.Enabled || diskClone.Level != tt.expectLevel {
+			if diskClone.Name != tt.expectName || diskClone.Enabled || diskClone.Level != tt.expectLevel ||
+				diskClone.CostMultiplier != tt.source.CostMultiplier {
 				t.Errorf("落盘副本字段不符，实际 %+v", diskClone)
 			}
 		})
@@ -875,11 +881,11 @@ func TestDuplicateProvider_NotFound(t *testing.T) {
 	ps := NewProviderService()
 	saveProviderFixture(t, ps, []Provider{{ID: 1, Name: "A", APIURL: "u"}})
 
-	if _, err := ps.DuplicateProvider("claude", 999); err == nil {
+	if _, err := ps.DuplicateProvider(CodexPlatform, 999); err == nil {
 		t.Fatal("源 ID 不存在应报错")
 	}
 
-	providers, err := ps.LoadProviders("claude")
+	providers, err := ps.LoadProviders(CodexPlatform)
 	if err != nil {
 		t.Fatal(err)
 	}

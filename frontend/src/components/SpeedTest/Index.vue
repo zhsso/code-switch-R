@@ -1,10 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import {
-  TestEndpoints
-} from '../../../bindings/codeswitch/services/speedtestservice'
-import type { EndpointLatency } from '../../../bindings/codeswitch/services/models'
+import { TestEndpoints, type EndpointLatency } from '../../services/speedtest'
 import { fetchAllProviderEndpoints } from '../../services/endpointSync'
 
 const { t } = useI18n()
@@ -13,13 +10,12 @@ interface Endpoint {
   url: string
   result: EndpointLatency | null
   testing: boolean
-  source: 'manual' | 'claude' | 'codex' | 'gemini'  // 新增：端点来源
+  source: 'manual' | 'codex'
   providerName?: string                              // 新增：供应商名称
 }
 
 const newUrl = ref('')
 const endpoints = ref<Endpoint[]>([
-  { url: 'https://api.anthropic.com', result: null, testing: false, source: 'manual' },
   { url: 'https://api.openai.com', result: null, testing: false, source: 'manual' }
 ])
 const isTesting = ref(false)
@@ -454,18 +450,8 @@ onActivated(() => {
   width: fit-content;
 }
 
-.badge-claude {
-  background-color: #f59e0b;
-  color: white;
-}
-
 .badge-codex {
   background-color: #3b82f6;
-  color: white;
-}
-
-.badge-gemini {
-  background-color: #8b5cf6;
   color: white;
 }
 

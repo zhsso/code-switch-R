@@ -1,7 +1,9 @@
 package modelpricing
 
 import (
+	"encoding/json"
 	"math"
+	"regexp"
 	"sync"
 	"testing"
 )
@@ -31,6 +33,34 @@ func newTestService(t *testing.T) *Service {
 	return svc
 }
 
+func TestRemovedModelFamiliesAbsentFromEmbeddedData(t *testing.T) {
+	var prices map[string]json.RawMessage
+	if err := json.Unmarshal(pricingFile, &prices); err != nil {
+		t.Fatal(err)
+	}
+	removed := regexp.MustCompile(`(?i)claude|anthropic|gemini`)
+	for key, value := range prices {
+		if removed.MatchString(key) || removed.Match(value) {
+			t.Errorf("removed model data remains at key %q", key)
+		}
+	}
+
+	for _, providerID := range RemoteProviderIDs {
+		if removed.MatchString(providerID) {
+			t.Errorf("removed remote provider remains: %s", providerID)
+		}
+	}
+	for providerID, catalog := range EmbeddedSeedCatalogs() {
+		encoded, err := json.Marshal(catalog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if removed.MatchString(providerID) || removed.Match(encoded) {
+			t.Errorf("removed seed data remains in %s", providerID)
+		}
+	}
+}
+
 // TestSampleSpecSkipped 确保 JSON 里的 sample_spec 文档条目不污染 pricingMap。
 func TestSampleSpecSkipped(t *testing.T) {
 	svc := newTestService(t)
@@ -47,12 +77,7 @@ func TestClosedModelKeysFiltered(t *testing.T) {
 		"gpt-4-0125-preview",
 		"gpt-4o-realtime-preview-2025-06-03",
 		"text-moderation-007",
-		"gemini-3-pro-preview",
-		"gemini/gemini-3.1-flash-lite-preview",
 		"vertex_ai/imagen-3.0-generate-002",
-		"claude-sonnet-4-20250514",
-		"us.anthropic.claude-sonnet-4-20250514-v1:0",
-		"anthropic.claude-3-5-haiku-20241022-v1:0",
 	}
 	for _, model := range cases {
 		if _, ok := svc.currentSnapshot().pricingMap[model]; ok {
@@ -128,12 +153,8 @@ func TestExactAndAliasCandidates(t *testing.T) {
 		t.Error("gpt-5-codex 应该通过 alias 回退到 gpt-5")
 	}
 
-	// anthropic 前缀去除
-	if _, ok := svc.currentSnapshot().pricingMap["anthropic.claude-sonnet-4-5-20250929-v1:0"]; ok {
-		// 已经带前缀,测试去掉 us. 前缀应命中
-		if _, ok := svc.currentSnapshot().getPricing("us.anthropic.claude-sonnet-4-5-20250929-v1:0"); !ok {
-			t.Error("region 前缀去除应命中 anthropic.claude-sonnet-4-5-20250929-v1:0")
-		}
+	if _, ok := svc.currentSnapshot().getPricing("us.writer.palmyra-x4-v1:0"); !ok {
+		t.Error("region 前缀去除应命中 writer.palmyra-x4-v1:0")
 	}
 }
 
@@ -183,18 +204,17 @@ func TestTieredPricing(t *testing.T) {
 func TestAbove200kPricing(t *testing.T) {
 	svc := newTestService(t)
 
-	// 找一个带 above_200k 的 anthropic 模型
-	var target string
-	for k, v := range svc.currentSnapshot().pricingMap {
-		if v.InputCostPerTokenAbove200k > 0 && v.InputCostPerToken > 0 &&
-			v.InputCostPerTokenAbove200k > v.InputCostPerToken {
-			target = k
-			break
-		}
+	target := "synthetic-above-200k"
+	entry := &PricingEntry{
+		InputCostPerToken:                1e-6,
+		OutputCostPerToken:               2e-6,
+		InputCostPerTokenAbove200k:       2e-6,
+		OutputCostPerTokenAbove200k:      4e-6,
+		CacheReadInputTokenCost:          1e-7,
+		CacheReadInputTokenCostAbove200k: 2e-7,
 	}
-	if target == "" {
-		t.Skip("没有找到带 above_200k 字段的模型,跳过")
-	}
+	svc.currentSnapshot().pricingMap[target] = entry
+	svc.currentSnapshot().normalized[normalizeName(target)] = target
 
 	short := svc.CalculateCost(target, UsageSnapshot{InputTokens: 50000, OutputTokens: 1000})
 	long := svc.CalculateCost(target, UsageSnapshot{InputTokens: 250000, OutputTokens: 1000})
@@ -253,7 +273,7 @@ func TestFamilyFallbackOrder(t *testing.T) {
 
 // TestCandidatesDeduplication 确保候选列表去重。
 func TestCandidatesDeduplication(t *testing.T) {
-	// 没有 region/anthropic 前缀的模型应只产生 1 个候选
+	// 没有 region 前缀的模型应只产生 1 个候选
 	c := buildCandidates("gpt-4")
 	if len(c) != 1 {
 		t.Errorf("gpt-4 期望 1 个候选,实际 %d: %v", len(c), c)
@@ -323,21 +343,20 @@ func TestAbove272kPricing(t *testing.T) {
 	}
 }
 
-// TestAbove200kCacheTokenRates 验证超 200k 时 cache_read/cache_create 切到对应档位单价。
-// 样本:anthropic.claude-3-5-sonnet-20240620-v1:0
-//
-//	cache_read_input_token_cost = 3e-07
-//	cache_read_input_token_cost_above_200k_tokens = 6e-07
+// TestAbove200kCacheTokenRates 验证超 200k 时 cache_read 切到对应档位单价。
 func TestAbove200kCacheTokenRates(t *testing.T) {
 	svc := newTestService(t)
-	target := "anthropic.claude-3-5-sonnet-20240620-v1:0"
-	entry, ok := svc.currentSnapshot().pricingMap[target]
-	if !ok {
-		t.Skip(target + " 不在 JSON 中")
+	target := "synthetic-cache-above-200k"
+	entry := &PricingEntry{
+		InputCostPerToken:                1e-6,
+		OutputCostPerToken:               2e-6,
+		InputCostPerTokenAbove200k:       2e-6,
+		OutputCostPerTokenAbove200k:      4e-6,
+		CacheReadInputTokenCost:          1e-7,
+		CacheReadInputTokenCostAbove200k: 6e-7,
 	}
-	if entry.CacheReadInputTokenCostAbove200k == 0 {
-		t.Skip(target + " 未携带 cache_read_above_200k 字段")
-	}
+	svc.currentSnapshot().pricingMap[target] = entry
+	svc.currentSnapshot().normalized[normalizeName(target)] = target
 
 	// 纯 input 超 200k + 一些 cache_read
 	res := svc.CalculateCost(target, UsageSnapshot{
@@ -352,38 +371,6 @@ func TestAbove200kCacheTokenRates(t *testing.T) {
 	if res.CacheReadCost < expected*0.999 || res.CacheReadCost > expected*1.001 {
 		t.Errorf("CacheReadCost 期望 ~%f(使用 above_200k 单价),实际 %f",
 			expected, res.CacheReadCost)
-	}
-}
-
-// TestCache1hFromJSONFirst 验证 1h cache_create 价优先吃 JSON 的
-// cache_creation_input_token_cost_above_1hr 字段,而不是硬编码的 opus/sonnet/haiku 映射。
-// 样本:claude-3-haiku-20240307 JSON 里 above_1hr = 6e-06,
-// 硬编码给 haiku 1.6e-06(相差 ~4 倍)。
-func TestCache1hFromJSONFirst(t *testing.T) {
-	svc := newTestService(t)
-	target := "claude-3-haiku-20240307"
-	entry, ok := svc.currentSnapshot().pricingMap[target]
-	if !ok {
-		t.Skip(target + " 不在 JSON 中")
-	}
-	if entry.CacheCreationInputTokenCostAbove1Hr == 0 {
-		t.Skip(target + " 无 above_1hr 字段")
-	}
-
-	res := svc.CalculateCost(target, UsageSnapshot{
-		InputTokens:  1000,
-		OutputTokens: 100,
-		CacheCreation: &CacheCreationDetail{
-			Ephemeral1hTokens: 10000,
-		},
-		CacheCreateTokens: 10000,
-	})
-	// 期望:1h 价应该用 JSON 的 6e-06,不是硬编码的 1.6e-06
-	jsonRate := entry.CacheCreationInputTokenCostAbove1Hr
-	expected := 10000 * jsonRate
-	if res.Ephemeral1hCost < expected*0.999 || res.Ephemeral1hCost > expected*1.001 {
-		t.Errorf("Ephemeral1hCost 期望 ~%f(使用 JSON above_1hr %f),实际 %f",
-			expected, jsonRate, res.Ephemeral1hCost)
 	}
 }
 
@@ -474,47 +461,6 @@ func TestPriorityLongContextDoesNotInventTierPrice(t *testing.T) {
 	bandDef := synthetic.resolveLongContextBand(300000, ServiceTierDefault)
 	if bandDef.outputPerTok != synthetic.OutputCostPerTokenAbove272k {
 		t.Errorf("default+>272k 输出价应 = above_272k default,实际 %g", bandDef.outputPerTok)
-	}
-}
-
-// TestLongContextTierStrictMatch 验证精确匹配 only,不再无序 fallback 到任意 tier。
-func TestLongContextTierStrictMatch(t *testing.T) {
-	svc := newTestService(t)
-	cost := svc.CalculateCost("unknown-model-xyz[1m]", UsageSnapshot{InputTokens: 250000})
-	if cost.IsLongContext {
-		t.Error("未注册的 [1m] 模型不应命中 longContextTier")
-	}
-}
-
-// TestCacheCreationSplit 验证 Ephemeral5m/1h 拆分时 1h 价生效。
-func TestCacheCreationSplit(t *testing.T) {
-	svc := newTestService(t)
-	target := "claude-3-haiku-20240307"
-	entry, ok := svc.currentSnapshot().pricingMap[target]
-	if !ok {
-		t.Skip(target + " 不在 JSON 中")
-	}
-	if entry.CacheCreationInputTokenCostAbove1Hr == 0 {
-		t.Skip(target + " 无 above_1hr 字段")
-	}
-
-	// 总 cache create 15000 token = 5000 5m + 10000 1h
-	res := svc.CalculateCost(target, UsageSnapshot{
-		InputTokens:       1000,
-		OutputTokens:      100,
-		CacheCreateTokens: 15000,
-		CacheCreation: &CacheCreationDetail{
-			Ephemeral5mTokens: 5000,
-			Ephemeral1hTokens: 10000,
-		},
-	})
-	expected5m := 5000 * entry.CacheCreationInputTokenCost
-	expected1h := 10000 * entry.CacheCreationInputTokenCostAbove1Hr
-	if res.Ephemeral5mCost < expected5m*0.999 || res.Ephemeral5mCost > expected5m*1.001 {
-		t.Errorf("Ephemeral5mCost 期望 ~%f,实际 %f", expected5m, res.Ephemeral5mCost)
-	}
-	if res.Ephemeral1hCost < expected1h*0.999 || res.Ephemeral1hCost > expected1h*1.001 {
-		t.Errorf("Ephemeral1hCost 期望 ~%f,实际 %f", expected1h, res.Ephemeral1hCost)
 	}
 }
 

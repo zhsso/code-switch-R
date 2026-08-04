@@ -20,6 +20,7 @@ defineProps<{
 <style scoped>
 .mac-list-row {
   display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: space-between;
   padding: 14px 18px;
@@ -27,6 +28,8 @@ defineProps<{
 }
 
 .mac-list-text {
+  flex: 1;
+  min-width: 0;
   text-align: left;
 }
 
@@ -40,11 +43,28 @@ defineProps<{
   font-size: 0.8rem;
   color: var(--mac-text-secondary);
   margin-top: 4px;
+  overflow-wrap: anywhere;
 }
 
 .mac-list-control {
   display: inline-flex;
+  min-width: 0;
+  flex-shrink: 0;
   align-items: center;
   justify-content: flex-end;
+}
+
+@media (max-width: 520px) {
+  .mac-list-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .mac-list-control {
+    width: 100%;
+    justify-content: flex-end;
+  }
 }
 </style>

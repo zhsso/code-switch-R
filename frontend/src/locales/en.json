@@ -1,75 +1,14 @@
 {
   "app": {
-    "title": "My App",
+    "title": "Codex++",
     "login": "Login"
-  },
-  "update": {
-    "newVersion": "Version {version} available",
-    "checking": "Checking...",
-    "downloadNow": "Download Now",
-    "downloading": "Downloading",
-    "restartNow": "Restart to Update",
-    "later": "Later",
-    "cancel": "Cancel",
-    "retry": "Retry",
-    "close": "Close",
-    "error": "Update error",
-    "noUpdate": "You're up to date",
-    "checkFailed": "Failed to check for updates",
-    "downloadFailed": "Download failed",
-    "applyFailed": "Failed to apply update",
-    "releaseNotes": "Release Notes",
-    "currentVersion": "Current version",
-    "latestVersion": "Latest version",
-    "checkUpdate": "Check for updates",
-    "autoCheck": "Auto-check for updates",
-    "ignoredVersion": "This version is ignored"
-  },
-  "settings": {
-    "network": {
-      "title": "Network Settings",
-      "listenMode": "Listen Mode",
-      "modes": {
-        "localhost": "Localhost Only (127.0.0.1)",
-        "wslAuto": "WSL Auto-Detect",
-        "lan": "LAN (0.0.0.0)",
-        "custom": "Custom Address"
-      },
-      "customAddress": "Custom Address",
-      "currentAddress": "Current Listen Address",
-      "lanWarningTitle": "Security Warning",
-      "lanWarningText": "LAN mode exposes your API keys to the local network. Only use this in trusted environments.",
-      "wslTitle": "WSL Configuration",
-      "wslAutoConfig": "WSL Auto-Configure",
-      "wslAutoConfigHint": "Automatically configure CLI tools in WSL to use host proxy",
-      "wslStatus": "WSL Status",
-      "wslDetected": "WSL Detected",
-      "wslNotDetected": "WSL Not Detected",
-      "wslDistros": "Detected Distros",
-      "targetCli": "Target CLI Tools",
-      "configureNow": "Configure Now",
-      "configureSuccess": "WSL CLI tools configured successfully",
-      "configureFailed": "Failed to configure WSL CLI tools",
-      "saveFailed": "Failed to save network settings"
-    }
-  },
-  "menus": {
-    "about": "About",
-    "general": "General settings",
-    "shortcut": "Shortcut key"
   },
   "sidebar": {
     "home": "Home",
-    "prompts": "Prompts",
-    "mcp": "MCP",
-    "skill": "Skills",
-    "gemini": "Gemini",
     "availability": "Availability",
     "speedtest": "Speed Test",
-    "env": "Env Check",
     "logs": "Logs",
     "capture": "Capture",
-    "console": "Console",
     "settings": "Settings",
     "toggleTheme": "Toggle light / dark theme",
     "switchToLight": "Switch to light mode",
@@ -142,35 +81,6 @@
     "cancel": "Cancel",
     "close": "Close"
   },
-  "prompts": {
-    "hero": {
-      "eyebrow": "Prompt Manager",
-      "title": "Manage System Prompts",
-      "lead": "Configure custom system prompts for Claude Code, Codex, and Gemini to enhance your AI coding assistant."
-    },
-    "stats": {
-      "total": "{count} prompts total",
-      "enabled": "Enabled"
-    },
-    "empty": "No prompts yet. Click below to create one.",
-    "loading": "Loading...",
-    "confirmDelete": "Are you sure you want to delete this prompt?",
-    "actions": {
-      "create": "New Prompt",
-      "import": "Import from File"
-    },
-    "form": {
-      "createTitle": "New Prompt",
-      "editTitle": "Edit Prompt",
-      "name": "Name",
-      "namePlaceholder": "e.g., Code Review Expert",
-      "description": "Description",
-      "descriptionPlaceholder": "Brief description of this prompt",
-      "content": "Prompt Content",
-      "cancel": "Cancel",
-      "save": "Save"
-    }
-  },
   "speedtest": {
     "hero": {
       "eyebrow": "API Speed Test",
@@ -189,47 +99,32 @@
     "loadingTip": "Syncing provider endpoints from home page...",
     "syncError": "Sync failed, please refresh manually"
   },
-  "envcheck": {
-    "hero": {
-      "eyebrow": "Environment Check",
-      "title": "Detect Environment Variable Conflicts",
-      "lead": "Scan system environment variables and config files to find conflicts that may affect AI coding tools."
-    },
-    "checking": "Checking...",
-    "error": "Check failed",
-    "found": "Found {count} conflicting environment variables",
-    "noConflicts": "No environment variable conflicts found",
-    "value": "Value",
-    "source": "Source",
-    "sourceSystem": "System environment variable",
-    "refresh": "Recheck"
-  },
   "components": {
     "provider": {
       "modelWhitelist": {
         "label": "Supported Models",
-        "tooltip": "Declare which models this provider supports. Supports exact match (claude-sonnet-4) and wildcard (claude-*)",
-        "placeholder": "e.g., claude-*",
+        "tooltip": "Declare which Codex models this provider supports. Supports exact match (gpt-5.6) and wildcard (gpt-*)",
+        "placeholder": "e.g., gpt-*",
         "add": "Add",
         "remove": "Remove model",
         "examples": {
           "title": "Examples:",
           "exact": "Exact match",
-          "prefix": "Prefix match all Claude models",
+          "prefix": "Prefix match all GPT models",
           "vendor": "Match models with provider prefix"
         }
       },
       "modelMapping": {
         "label": "Model Mapping",
-        "tooltip": "Map CLI requested model names to provider-specific names. Supports wildcard expansion",
-        "keyPlaceholder": "CLI model (e.g., claude-*)",
+        "tooltip": "Map Codex model names to provider-specific names. Supports wildcard expansion",
+        "keyPlaceholder": "Codex model (e.g., gpt-*)",
         "valuePlaceholder": "Provider model (e.g., kimi-k2-thinking)",
         "add": "Add",
         "remove": "Remove mapping",
         "examples": {
           "title": "Examples:",
           "exact": "Exact mapping",
-          "wildcard": "Wildcard mapping, auto expands claude-sonnet-4 → anthropic/claude-sonnet-4",
+          "wildcard": "Wildcard mapping, auto expands gpt-* → openai/gpt-*",
           "prefix": "Prefix mapping"
         }
       },
@@ -237,10 +132,8 @@
         "label": "Request Sanitize Advanced Config",
         "blockedBodyFields": "Blocked Body Fields",
         "blockedHeaders": "Blocked Headers",
-        "blockedBetaValues": "Blocked anthropic-beta Values",
         "placeholder": "Enter field name, e.g. prompt_caching",
         "placeholderHeader": "Enter header (lowercase), e.g. x-custom-header",
-        "placeholderBeta": "Enter beta value, e.g. prompt-caching-scope-2026-01-05",
         "add": "Add",
         "remove": "Remove",
         "defaultHint": "Not configured, using built-in defaults",
@@ -249,7 +142,7 @@
     },
     "main": {
       "hero": {
-        "eyebrow": "Claude & Codex provider overview",
+        "eyebrow": "Codex provider overview",
         "title": "Stay on top of AI coding supply.",
         "lead": "The green heatmap highlights daily compute and token usage so we can monitor each provider's load."
       },
@@ -266,89 +159,19 @@
           "cost": "Cost"
         }
       },
-      "tabs": {
-        "ariaLabel": "AI provider switcher",
-        "addCard": "Add provider card",
-        "refresh": "Refresh data",
-        "others": "Others"
-      },
-      "relayToggle": {
-        "label": "Claude proxy",
-        "hostClaude": "Host Claude Code",
-        "hostCodex": "Host Codex",
-        "hostGemini": "Host Gemini CLI",
-        "hostOthers": "Host Custom CLI",
-        "tooltip": "Route traffic through the local relay to manage API keys centrally.",
-        "statusOn": "Managed",
-        "statusOff": "Not managed",
-        "toggleFailed": "Failed to toggle hosting"
-      },
-      "customCli": {
-        "selectToolFirst": "Please select a CLI tool first",
-        "noTools": "No custom CLI tools yet",
-        "addTool": "Add CLI Tool",
-        "toolName": "Tool Name",
-        "toolNamePlaceholder": "e.g., Droid, RooCode",
-        "configFiles": "Config Files",
-        "proxySettings": "Proxy Injection Settings",
-        "selectTool": "Select CLI Tool",
-        "createTitle": "New CLI Tool",
-        "editTitle": "Edit CLI Tool",
-        "deleteTitle": "Delete CLI Tool",
-        "deleteMessage": "Are you sure you want to delete {name}? This action cannot be undone.",
-        "primaryConfig": "Primary Config",
-        "labelPlaceholder": "Config file label",
-        "pathPlaceholder": "Config file path, e.g., ~/.droid/config.json",
-        "primary": "Primary",
-        "selectConfigFile": "Select target config file",
-        "unnamed": "Unnamed",
-        "baseUrlFieldPlaceholder": "Base URL field path, e.g., env.ANTHROPIC_BASE_URL",
-        "authTokenFieldPlaceholder": "Auth token field path (optional)",
-        "proxyHint": "Proxy injection writes the local proxy address to the specified config file fields",
-        "presetSection": "Start from a preset",
-        "presetStateNone": "No opencode config detected; enabling the proxy will create it and write the provider config",
-        "presetStateExisting": "Existing config detected; enabling the proxy only fills missing fields without overwriting",
-        "presetStateJsonc": "Detected a .jsonc config: works if comment-free; commented JSONC is not supported yet and enabling will fail with a hint",
-        "presetStateBoth": "Both .json and .jsonc exist; opencode's precedence is undefined. Prefilled .json — please confirm which file is actually used",
-        "seedFieldsBadge": "Contains {count} preset-managed fields (filled automatically on enable, never overwriting existing config)",
-        "nameRequired": "Please enter a tool name",
-        "configRequired": "Please add at least one valid config file path",
-        "createSuccess": "CLI tool created successfully",
-        "updateSuccess": "CLI tool updated successfully",
-        "deleteSuccess": "CLI tool deleted",
-        "saveFailed": "Failed to save CLI tool",
-        "deleteFailed": "Failed to delete CLI tool",
-        "invalidProxyTarget": "Invalid proxy injection target config file",
-        "proxyInjectionIncomplete": "Proxy injection settings are incomplete. Please select a target config file and fill in the Base URL field",
-        "proxyTargetPathRequired": "The proxy injection target config file has no path. Please fill in its path first"
-      },
       "logs": {
         "view": "View logs",
         "streamOn": "Stream",
         "streamOff": "Not Stream"
       },
       "controls": {
+        "addCard": "Add provider",
+        "refresh": "Refresh data",
         "github": "Open project GitHub",
         "theme": "Toggle theme",
         "settings": "Open settings",
-        "mcp": "Open MCP panel",
-        "skill": "Open skill catalog",
-        "gemini": "Open Gemini CLI manager",
-        "import": "Import cc-switch config",
         "duplicate": "Duplicate provider",
         "duplicateFailed": "Failed to duplicate provider"
-      },
-      "importConfig": {
-        "tooltip": "Import {providers} providers · {servers} MCP servers · {prompts} prompts",
-        "success": "Imported {providers} providers, {servers} MCP servers and {prompts} prompts (prompts stay disabled)",
-        "partial": "Partially imported: {providers} providers, {servers} MCPs, {prompts} prompts; failure: {error}",
-        "empty": "Everything from cc-switch is already in sync",
-        "error": "Failed to import cc-switch config"
-      },
-      "firstRun": {
-        "message": "Welcome to Code Switch R! If you have cc-switch config, you can import it from Settings.",
-        "goToSettings": "Go to Settings",
-        "dismiss": "Later"
       },
       "providers": {
         "requests": "Requests",
@@ -359,25 +182,26 @@
         "noData": "No data yet today",
         "lastUsed": "In Use"
       },
-      "directApply": {
-        "title": "Direct Apply",
-        "inUse": "In Use",
-        "currentBadge": "Current",
-        "success": "{name} applied",
-        "failed": "Failed to apply",
-        "proxyEnabled": "Disable proxy first"
-      },
       "form": {
         "createTitle": "Add provider",
         "editTitle": "Edit provider",
+        "presets": {
+          "label": "Quick preset",
+          "deepseekV4Flash": "DeepSeek V4 Flash"
+        },
+        "compatibility": {
+          "standard": "Standard Codex",
+          "deepseekCodex": "DeepSeek Codex"
+        },
         "labels": {
           "name": "Provider name",
           "apiUrl": "API endpoint",
           "fallbackApiUrls": "Fallback API URLs",
           "maxConcurrency": "Max concurrent requests",
+          "costMultiplier": "Cost multiplier",
           "apiKey": "API key",
           "apiEndpoint": "API Endpoint Path (optional)",
-          "upstreamProtocol": "Upstream Protocol",
+          "compatibilityMode": "Request Compatibility Mode",
           "insecureSkipVerify": "Skip TLS Certificate Verification",
           "requestSanitize": "Request Sanitize",
           "officialSite": "Official site",
@@ -414,10 +238,10 @@
         "noIconResults": "No matching icons found",
         "hints": {
           "maxConcurrency": "Max in-flight proxied requests to this provider (0 = unlimited). When full, requests go to other providers first, or queue briefly if all are full. Applies to this app's proxy only",
+          "costMultiplier": "1 uses the model's base price; the current multiplier applies to all cost reports for this provider",
           "fallbackApiUrls": "When the primary URL fails with a switchable error (network/408/421/429/5xx), fallbacks are tried in order within the same request; the provider only counts as failed after all URLs fail",
           "level": "Lower numbers = higher priority. Level 1 providers are tried first, then Level 2, etc.",
-          "apiEndpoint": "Override platform default endpoint. Leave blank for default (claude: /v1/messages, codex: /responses). For GLM models use /v1/chat/completions",
-          "upstreamProtocol": "Specify the upstream API protocol type. Auto mode detects based on endpoint; openai_chat mode auto-converts request/response format",
+          "apiEndpoint": "Override the Codex default endpoint. Leave blank to use /responses.",
           "insecureSkipVerify": "When enabled, this provider's TLS certificate is no longer verified (self-signed certs / corporate proxies). Man-in-the-middle risk — enable only for trusted internal endpoints",
           "requestSanitize": "When enabled, non-standard fields and unsupported headers are removed before forwarding, fixing compatibility issues with LiteLLM and similar proxies",
           "availabilityMonitor": "Enable background health checks for this provider. Checks are performed periodically to monitor availability.",
@@ -429,42 +253,37 @@
           "connectivityCheck": "When enabled, connectivity to this provider will be tested periodically; enabling this may consume a small amount of tokens",
           "connectivityTestModel": "Select a model for connectivity testing, or leave empty to use platform default",
           "connectivityTestEndpoint": "Select or enter API endpoint path",
-          "connectivityAuthType": "Default is Bearer. Use X-API-Key for Anthropic-style APIs. Enter custom header name in the text field if needed."
+          "connectivityAuthType": "Bearer is the default. Use X-API-Key when required by your Codex-compatible endpoint, or enter a custom header name."
         },
         "actions": {
           "cancel": "Cancel",
           "save": "Save",
-          "saveAndApply": "Save & Apply",
           "delete": "Delete",
+          "revealApiKey": "Reveal API key",
+          "hideApiKey": "Hide API key",
           "testConnectivity": "Test Connectivity",
           "testing": "Testing..."
         },
         "connectivity": {
           "success": "Connected (latency: {latency}ms)",
           "failed": "Connection failed",
+          "revealToTest": "Reveal the configured API key before testing connectivity",
           "error": "Test error: {error}"
         },
         "switch": {
           "on": "Active",
           "off": "Paused"
         },
-        "upstreamProtocol": {
-          "auto": "Auto Detect",
-          "autoDesc": "Automatically detect protocol based on API endpoint",
-          "anthropic": "Anthropic",
-          "anthropicDesc": "Use Anthropic Messages API (default)",
-          "openaiChat": "OpenAI Chat",
-          "openaiChatDesc": "Use OpenAI Chat Completions API with auto format conversion"
-        },
         "confirmDeleteTitle": "Remove provider",
         "confirmDeleteMessage": "Are you sure you want to remove {name}? This action cannot be undone.",
         "errors": {
           "invalidUrl": "Please enter a valid API URL",
           "tooManyFallbacks": "At most 4 fallback URLs",
-          "invalidFallbackUrl": "Fallback URLs must be valid http/https addresses"
+          "invalidFallbackUrl": "Fallback URLs must be valid http/https addresses",
+          "revealApiKeyFailed": "Failed to reveal API key",
+          "invalidCostMultiplier": "Cost multiplier must be between 0.01 and 100"
         },
-        "saveFailed": "Failed to save provider configuration",
-        "cliConfigSaveFailed": "Failed to save CLI config"
+        "saveFailed": "Failed to save provider configuration"
       },
       "levelDesc": {
         "highest": "Highest Priority",
@@ -526,7 +345,7 @@
     "logs": {
       "eyebrow": "Request diagnostics",
       "title": "Request logs",
-      "subtitle": "Inspect recent relay activity for Claude Code, Codex, and Gemini providers.",
+      "subtitle": "Inspect recent Codex relay activity.",
       "loading": "Loading...",
       "refresh": "Refresh",
       "applyFilters": "Apply filters",
@@ -576,9 +395,9 @@
         "reqBody": "Request body",
         "respHeaders": "Response headers",
         "respBody": "Response body",
-        "sensitiveWarning": "Full capture, unredacted: contains plaintext API keys and full conversation/response — never share the exported file",
-        "previewHint": "Content is large; showing a preview only (first 256KB). Full original size {bytes} — use Export to view the complete content",
-        "captureTruncatedHint": "Content exceeded the limit and was truncated at capture time (original size {bytes}); the excess was not stored and is unavailable even via export",
+        "sensitiveWarning": "Full capture, unredacted: contains plaintext API keys and full conversations/responses; never share the database or page content",
+        "previewHint": "Large content: showing the first 256KB only; stored original size is {bytes}",
+        "captureTruncatedHint": "Content exceeded the capture limit and was truncated (original size {bytes}); the excess was not stored",
         "budgetSkippedHint": "Response too large and exceeded the memory budget; the body was not stored",
         "empty": "No content recorded for this request",
         "copy": "Copy",
@@ -606,78 +425,27 @@
       }
     },
     "general": {
-      "blacklist": {
-        "saved": "Blacklist settings saved",
-        "saveFailed": "Failed to save: ",
-        "toggleFailed": "Failed to toggle: "
-      },
-      "sync": {
-        "defaultsSummary": "Codex: {codex} · Gemini: {gemini} · Claude (probe): {claude}"
-      },
       "title": {
-        "application": "Apply settings",
-        "trayPanel": "Tray panel",
         "exterior": "Appearance settings",
-        "power": "Permission settings",
+        "relay": "Relay Service",
         "blacklist": "Blacklist Settings",
-        "dataImport": "Data Import",
-        "connectivity": "Connectivity Test",
-        "modelData": "Model Data"
+        "modelData": "Model Data",
+        "history": "History"
       },
       "label": {
-        "assistant_access": "Accessibility permissions",
-        "automatic_up": "Automatically check for updates",
-        "disk_access": "Full disk access",
         "language": "Interface language",
-        "next_up": "Automatically check for updates next time",
-        "startup": "Started when logged in",
         "theme": "Theme mode",
         "heatmap": "Show dashboard heatmap",
         "homeTitle": "Show home title",
-        "budgetTotal": "Budget total",
-        "budgetTotalHint": "Used for tray menu progress (USD)",
-        "budgetUsedAdjustment": "Manual used adjustment",
-        "budgetUsedAdjustmentHint": "Offsets used spend (USD)",
-        "budgetCycle": "Enable refresh cycle",
-        "budgetCycleHint": "Reset budget stats at the refresh time",
-        "budgetCycleMode": "Refresh cycle",
-        "budgetCycleModeDaily": "Daily",
-        "budgetCycleModeWeekly": "Weekly",
-        "budgetRefreshTime": "Refresh time",
-        "budgetRefreshDay": "Refresh weekday",
-        "weekdayMon": "Mon",
-        "weekdayTue": "Tue",
-        "weekdayWed": "Wed",
-        "weekdayThu": "Thu",
-        "weekdayFri": "Fri",
-        "weekdaySat": "Sat",
-        "weekdaySun": "Sun",
-        "budgetShowCountdown": "Show reset countdown",
-        "budgetShowForecast": "Show budget depletion forecast",
-        "budgetForecastMethod": "Forecast method",
-        "budgetForecastMethodHint": "Choose how depletion time is estimated",
-        "budgetForecastMethodCycle": "Cycle average rate",
-        "budgetForecastMethod10m": "Last 10 minutes rate",
-        "budgetForecastMethod1h": "Last 1 hour rate",
-        "budgetForecastMethodYesterday": "Yesterday average rate",
-        "budgetForecastMethod24h": "Last 24 hours rate",
-        "trayPanelClaude": "Claude Code",
-        "trayPanelCodex": "Codex",
-        "enableTrayPopup": "Enable Tray Popup",
-        "enableTrayPopupHint": "When disabled, clicking the tray icon opens the main window directly (macOS only; re-enabling requires an app restart)",
-        "autoStart": "Launch at login",
         "switchNotify": "Switch Notification",
-        "switchNotifyHint": "Send system notification when provider switches or gets blacklisted",
+        "switchNotifyHintWeb": "Show real-time WebUI events when a provider switches or is blacklisted",
         "roundRobin": "Same-Level Round Robin",
         "roundRobinHint": "When enabled, providers at the same Level take turns handling requests; when disabled, always starts from the first",
-        "autoUpdate": "Automatic update",
         "autoConnectivityTest": "Auto Availability Monitoring",
         "autoConnectivityTestHint": "Automatically check availability of monitored providers every minute",
         "autoSyncModels": "Auto-sync models & pricing",
         "autoSyncModelsHint": "Sync the latest model catalog and pricing from llm-metadata daily; default models follow the latest automatically",
         "modelSyncStatus": "Sync status",
-        "modelSyncDefaults": "Current default models",
-        "modelSyncActions": "Actions",
         "modelSyncNow": "Sync now",
         "modelSyncRunning": "Syncing...",
         "modelRestoreBuiltin": "Restore built-in data",
@@ -686,334 +454,29 @@
         "modelSyncSummary": "Last sync: {time} · {count} pricing entries",
         "modelSyncFailed": "Sync failed: ",
         "modelRestoreFailed": "Failed to restore built-in data: ",
+        "modelRestored": "Built-in model and pricing data restored",
         "settingsSaveFailed": "Failed to save settings: ",
-        "lastCheck": "Last check",
-        "currentVersion": "Current version",
-        "latestVersion": "Latest version",
-        "checkNow": "Check now",
-        "manualUpdate": "Manual update",
+        "saved": "Settings saved",
         "blacklistThreshold": "Failure threshold",
         "blacklistDuration": "Blacklist duration",
-        "saveBlacklist": "Save settings",
+        "minutes": "min",
         "enableBlacklist": "Enable blacklist",
         "enableBlacklistHint": "When disabled, providers will not be automatically blacklisted",
         "enableLevelBlacklist": "Enable level-based blacklist",
         "enableLevelBlacklistHint": "When enabled, use graduated blacklist mechanism (L1-L5); when disabled, use fixed duration",
         "times": "times",
-        "minutes": "minutes",
         "save": "Save",
         "saving": "Saving...",
         "settingsLoadFailed": "Failed to load settings. To avoid overwriting existing configuration, this change was not saved. Reloading settings..."
       },
-      "subLabel": {
-        "sb_assistant_access": "Accessibility permission is required to operate clipboard contents",
-        "sb_disk_access": "Full disk access is required to implement file preview"
-      },
-      "buttons": {
-        "authorized": "Auth",
-        "go_authorized": "Auth now",
-        "back": "Back to home"
-      },
-      "import": {
-        "configPath": "Config file path",
-        "pathPlaceholder": "Enter cc-switch config file path",
-        "status": "Config status",
-        "loading": "Loading...",
-        "configFound": "Config file found",
-        "configNotFound": "Config file not found",
-        "pendingCount": "{providers} providers, {mcp} MCPs, {prompts} prompts",
-        "action": "Import action",
-        "importBtn": "Import config",
-        "importing": "Importing...",
-        "success": "Imported: {providers} providers, {mcp} MCP servers, {prompts} prompts (prompts stay disabled; enable them on the Prompts page)",
-        "partial": "Partially imported: {providers} providers, {mcp} MCPs, {prompts} prompts. Failure: {error}",
-        "nothingToImport": "Nothing to import (all may have been imported)",
-        "failed": "Import failed",
-        "fileNotFound": "Config file not found, please check the path"
-      },
-      "export": {
-        "title": "Config Export",
-        "includeSecrets": "Include plaintext credentials",
-        "redactedHint": "Default: recognized credential fields are cleared (free text such as prompts is not scanned)",
-        "secretsWarning": "The exported file will contain plaintext credentials. Keep it out of shared or synced folders.",
-        "confirmSecrets": "Export a bundle containing plaintext credentials? Anyone with this file can use your keys and tokens.",
-        "action": "Export action",
-        "exportBtn": "Export bundle",
-        "exporting": "Exporting...",
-        "success": "Exported to {path}: {providers} providers, {mcp} MCPs, {prompts} prompts",
-        "redactedNote": "{count} credential fields cleared. The bundle can be imported back; restored providers stay disabled until you refill credentials.",
-        "secretsNote": "This file contains plaintext credentials. Keep it safe.",
-        "failed": "Export failed"
-      },
-      "maintenance": {
-        "title": "Data Maintenance",
-        "vacuumLabel": "Reclaim database disk space",
-        "vacuumHint": "The database file does not shrink after clearing/deleting captures; reclaiming rewrites the file to actually free the space",
-        "vacuumBtn": "Reclaim now",
-        "vacuumRunning": "Reclaiming...",
-        "vacuumConfirm": "Reclaiming rewrites the entire database file. New request logs will not be recorded while it runs, and it may take a while (several minutes for large data). Run it while the app is idle. Continue?",
-        "vacuumSuccess": "Reclaim finished: {freed} freed ({before} → {after})",
-        "vacuumFailed": "Reclaim failed: "
-      }
-    },
-    "mcp": {
-      "hero": {
-        "eyebrow": "MCP Manager",
-        "title": "Manage MCP Servers",
-        "lead": "Keep every stdio or HTTP MCP server in one place and track which platform currently loads it."
-      },
-      "controls": {
-        "back": "Back to home",
-        "settings": "Open settings",
-        "refresh": "Refresh",
-        "create": "New server"
-      },
-      "import": {
-        "title": "Batch Import MCP Servers",
-        "inputDesc": "Paste MCP configuration JSON. Supports Claude Desktop format, array format, or server map format.",
-        "placeholder": "Paste Claude Desktop or standard MCP configuration JSON...",
-        "next": "Next",
-        "parsing": "Parsing...",
-        "back": "Back",
-        "reviewTitle": "Found {count} servers",
-        "selectAll": "Select All",
-        "conflictNotice": "{count} server(s) conflict with existing configuration",
-        "strategySkip": "Skip conflicts",
-        "strategyOverwrite": "Overwrite existing",
-        "status": {
-          "new": "New",
-          "conflict": "Conflict"
-        },
-        "submit": "Import {count}",
-        "importing": "Importing...",
-        "success": "Successfully imported {count} MCP server(s)",
-        "allSkipped": "All servers were skipped, nothing imported",
-        "noServers": "No valid server configuration found",
-        "needName": "Single server config requires a name",
-        "parseError": "Failed to parse JSON",
-        "importError": "Import failed. Please try again."
-      },
-      "section": {
-        "title": "Registered servers",
-        "subtitle": "Synced from ~/.code-switch/mcp.json and saved immediately"
-      },
-      "list": {
-        "loading": "Loading servers...",
-        "empty": "No MCP servers yet. Use the button below to create one.",
-        "loadError": "Failed to load MCP servers",
-        "saveError": "Failed to save MCP servers",
-        "edit": "Edit server",
-        "delete": "Delete server",
-        "placeholderWarning": "Replace placeholders first: {vars}"
-      },
-      "toast": {
-        "placeholder": "Replace placeholders first: {vars}"
-      },
-      "status": {
-        "active": "Enabled",
-        "inactive": "Disabled"
-      },
-      "types": {
-        "stdio": "Local stdio process",
-        "stdioShort": "Local process",
-        "http": "Remote HTTP",
-        "httpShort": "HTTP service"
-      },
-      "platforms": {
-        "claude": "Claude Code",
-        "codex": "Codex",
-        "gemini": "Gemini CLI"
-      },
-      "form": {
-        "createTitle": "Create MCP server",
-        "editTitle": "Edit MCP server",
-        "name": "Server name",
-        "type": "Type",
-        "command": "Command",
-        "args": "Arguments",
-        "argsHint": "One argument per line. They will be passed in order.",
-        "url": "Service URL",
-        "website": "Website",
-        "tips": "Helper note",
-        "tipsHint": "Example: Visit ref.tools to get your API key",
-        "jsonEditor": {
-          "title": "JSON Config",
-          "dirty": "Not applied",
-          "lock": "Lock",
-          "unlock": "Unlock",
-          "apply": "Apply to form",
-          "reset": "Reset",
-          "hint": "This JSON does not include name or platforms. Name, website, tips, and platforms are controlled by the form.",
-          "toast": {
-            "dirtyNotApplied": "JSON changes are not applied. Saving will use the form values."
-          },
-          "errors": {
-            "empty": "Please enter JSON content",
-            "invalidJson": "Invalid JSON: {message}",
-            "mustBeObject": "JSON root must be an object",
-            "typeRequired": "Missing type (must be stdio or http)",
-            "typeInvalid": "type must be stdio or http",
-            "commandRequired": "command is required for stdio servers",
-            "urlRequired": "url is required for http servers",
-            "argsInvalid": "args must be an array of strings",
-            "envInvalid": "env must be an object with string values",
-            "applyFailed": "Failed to apply JSON. Please check the content."
-          }
-        },
-        "env": "Environment variables",
-        "envKey": "Key",
-        "envValue": "Value",
-        "envAdd": "Add variable",
-        "envRemove": "Delete variable",
-        "platforms": {
-          "title": "Target platforms"
-        },
-        "actions": {
-          "cancel": "Cancel",
-          "save": "Save",
-          "delete": "Delete"
-        },
-        "errors": {
-          "name": "Please enter a server name",
-          "command": "Command is required for stdio servers",
-          "url": "HTTP servers require a URL",
-          "duplicate": "This name already exists",
-          "noPlatformSelected": "Please select at least one platform (Claude Code or Codex)"
-        },
-        "warnings": {
-          "savedWithPlaceholders": "✅ Config saved, but not synced to Claude/Codex due to placeholders ({vars}). Please fill placeholders and save again."
-        },
-        "deleteTitle": "Delete MCP server",
-        "deleteMessage": "Are you sure you want to delete {name}? This action cannot be undone."
-      }
-    },
-    "gemini": {
-      "hero": {
-        "eyebrow": "Gemini CLI Manager",
-        "title": "Manage Gemini Providers",
-        "lead": "Configure API providers for Gemini CLI, supporting Google Official and third-party relay services."
-      },
-      "controls": {
-        "back": "Back to home",
-        "settings": "Open settings",
-        "refresh": "Refresh",
-        "create": "Add provider"
-      },
-      "status": {
-        "enabled": "Enabled",
-        "disabled": "Not configured",
-        "active": "Active"
-      },
-      "auth": {
-        "oauth": "OAuth Authentication",
-        "apiKey": "API Key Authentication"
-      },
-      "category": {
-        "official": "Official",
-        "thirdParty": "Third Party",
-        "custom": "Custom"
-      },
-      "presets": {
-        "title": "Preset Providers"
-      },
-      "providers": {
-        "title": "Configured Providers"
-      },
-      "list": {
-        "loading": "Loading...",
-        "empty": "No providers configured. Click a preset card to add one.",
-        "edit": "Edit",
-        "delete": "Delete"
-      },
-      "actions": {
-        "switch": "Switch"
-      },
-      "form": {
-        "createTitle": "Add Gemini Provider",
-        "editTitle": "Edit Gemini Provider",
-        "deleteTitle": "Delete Provider",
-        "deleteMessage": "Are you sure you want to delete {name}? This action cannot be undone.",
-        "name": "Provider name",
-        "baseUrl": "API URL",
-        "apiKey": "API Key",
-        "model": "Default model",
-        "cancel": "Cancel",
-        "save": "Save",
-        "delete": "Delete"
-      }
-    },
-    "skill": {
-      "hero": {
-        "eyebrow": "Skill Library",
-        "title": "Claude Skill",
-        "lead": "Fetch Claude skills from the managed repositories. Click the top-right button to add more sources."
-      },
-      "platform": {
-        "claude": "Claude Code",
-        "codex": "Codex"
-      },
-      "groups": {
-        "project": "Project Skills",
-        "user": "User Skills",
-        "available": "Available Skills"
-      },
-      "actions": {
-        "back": "Back to home",
-        "loading": "Processing...",
-        "refresh": "Refresh list",
-        "view": "View on GitHub",
-        "install": "Install",
-        "uninstall": "Uninstall",
-        "installError": "Failed to install {name}. Please retry",
-        "uninstallError": "Failed to uninstall {name}. Please retry",
-        "toggle": "Enable/Disable",
-        "viewContent": "View Content",
-        "hideContent": "Hide Content",
-        "openFolder": "Open Folder",
-        "loadFailed": "Failed to load content",
-        "toggleError": "Failed to toggle skill status"
-      },
-      "list": {
-        "title": "Available skills",
-        "subtitle": "Metadata is parsed from each SKILL.md front matter.",
-        "loading": "Loading skills...",
-        "empty": "No skills detected in the repository.",
-        "error": "Failed to load skills. Please check your network and retry.",
-        "noDescription": "SKILL.md does not include a description",
-        "missingRepo": "Missing repository information for this skill",
-        "noInstalled": "No installed skills"
-      },
-      "install": {
-        "title": "Choose Install Location",
-        "desc": "Install {name} to:",
-        "locationLabel": "Install Location",
-        "userLevel": "User Level (Global)",
-        "userLevelDesc": "~/.{platform}/skills/",
-        "projectLevel": "Project Level (Current Directory)",
-        "projectLevelDesc": "./.{platform}/skills/",
-        "gitWarning": "Project skills may need to be added to .gitignore",
-        "installing": "Installing...",
-        "confirm": "Confirm Install"
-      },
-      "license": {
-        "complete": "Complete terms in {file}"
-      },
-      "repos": {
-        "open": "Manage repositories",
-        "title": "Skill sources",
-        "subtitle": "Add GitHub repositories to control where skills are fetched from.",
-        "urlPlaceholder": "https://github.com/owner/repo",
-        "branchPlaceholder": "Branch",
-        "addLabel": "Add repository",
-        "viewLabel": "Open on GitHub",
-        "removeLabel": "Remove repository",
-        "loadError": "Failed to load repositories",
-        "addError": "Failed to add repository",
-        "removeError": "Failed to remove repository",
-        "formError": "Owner and repository are required",
-        "loading": "Loading repositories...",
-        "empty": "No repositories configured.",
-        "branchLabel": "Branch: {branch}"
+      "history": {
+        "retention": "Retention period",
+        "retentionHint": "Automatically remove older request, cost, and health-check history",
+        "days": "days",
+        "cleanNow": "Clean now",
+        "cleaning": "Cleaning...",
+        "cleaned": "Removed {requests} request records and {health} health-check records",
+        "cleanupFailed": "Cleanup failed"
       }
     },
     "themesetting": {
@@ -1023,111 +486,12 @@
         "opt_system": "System"
       }
     },
-    "shortcut": {
-      "title": "Keyboard shortcuts",
-      "helper": "Record shortcuts to control the app from anywhere.",
-      "rows": {
-        "openMain": "Open main window",
-        "openPreferences": "Open preferences window"
-      },
-      "descriptions": {
-        "openMain": "Must include at least one modifier and a main key",
-        "openPreferences": "Use a distinct combo to avoid conflicts"
-      },
-      "messages": {
-        "saved": "Shortcut saved",
-        "failed": "Failed to save shortcut",
-        "invalid": "Invalid combination, include a modifier"
-      },
-      "placeholder": "Press keys to record"
-    },
-    "deeplink": {
-      "title": "Import Provider from Deep Link",
-      "preview": "Please confirm the following information before importing:",
-      "import": "Import",
-      "importing": "Importing...",
-      "success": "Import successful!",
-      "error": {
-        "title": "Import failed"
-      },
-      "field": {
-        "name": "Name",
-        "app": "Platform",
-        "homepage": "Homepage",
-        "endpoint": "Endpoint",
-        "apiKey": "API Key",
-        "model": "Model",
-        "notes": "Notes"
-      }
-    },
-    "cliConfig": {
-      "title": "CLI Configuration",
-      "lockedFields": "Proxy-managed (read-only)",
-      "editableFields": "Editable fields",
-      "customFields": "Custom fields",
-      "noCustomFields": "No custom fields. Click + to add one.",
-      "addField": "Add field",
-      "removeField": "Remove field",
-      "keyPlaceholder": "Key",
-      "valuePlaceholder": "Value",
-      "keyConflictLocked": "This key conflicts with a locked field",
-      "keyConflictPreset": "This key conflicts with a preset field",
-      "keyDuplicate": "This key already exists",
-      "loading": "Loading configuration...",
-      "loadError": "Failed to load configuration",
-      "setAsTemplate": "Set as default template for new providers",
-      "restoreDefault": "Restore default",
-      "restoreConfirm": "Are you sure you want to restore the default configuration? This will overwrite current settings.",
-      "restoreSuccess": "Configuration restored to default",
-      "restoreError": "Failed to restore default configuration",
-      "templateSaved": "Template saved successfully",
-      "templateSaveError": "Failed to save template",
-      "jsonParseError": "Invalid JSON format, please check your input",
-      "previewTitle": "Config preview",
-      "previewUnknownPath": "Unknown path",
-      "smartPasteSuccess": "Parsed {format} config and filled fields",
-      "smartPasteFailed": "Unrecognized paste, please use JSON / TOML / .env content",
-      "previewEditLocked": "Read-only",
-      "previewEditUnlocked": "Unlocked",
-      "previewApply": "Apply",
-      "previewReset": "Reset",
-      "previewParseError": "Invalid config format, please check syntax",
-      "previewApplySuccess": "Config applied successfully",
-      "saveAllFailed": "All config files failed to save",
-      "savePartialSuccess": "{success} saved, {fail} failed",
-      "tabPreview": "Preview",
-      "tabCurrent": "On disk",
-      "saveError": "Failed to save configuration"
-    },
-    "console": {
-      "title": "Console",
-      "clear": "Clear logs",
-      "autoScroll": "Auto scroll",
-      "loading": "Loading...",
-      "empty": "No logs yet",
-      "clearConfirm": "Clear all console logs?",
-      "clearFailed": "Failed to clear: "
-    },
-    "tray": {
-      "dayUnit": "d",
-      "notSet": "Not set",
-      "budgetWeekly": "This week's budget",
-      "budgetDaily": "Today's budget",
-      "hosting": "Hosting",
-      "notHosting": "Not hosting",
-      "resetCountdown": "Resets in {time}",
-      "resettingSoon": "Resetting soon",
-      "forecastExhaust": "Exhausts {time}",
-      "budgetReached": "Budget reached",
-      "forecastNone": "Exhausts —",
-      "used": "Used"
-    },
     "capture": {
       "title": "Capture",
-      "subtitle": "Record proxied outbound requests, kept per session and exportable",
+      "subtitle": "Record proxied outbound requests and retain them by session",
       "recording": "Recording",
       "recordOff": "Start recording",
-      "recordHint": "Records outbound request headers/body per session (known credentials redacted; body may still contain sensitive content); recording stops automatically on app restart",
+      "recordHint": "Stores requests and responses unredacted by session; plaintext credentials and sensitive content may be included. Recording stops after a server restart",
       "toggleFailed": "Failed to toggle recording: ",
       "sessions": "Capture sessions",
       "noSessions": "No sessions yet. Turn on recording to start your first capture",
@@ -1144,12 +508,7 @@
       "clearConfirm": "Clear captured content of all sessions? (Statistics are kept; a new session starts automatically while recording)",
       "clearDone": "Cleared {count} request details",
       "clearFailed": "Failed to clear: ",
-      "export": "Export",
-      "exporting": "Exporting...",
-      "exportTitle": "Choose what to export",
-      "exportDone": "Exported {count} requests to {path}",
-      "exportFailed": "Failed to export: ",
-      "sensitiveHint": "Full capture, unredacted: exported and displayed content contains plaintext API keys and full conversation/response — never share",
+      "sensitiveHint": "Full capture, unredacted: displayed content contains plaintext API keys and full conversations/responses; never share it",
       "sizeWarning": "Capture data has reached {size}. Consider deleting sessions you no longer need or clearing all to reclaim disk.",
       "budgetSkipped": "Response too large; the part beyond the memory budget was not stored",
       "noRequests": "No captured requests in this session",

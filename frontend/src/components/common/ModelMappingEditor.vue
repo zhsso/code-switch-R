@@ -102,11 +102,11 @@
       </p>
       <ul class="help-list">
         <li>
-          <code>claude-sonnet-4</code> → <code>anthropic/claude-sonnet-4</code><br />
+          <code>gpt-5.6</code> → <code>openai/gpt-5.6</code><br />
           <span class="help-desc">{{ $t('components.provider.modelMapping.examples.exact') }}</span>
         </li>
         <li>
-          <code>claude-*</code> → <code>anthropic/claude-*</code><br />
+          <code>gpt-*</code> → <code>openai/gpt-*</code><br />
           <span class="help-desc">{{ $t('components.provider.modelMapping.examples.wildcard') }}</span>
         </li>
         <li>

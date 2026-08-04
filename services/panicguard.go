@@ -74,7 +74,7 @@ func appendCrashLog(label string, r any, stack []byte) {
 		return
 	}
 	defer f.Close()
-	// 历史文件可能以旧权限创建过，统一收敛（POSIX 位在 Windows 上只是尽力而为）
+	// 历史文件可能以旧权限创建过，统一收敛。
 	_ = f.Chmod(0600)
 	fmt.Fprintf(f, "==== %s [%s] %v\n%s\n", time.Now().Format("2006-01-02 15:04:05"), label, r, stack)
 }

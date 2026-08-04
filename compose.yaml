@@ -1,0 +1,46 @@
+name: code-switch-r
+
+services:
+  codeswitch:
+    image: codeswitch-r:local
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: v2.6.44-codexplus.1
+    network_mode: host
+    user: "10001:10001"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 15s
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      HOME: /data
+      TZ: Asia/Shanghai
+      GIN_MODE: release
+      CODESWITCH_WEB_PORT: "8080"
+      CODESWITCH_RELAY_PORT: "18100"
+    volumes:
+      - codeswitch-data:/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${CODESWITCH_WEB_PORT}/api/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  codeswitch-data:
+    name: code-switch-r_codeswitch-data

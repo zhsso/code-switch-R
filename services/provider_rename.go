@@ -23,14 +23,6 @@ const aliasTTL = 48 * time.Hour
 //   - 48h 内 alias 表未占用该 newName
 //   - 该 provider_id 在 48h 内未 rename 过(禁止链式)
 func (ps *ProviderService) RenameProvider(kind string, id int64, newName string) error {
-	// 数据库维护（VACUUM）期间拒绝：本函数持供应商全局互斥直写 alias 表与
-	// 事务——撞上排他锁会按 busy_timeout 自旋 30s，连带卡住代理读取配置的
-	// 同一把互斥。屏障读锁关闭"检查 → 执行"的窗口
-	if !AcquireDBWrite() {
-		return ErrDBMaintenance
-	}
-	defer ReleaseDBWrite()
-
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
@@ -43,6 +35,7 @@ func (ps *ProviderService) RenameProvider(kind string, id int64, newName string)
 	if err != nil {
 		return err
 	}
+	kind = platform
 
 	// 清理过期 alias(MVP:不起后台 job,借 rename 顺手 GC)
 	if err := cleanupExpiredAliases(); err != nil {
@@ -351,17 +344,10 @@ func ResolveProviderAlias(platform, name string) string {
 
 // resolvePlatform 把 kind 归一到 DB 使用的 platform 值(与 request_log/blacklist 一致)。
 func resolvePlatform(kind string) (string, error) {
-	switch strings.ToLower(kind) {
-	case "claude", "claude-code", "claude_code":
-		return "claude", nil
-	case "codex":
-		return "codex", nil
-	default:
-		if strings.HasPrefix(kind, "custom:") {
-			return kind, nil
-		}
-		return "", fmt.Errorf("不支持的 provider kind: %s", kind)
+	if err := requireCodexPlatform(kind); err != nil {
+		return "", err
 	}
+	return CodexPlatform, nil
 }
 
 // serializeProviders 按 saveProvidersLocked 相同的 MarshalIndent 格式输出。

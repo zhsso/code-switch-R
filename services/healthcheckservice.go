@@ -123,9 +123,7 @@ func NewHealthCheckService(
 		policy:           policy,
 		failCounters:     make(map[string]*AvailabilityFailureCounter),
 		latestResults: map[string]map[int64]*HealthCheckResult{
-			"claude": {},
-			"codex":  {},
-			"gemini": {},
+			CodexPlatform: {},
 		},
 		pollInterval: time.Duration(DefaultPollIntervalSeconds) * time.Second,
 		client: &http.Client{
@@ -151,7 +149,7 @@ func NewHealthCheckService(
 	}
 }
 
-// Start Wails 生命周期方法
+// Start initializes the service lifecycle.
 func (hcs *HealthCheckService) Start() error {
 	// 初始化数据库表
 	if err := hcs.ensureTable(); err != nil {
@@ -160,7 +158,7 @@ func (hcs *HealthCheckService) Start() error {
 	return nil
 }
 
-// Stop Wails 生命周期方法
+// Stop terminates the service lifecycle.
 func (hcs *HealthCheckService) Stop() error {
 	hcs.StopBackgroundPolling()
 	return nil
@@ -206,8 +204,7 @@ func (hcs *HealthCheckService) ensureTable() error {
 func (hcs *HealthCheckService) GetLatestResults() (map[string][]ProviderTimeline, error) {
 	results := make(map[string][]ProviderTimeline)
 
-	// 遍历所有平台
-	for _, platform := range []string{"claude", "codex"} {
+	for _, platform := range []string{CodexPlatform} {
 		providers, err := hcs.providerService.LoadProviders(platform)
 		if err != nil {
 			log.Printf("[HealthCheck] 加载 %s 供应商失败: %v", platform, err)
@@ -251,6 +248,10 @@ func (hcs *HealthCheckService) GetLatestResults() (map[string][]ProviderTimeline
 
 // batchGetHistories 批量获取某平台所有 Provider 的历史记录（避免 N+1 查询）
 func (hcs *HealthCheckService) batchGetHistories(platform string) (map[string]*HealthCheckHistory, error) {
+	if err := requireCodexPlatform(platform); err != nil {
+		return nil, err
+	}
+	platform = CodexPlatform
 	db, err := xdb.DB("default")
 	if err != nil {
 		return nil, fmt.Errorf("获取数据库连接失败: %w", err)
@@ -347,6 +348,10 @@ func (hcs *HealthCheckService) batchGetHistories(platform string) (map[string]*H
 
 // GetHistory 获取单个 Provider 的历史记录
 func (hcs *HealthCheckService) GetHistory(platform, providerName string, limit int) (*HealthCheckHistory, error) {
+	if err := requireCodexPlatform(platform); err != nil {
+		return nil, err
+	}
+	platform = CodexPlatform
 	db, err := xdb.DB("default")
 	if err != nil {
 		return nil, fmt.Errorf("获取数据库连接失败: %w", err)
@@ -428,6 +433,10 @@ func (hcs *HealthCheckService) GetHistory(platform, providerName string, limit i
 
 // RunSingleCheck 手动触发单个 Provider 检测
 func (hcs *HealthCheckService) RunSingleCheck(platform string, providerID int64) (*HealthCheckResult, error) {
+	if err := requireCodexPlatform(platform); err != nil {
+		return nil, err
+	}
+	platform = CodexPlatform
 	providers, err := hcs.providerService.LoadProviders(platform)
 	if err != nil {
 		return nil, fmt.Errorf("加载供应商失败: %w", err)
@@ -470,7 +479,7 @@ func (hcs *HealthCheckService) RunSingleCheck(platform string, providerID int64)
 func (hcs *HealthCheckService) RunAllChecks() (map[string][]HealthCheckResult, error) {
 	results := make(map[string][]HealthCheckResult)
 
-	for _, platform := range []string{"claude", "codex"} {
+	for _, platform := range []string{CodexPlatform} {
 		platformResults := hcs.checkAllProviders(platform)
 		results[platform] = platformResults
 	}
@@ -505,6 +514,10 @@ func batchCheckTimeout(providers []Provider) time.Duration {
 
 // checkAllProviders 检测指定平台的所有启用监控的供应商
 func (hcs *HealthCheckService) checkAllProviders(platform string) []HealthCheckResult {
+	if requireCodexPlatform(platform) != nil {
+		return nil
+	}
+	platform = CodexPlatform
 	providers, err := hcs.providerService.LoadProviders(platform)
 	if err != nil {
 		log.Printf("[HealthCheck] 加载 %s 供应商失败: %v", platform, err)
@@ -571,6 +584,13 @@ func (hcs *HealthCheckService) checkAllProviders(platform string) []HealthCheckR
 // 可切换错误分类一致）；备用地址成功仍记"可用"，仅在信息里标注主地址故障，
 // 不引入新的状态枚举。全部地址失败才算该供应商一次失败。
 func (hcs *HealthCheckService) checkProvider(ctx context.Context, provider Provider, platform string) *HealthCheckResult {
+	if err := requireCodexPlatform(platform); err != nil {
+		return &HealthCheckResult{
+			ProviderID: provider.ID, ProviderName: provider.Name, Platform: platform,
+			Status: HealthStatusFailed, ErrorMessage: err.Error(), CheckedAt: time.Now(),
+		}
+	}
+	platform = CodexPlatform
 	// 获取有效的测试参数
 	model := hcs.getEffectiveModel(&provider, platform)
 	// 与真实转发一致:应用供应商的模型映射后再发起探测
@@ -649,17 +669,11 @@ func (hcs *HealthCheckService) probeAddress(ctx context.Context, provider *Provi
 		authTypeRaw := strings.TrimSpace(provider.ConnectivityAuthType)
 		authType := strings.ToLower(authTypeRaw)
 		if authType == "" {
-			// 空值时使用平台默认（claude: x-api-key, codex: bearer）
-			if strings.ToLower(platform) == "claude" {
-				authType = "x-api-key"
-			} else {
-				authType = "bearer"
-			}
+			authType = "bearer"
 		}
 		switch authType {
 		case "x-api-key":
 			req.Header.Set("x-api-key", provider.APIKey)
-			req.Header.Set("anthropic-version", "2023-06-01")
 		case "bearer":
 			req.Header.Set("Authorization", "Bearer "+provider.APIKey)
 		default:
@@ -706,7 +720,7 @@ func (hcs *HealthCheckService) probeAddress(ctx context.Context, provider *Provi
 			return result, true
 		}
 		result.ErrorMessage = fmt.Sprintf("网络错误: %v", err)
-		log.Printf("[HealthCheck] [%s/%s] 网络错误: %v", platform, provider.Name, err)
+		log.Printf("[HealthCheck] [%s/%s] 网络错误: %s", platform, provider.Name, safeTransportError(err))
 		return result, true
 	}
 	defer resp.Body.Close()
@@ -723,7 +737,7 @@ func (hcs *HealthCheckService) probeAddress(ctx context.Context, provider *Provi
 		}
 		result.Status = HealthStatusFailed
 		result.ErrorMessage = fmt.Sprintf("读取响应失败: %v", err)
-		log.Printf("[HealthCheck] [%s/%s] 读取响应失败: %v", platform, provider.Name, err)
+		log.Printf("[HealthCheck] [%s/%s] 读取响应失败: %s", platform, provider.Name, safeTransportError(err))
 		return result, true
 	}
 
@@ -811,9 +825,13 @@ func isModelRejectionBody(body []byte) bool {
 	return false
 }
 
-// getEffectiveModel 获取有效的测试模型
-// 优先级:用户配置 → 候选链中供应商白名单支持的首个 → 动态解析值(30 天稳定窗) → 静态兜底。
+// getEffectiveModel 获取有效的测试模型。
+// 优先级:供应商显式配置 → 固定的产品探测模型。
 func (hcs *HealthCheckService) getEffectiveModel(provider *Provider, platform string) string {
+	if requireCodexPlatform(platform) != nil {
+		return ""
+	}
+	platform = CodexPlatform
 	// 优先使用用户配置
 	if provider.AvailabilityConfig != nil && provider.AvailabilityConfig.TestModel != "" {
 		return provider.AvailabilityConfig.TestModel
@@ -822,32 +840,26 @@ func (hcs *HealthCheckService) getEffectiveModel(provider *Provider, platform st
 	if hcs.policy != nil {
 		candidates := hcs.policy.ProbeCandidates(platform)
 		for _, candidate := range candidates {
-			// 未声明白名单的供应商视为全支持,命中首个(即动态解析值)
+			// 未声明白名单的供应商视为全支持。
 			if provider.IsModelSupported(candidate) {
 				return candidate
 			}
 		}
-		// 声明了白名单但全不支持:仍用首个候选,配合 400 模型拒绝分类避免误拉黑
+		// 声明了白名单但全不支持时仍探测固定模型，模型拒绝不会误拉黑。
 		if len(candidates) > 0 {
 			return candidates[0]
 		}
 	}
 
-	// 平台静态兜底
-	switch strings.ToLower(platform) {
-	case "claude":
-		return FallbackClaudeProbeModel
-	case "codex":
-		return FallbackCodexProbeModel
-	case "gemini":
-		return FallbackGeminiProbeModel
-	default:
-		return "gpt-3.5-turbo"
-	}
+	return FallbackCodexProbeModel
 }
 
 // getEffectiveEndpoint 获取有效的测试端点
 func (hcs *HealthCheckService) getEffectiveEndpoint(provider *Provider, platform string) string {
+	if requireCodexPlatform(platform) != nil {
+		return ""
+	}
+	platform = CodexPlatform
 	// 优先级 1：用户配置的健康检查专用端点
 	if provider.AvailabilityConfig != nil && provider.AvailabilityConfig.TestEndpoint != "" {
 		return provider.AvailabilityConfig.TestEndpoint
@@ -858,15 +870,7 @@ func (hcs *HealthCheckService) getEffectiveEndpoint(provider *Provider, platform
 		return provider.GetEffectiveEndpoint("")
 	}
 
-	// 优先级 3：平台默认端点
-	switch strings.ToLower(platform) {
-	case "claude":
-		return "/v1/messages"
-	case "codex":
-		return "/responses"
-	default:
-		return "/v1/chat/completions"
-	}
+	return "/responses"
 }
 
 // getEffectiveTimeout 获取有效的超时时间（毫秒）
@@ -878,51 +882,27 @@ func (hcs *HealthCheckService) getEffectiveTimeout(provider *Provider) int {
 	return DefaultTimeoutMs
 }
 
-// buildTestRequest 按端点协议构建测试请求体
-// /responses 走 OpenAI Responses 协议(input/max_output_tokens),
-// /messages 走 Anthropic 协议,其余按 Chat Completions。
-func (hcs *HealthCheckService) buildTestRequest(platform, model, endpoint string) []byte {
-	lowerEndpoint := strings.ToLower(endpoint)
-
-	// OpenAI Responses 格式(Codex 默认端点);claude 平台优先按 Anthropic 处理,
-	// 避免自定义端点路径恰好包含 /responses 时发错协议体
-	if platform != "claude" && strings.Contains(lowerEndpoint, "/responses") {
-		reqBody := map[string]interface{}{
-			"model":             model,
-			"input":             "hi",
-			"max_output_tokens": 16,
-		}
-		data, _ := json.Marshal(reqBody)
-		return data
+func (hcs *HealthCheckService) buildTestRequest(platform, model, _ string) []byte {
+	if requireCodexPlatform(platform) != nil {
+		return nil
 	}
-
-	// Anthropic 格式
-	if platform == "claude" || strings.Contains(lowerEndpoint, "/messages") {
-		reqBody := map[string]interface{}{
-			"model":      model,
-			"max_tokens": 1,
-			"messages": []map[string]string{
-				{"role": "user", "content": "hi"},
-			},
-		}
-		data, _ := json.Marshal(reqBody)
-		return data
-	}
-
-	// Chat Completions 格式
-	reqBody := map[string]interface{}{
-		"model":      model,
-		"max_tokens": 1,
-		"messages": []map[string]string{
-			{"role": "user", "content": "hi"},
-		},
-	}
-	data, _ := json.Marshal(reqBody)
-	return data
+	body, _ := json.Marshal(map[string]interface{}{
+		"model":  model,
+		"input":  "ping",
+		"stream": false,
+	})
+	return body
 }
 
 // saveResult 保存检测结果到数据库
 func (hcs *HealthCheckService) saveResult(result *HealthCheckResult) error {
+	if result == nil {
+		return fmt.Errorf("健康检查结果不能为空")
+	}
+	if err := requireCodexPlatform(result.Platform); err != nil {
+		return err
+	}
+	result.Platform = CodexPlatform
 	if GlobalDBQueue == nil {
 		return fmt.Errorf("数据库写入队列未初始化")
 	}
@@ -950,6 +930,10 @@ func (hcs *HealthCheckService) saveResult(result *HealthCheckResult) error {
 
 // updateCache 更新内存缓存
 func (hcs *HealthCheckService) updateCache(result *HealthCheckResult) {
+	if result == nil || requireCodexPlatform(result.Platform) != nil {
+		return
+	}
+	result.Platform = CodexPlatform
 	hcs.mu.Lock()
 	defer hcs.mu.Unlock()
 
@@ -1135,7 +1119,7 @@ func (hcs *HealthCheckService) SetAutoAvailabilityPolling(enabled bool) {
 
 // runAllPlatformChecks 执行所有平台的检测
 func (hcs *HealthCheckService) runAllPlatformChecks() {
-	platforms := []string{"claude", "codex"}
+	platforms := []string{CodexPlatform}
 	for _, platform := range platforms {
 		hcs.checkAllProviders(platform)
 	}
@@ -1144,6 +1128,10 @@ func (hcs *HealthCheckService) runAllPlatformChecks() {
 // SetAvailabilityMonitorEnabled 启用/禁用指定 Provider 的可用性监控
 // 走锁内整段读改写,避免与其他配置保存并发时相互覆盖丢失更新
 func (hcs *HealthCheckService) SetAvailabilityMonitorEnabled(platform string, providerID int64, enabled bool) error {
+	if err := requireCodexPlatform(platform); err != nil {
+		return err
+	}
+	platform = CodexPlatform
 	err := hcs.providerService.mutateProviders(platform, func(providers []Provider) ([]Provider, error) {
 		for i := range providers {
 			if providers[i].ID == providerID {
@@ -1163,6 +1151,10 @@ func (hcs *HealthCheckService) SetAvailabilityMonitorEnabled(platform string, pr
 
 // SetConnectivityAutoBlacklist 启用/禁用指定 Provider 的连通性自动拉黑
 func (hcs *HealthCheckService) SetConnectivityAutoBlacklist(platform string, providerID int64, enabled bool) error {
+	if err := requireCodexPlatform(platform); err != nil {
+		return err
+	}
+	platform = CodexPlatform
 	err := hcs.providerService.mutateProviders(platform, func(providers []Provider) ([]Provider, error) {
 		for i := range providers {
 			if providers[i].ID == providerID {
@@ -1186,6 +1178,10 @@ func (hcs *HealthCheckService) SetConnectivityAutoBlacklist(platform string, pro
 
 // SaveAvailabilityConfig 保存 Provider 的可用性高级配置
 func (hcs *HealthCheckService) SaveAvailabilityConfig(platform string, providerID int64, config *AvailabilityConfig) error {
+	if err := requireCodexPlatform(platform); err != nil {
+		return err
+	}
+	platform = CodexPlatform
 	err := hcs.providerService.mutateProviders(platform, func(providers []Provider) ([]Provider, error) {
 		for i := range providers {
 			if providers[i].ID == providerID {
@@ -1209,12 +1205,6 @@ func (hcs *HealthCheckService) CleanupOldRecords(daysToKeep int) (int64, error) 
 		daysToKeep = 7 // 默认保留 7 天
 	}
 
-	// 数据库维护（VACUUM）期间拒绝直写，避免撞排他锁自旋 busy_timeout
-	if !AcquireDBWrite() {
-		return 0, ErrDBMaintenance
-	}
-	defer ReleaseDBWrite()
-
 	db, err := xdb.DB("default")
 	if err != nil {
 		return 0, fmt.Errorf("获取数据库连接失败: %w", err)
@@ -1222,7 +1212,7 @@ func (hcs *HealthCheckService) CleanupOldRecords(daysToKeep int) (int64, error) 
 
 	cutoff := time.Now().AddDate(0, 0, -daysToKeep)
 
-	result, err := db.Exec(`DELETE FROM health_check_history WHERE checked_at < ?`, cutoff)
+	result, err := db.Exec(`DELETE FROM health_check_history WHERE platform = ? AND checked_at < ?`, CodexPlatform, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("清理历史记录失败: %w", err)
 	}

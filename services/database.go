@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/daodao97/xgo/xdb"
 	_ "modernc.org/sqlite"
@@ -48,7 +47,7 @@ func InitDatabase() error {
 
 	// 1. 确保配置目录存在（SQLite 不会自动创建父目录）。
 	// 0700：抓包全量模式会把明文 API Key 与完整请求/响应写进 app.db，
-	// 目录与库文件都收敛为仅属主可读写（POSIX 位在 Windows 上为尽力而为）
+	// 目录与库文件都收敛为仅属主可读写。
 	configDir := filepath.Join(home, ".code-switch")
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		return fmt.Errorf("创建配置目录失败: %w", err)
@@ -68,22 +67,11 @@ func InitDatabase() error {
 	// 结果是静默打开另一个数据库文件
 	dbFile := escapeSQLiteURIPath(filepath.ToSlash(filepath.Join(configDir, "app.db")))
 	dsn := "file:" + dbFile + "?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)"
-	// 维护操作（VACUUM）需要独立连接与独立 busy_timeout，记住 URI 路径与
-	// 真实文件路径供 OpenMaintenanceDB / 空间统计使用
-	databaseURIPath = dbFile
-	databaseFilePath = filepath.Join(configDir, "app.db")
-	// 连接池收敛：单文件 SQLite 上默认的 100 连接毫无意义——一次排他操作
-	// （VACUUM/长事务）会让上百条连接各自按 busy_timeout 自旋 30s，表现为全应用
-	// 同时卡住；modernc 为纯 Go 实现，空闲连接各持页缓存且默认永不回收。
-	// 8 条足够覆盖"转发落库 + 前端并发查询"的常态并发。
 	if err := xdb.Inits([]xdb.Config{
 		{
-			Name:            "default",
-			Driver:          "sqlite",
-			DSN:             dsn,
-			MaxOpenConn:     8,
-			MaxIdleConn:     8,
-			ConnMaxIdleTime: 5 * time.Minute,
+			Name:   "default",
+			Driver: "sqlite",
+			DSN:    dsn,
 		},
 	}); err != nil {
 		return fmt.Errorf("初始化数据库失败: %w", err)
@@ -117,78 +105,144 @@ func InitDatabase() error {
 		return fmt.Errorf("初始化 provider_alias 表失败: %w", err)
 	}
 
-	// 4.5 request_log 查询性能索引：此刻写队列与代理都未启动、无并发写者，
-	// 同步创建即可（实测 100 万行/1.1GB 库三索引合计约 10.4s/2016 老 Xeon，
-	// M4+NVMe 折算约 3.5-4.5s；50 万行约 4.6s）。建失败只降级为无索引全表扫描，
-	// 不阻断启动
-	ensureRequestLogPerfIndexes(db)
-
 	// 5. 预热连接池：强制建立数据库连接，避免首次写入时失败
 	var count int
 	if err := db.QueryRow("SELECT COUNT(*) FROM request_log").Scan(&count); err != nil {
-		fmt.Printf("⚠️  连接池预热查询失败: %v\n", err)
-	} else {
-		fmt.Printf("✅ 数据库连接已预热（request_log 记录数: %d）\n", count)
+		return fmt.Errorf("数据库预热查询失败: %w", err)
 	}
+	fmt.Printf("✅ 数据库连接已预热（request_log 记录数: %d）\n", count)
 
 	return nil
 }
 
-// databaseURIPath / databaseFilePath 由 InitDatabase 赋值：
-// 前者是 URI 转义后的库路径（拼维护 DSN 用），后者是真实文件路径（统计大小用）
-var (
-	databaseURIPath  string
-	databaseFilePath string
-)
+func ensureRequestLogTableWithDB(db *sql.DB) error {
+	schema := `
+	CREATE TABLE IF NOT EXISTS request_log (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		platform TEXT,
+		model TEXT,
+		provider TEXT,
+		http_code INTEGER,
+		input_tokens INTEGER DEFAULT 0,
+		output_tokens INTEGER DEFAULT 0,
+		cache_create_tokens INTEGER DEFAULT 0,
+		cache_read_tokens INTEGER DEFAULT 0,
+		reasoning_tokens INTEGER DEFAULT 0,
+		is_stream INTEGER DEFAULT 0,
+		duration_sec REAL DEFAULT 0,
+		ephemeral_5m_tokens INTEGER DEFAULT 0,
+		ephemeral_1h_tokens INTEGER DEFAULT 0,
+		service_tier TEXT,
+		request_url TEXT,
+		request_headers TEXT,
+		request_body TEXT,
+		body_truncated INTEGER DEFAULT 0,
+		body_bytes INTEGER DEFAULT 0,
+		response_headers TEXT,
+		response_body TEXT,
+		response_truncated INTEGER DEFAULT 0,
+		response_bytes INTEGER DEFAULT 0,
+		budget_skipped INTEGER DEFAULT 0,
+		capture_session_id INTEGER DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	`
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
 
-// OpenMaintenanceDB 打开一条独立的维护连接（不进 xdb 连接池）。
-// busy_timeout 收紧到 800ms：VACUUM 抢不到排他锁时快速失败并提示用户，
-// 而不是自旋 30 秒；独立连接也避免把改过的 PRAGMA 归还连接池污染后续请求
-func OpenMaintenanceDB() (*sql.DB, error) {
-	if databaseURIPath == "" {
-		return nil, fmt.Errorf("数据库尚未初始化")
+	if err := ensureRequestLogCreatedAt(db); err != nil {
+		return err
 	}
-	mdb, err := sql.Open("sqlite", "file:"+databaseURIPath+"?_pragma=busy_timeout(800)&_pragma=journal_mode(WAL)")
-	if err != nil {
-		return nil, err
+
+	migrations := []struct {
+		column     string
+		definition string
+	}{
+		{"http_code", "INTEGER"},
+		{"input_tokens", "INTEGER DEFAULT 0"},
+		{"output_tokens", "INTEGER DEFAULT 0"},
+		{"cache_create_tokens", "INTEGER DEFAULT 0"},
+		{"cache_read_tokens", "INTEGER DEFAULT 0"},
+		{"reasoning_tokens", "INTEGER DEFAULT 0"},
+		{"is_stream", "INTEGER DEFAULT 0"},
+		{"duration_sec", "REAL DEFAULT 0"},
+		{"ephemeral_5m_tokens", "INTEGER DEFAULT 0"},
+		{"ephemeral_1h_tokens", "INTEGER DEFAULT 0"},
+		{"service_tier", "TEXT DEFAULT ''"},
+		{"request_url", "TEXT DEFAULT ''"},
+		{"request_headers", "TEXT DEFAULT ''"},
+		{"request_body", "TEXT DEFAULT ''"},
+		{"body_truncated", "INTEGER DEFAULT 0"},
+		{"body_bytes", "INTEGER DEFAULT 0"},
+		{"response_headers", "TEXT DEFAULT ''"},
+		{"response_body", "TEXT DEFAULT ''"},
+		{"response_truncated", "INTEGER DEFAULT 0"},
+		{"response_bytes", "INTEGER DEFAULT 0"},
+		{"budget_skipped", "INTEGER DEFAULT 0"},
+		{"capture_session_id", "INTEGER DEFAULT 0"},
 	}
-	mdb.SetMaxOpenConns(1)
-	return mdb, nil
+	for _, migration := range migrations {
+		if err := ensureRequestLogColumn(db, migration.column, migration.definition); err != nil {
+			return fmt.Errorf("补齐 request_log 列 %s 失败: %w", migration.column, err)
+		}
+	}
+
+	return ensureCaptureSessionTable(db)
 }
 
-// DatabaseFileSize 返回 app.db 当前大小（维护操作前后对比用）；失败返回 0
-func DatabaseFileSize() int64 {
-	if databaseFilePath == "" {
-		return 0
-	}
-	fi, err := os.Stat(databaseFilePath)
+func ensureRequestLogTable() error {
+	db, err := xdb.DB("default")
 	if err != nil {
-		return 0
+		return err
 	}
-	return fi.Size()
+	return ensureRequestLogTableWithDB(db)
 }
 
-// ensureRequestLogPerfIndexes 为 request_log 建统计/筛选类查询用的性能索引。
-// 仪表盘（StatsSince/ProviderDailyStats/CostSince/HeatmapStats）按 created_at
-// 或 (platform, created_at) 范围扫，日志页 ListProviders 的 DISTINCT provider
-// 走 (platform, provider) 覆盖索引扫描（两列都在索引内，不回表）。
-// 必须在写队列与代理启动前调用；逐条尽力而为，失败仅告警
-func ensureRequestLogPerfIndexes(db *sql.DB) {
-	indexes := []string{
-		`CREATE INDEX IF NOT EXISTS idx_request_log_created_at ON request_log(created_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_request_log_platform_created ON request_log(platform, created_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_request_log_platform_provider ON request_log(platform, provider)`,
+func requestLogColumnExists(db *sql.DB, column string) (bool, error) {
+	var count int
+	if err := db.QueryRow(
+		"SELECT COUNT(*) FROM pragma_table_info('request_log') WHERE name = ?", column,
+	).Scan(&count); err != nil {
+		return false, err
 	}
-	for _, ddl := range indexes {
-		start := time.Now()
-		if _, err := db.Exec(ddl); err != nil {
-			fmt.Printf("⚠️  request_log 性能索引创建失败（降级为全表扫描，不影响启动）: %v\n", err)
-			continue
-		}
-		if cost := time.Since(start); cost > time.Second {
-			fmt.Printf("✅ request_log 性能索引就绪（耗时 %v）\n", cost.Round(time.Millisecond))
+	return count > 0, nil
+}
+
+func ensureRequestLogColumn(db *sql.DB, column string, definition string) error {
+	exists, err := requestLogColumnExists(db, column)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	_, err = db.Exec(fmt.Sprintf("ALTER TABLE request_log ADD COLUMN %s %s", column, definition))
+	return err
+}
+
+// ensureRequestLogCreatedAt migrates old databases whose request_log table
+// predates created_at. SQLite cannot add a non-constant default directly, so
+// historical rows are backfilled and a trigger supplies the insert default.
+func ensureRequestLogCreatedAt(db *sql.DB) error {
+	exists, err := requestLogColumnExists(db, "created_at")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if _, err := db.Exec("ALTER TABLE request_log ADD COLUMN created_at DATETIME"); err != nil {
+			return err
 		}
 	}
+	if _, err := db.Exec("UPDATE request_log SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"); err != nil {
+		return err
+	}
+	_, err = db.Exec(`CREATE TRIGGER IF NOT EXISTS request_log_created_at_default
+		AFTER INSERT ON request_log FOR EACH ROW WHEN NEW.created_at IS NULL
+		BEGIN
+			UPDATE request_log SET created_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+		END`)
+	return err
 }
 
 // ensureBlacklistTables 确保黑名单相关表存在

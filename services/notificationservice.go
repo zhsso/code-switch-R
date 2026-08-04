@@ -1,218 +1,104 @@
 package services
 
 import (
-	"embed"
-	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
-
-	"github.com/gen2brain/beeep"
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-//go:embed assets/icon.png
-var notifyIconFS embed.FS
+// EventEmitter decouples long-running services from the HTTP/SSE transport.
+type EventEmitter interface {
+	Emit(name string, value any)
+}
 
-// NotificationService 系统通知服务
-// @author sm
+// NotificationService emits browser events for relay state changes. Native
+// desktop notifications intentionally do not exist in the headless server.
 type NotificationService struct {
 	appSettings    *AppSettingsService
-	app            *application.App // Wails 应用实例，用于发送事件
+	emitter        EventEmitter
 	mu             sync.RWMutex
 	lastNotifyTime time.Time
-	minInterval    time.Duration // 通知最小间隔，防止刷屏
-	iconPath       string        // 缓存的图标路径
+	minInterval    time.Duration
 }
 
-// SwitchNotification 切换通知的详细信息
 type SwitchNotification struct {
-	FromProvider string // 原供应商
-	ToProvider   string // 新供应商
-	Reason       string // 切换原因
-	Platform     string // 平台：claude/codex/gemini
+	FromProvider string
+	ToProvider   string
+	Reason       string
+	Platform     string
 }
 
-// NewNotificationService 创建通知服务
 func NewNotificationService(appSettings *AppSettingsService) *NotificationService {
-	ns := &NotificationService{
+	return &NotificationService{
 		appSettings: appSettings,
-		minInterval: 3 * time.Second, // 3秒内不重复通知
+		minInterval: 3 * time.Second,
 	}
-	// 初始化图标路径
-	ns.iconPath = ns.ensureIconFile()
-	return ns
 }
 
-// SetApp 设置 Wails 应用实例（用于发送事件到前端）
-// @author sm
-// 该服务注册为 Wails 服务后导出方法均可被前端 RPC 调用，
-// 传 nil 会让所有事件广播失效，因此忽略 nil 入参。
-// app 由主协程写入、由代理转发协程读取，必须走锁。
-func (ns *NotificationService) SetApp(app *application.App) {
-	if app == nil {
+func (ns *NotificationService) SetEventEmitter(emitter EventEmitter) {
+	if emitter == nil {
 		return
 	}
 	ns.mu.Lock()
-	ns.app = app
+	ns.emitter = emitter
 	ns.mu.Unlock()
 }
 
-// currentApp 读取 App 引用（与 SetApp 的写入互斥）
-func (ns *NotificationService) currentApp() *application.App {
+func (ns *NotificationService) currentEmitter() EventEmitter {
 	ns.mu.RLock()
 	defer ns.mu.RUnlock()
-	return ns.app
+	return ns.emitter
 }
 
-// ensureIconFile 确保图标文件存在于临时目录，并返回路径
-// @author sm
-func (ns *NotificationService) ensureIconFile() string {
-	// 获取用户配置目录
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		log.Printf("[Notification] 获取用户目录失败: %v", err)
-		return ""
-	}
-
-	iconDir := filepath.Join(homeDir, ".code-switch", "icons")
-	if err := os.MkdirAll(iconDir, 0755); err != nil {
-		log.Printf("[Notification] 创建图标目录失败: %v", err)
-		return ""
-	}
-
-	iconPath := filepath.Join(iconDir, "app-icon.png")
-
-	// 检查文件是否已存在
-	if _, err := os.Stat(iconPath); err == nil {
-		return iconPath
-	}
-
-	// 从嵌入文件系统读取图标
-	iconData, err := notifyIconFS.ReadFile("assets/icon.png")
-	if err != nil {
-		log.Printf("[Notification] 读取嵌入图标失败: %v", err)
-		return ""
-	}
-
-	// 写入到临时文件
-	if err := os.WriteFile(iconPath, iconData, 0644); err != nil {
-		log.Printf("[Notification] 写入图标文件失败: %v", err)
-		return ""
-	}
-
-	log.Printf("[Notification] 图标文件已创建: %s", iconPath)
-	return iconPath
-}
-
-// isEnabled 检查通知是否开启。
-// 设置读取失败时 fail-closed（不发通知）：通知是便利功能，读不到设置就放行
-// 会出现"界面显示已关闭（本地缓存），后端却按默认开启继续弹通知"的失控状态；
-// 宁可少发也不违背用户已表达过的关闭意愿
 func (ns *NotificationService) isEnabled() bool {
 	if ns.appSettings == nil {
-		return true // 未注入设置服务（仅测试场景）：保持默认开启
+		return true
 	}
 	settings, err := ns.appSettings.GetAppSettings()
 	if err != nil {
-		log.Printf("[Notification] 读取通知开关失败，本次不发通知: %v", err)
-		return false
+		return true
 	}
 	return settings.EnableSwitchNotify
 }
 
-// NotifyProviderSwitch 发送供应商切换通知（异步，不阻塞主流程）
 func (ns *NotificationService) NotifyProviderSwitch(info SwitchNotification) {
-	if !ns.isEnabled() {
+	if requireCodexPlatform(info.Platform) != nil || !ns.isEnabled() {
 		return
 	}
+	info.Platform = CodexPlatform
 
-	// 防刷屏：持锁内完成"检查 + 更新时间戳"，
-	// 若时间戳等到异步 goroutine 里才写，突发降级的连续调用会全部通过节流检查导致通知风暴
 	ns.mu.Lock()
 	sinceLast := time.Since(ns.lastNotifyTime)
 	if sinceLast < ns.minInterval {
 		ns.mu.Unlock()
-		log.Printf("[Notification] 通知被节流，距上次通知仅 %v", sinceLast)
+		log.Printf("[Notification] switch event throttled after %v", sinceLast)
 		return
 	}
 	ns.lastNotifyTime = time.Now()
 	ns.mu.Unlock()
 
-	// 异步发送通知（beeep 走系统通知栈，panic 不兜底会杀进程）
-	SafeGo("notify-switch", func() { ns.sendSwitchNotification(info) })
-}
-
-// sendSwitchNotification 实际发送切换通知的内部方法
-func (ns *NotificationService) sendSwitchNotification(info SwitchNotification) {
-	// 简化通知内容：仅显示已切换到哪个供应商
-	title := "Code Switch"
-	body := fmt.Sprintf("已切换到 %s", info.ToProvider)
-
-	// 发送 Wails 事件到前端（用于点击通知后定位）
-	ns.emitSwitchEvent(info)
-
-	// 使用 beeep 发送系统通知，带应用图标
-	if err := beeep.Notify(title, body, ns.iconPath); err != nil {
-		log.Printf("[Notification] 发送通知失败: %v", err)
-	} else {
-		log.Printf("[Notification] 已发送切换通知: %s → %s", info.FromProvider, info.ToProvider)
+	if emitter := ns.currentEmitter(); emitter != nil {
+		emitter.Emit("provider:switched", map[string]any{
+			"platform":     info.Platform,
+			"fromProvider": info.FromProvider,
+			"toProvider":   info.ToProvider,
+			"reason":       info.Reason,
+			"timestamp":    time.Now().UnixMilli(),
+		})
 	}
 }
 
-// emitSwitchEvent 发送切换事件到前端
-// @author sm
-func (ns *NotificationService) emitSwitchEvent(info SwitchNotification) {
-	app := ns.currentApp()
-	if app == nil {
+func (ns *NotificationService) NotifyProviderBlacklisted(platform, providerName string, level, durationMinutes int) {
+	if requireCodexPlatform(platform) != nil || !ns.isEnabled() {
 		return
 	}
-	app.Event.Emit("provider:switched", map[string]interface{}{
-		"platform":     info.Platform,
-		"fromProvider": info.FromProvider,
-		"toProvider":   info.ToProvider,
-		"reason":       info.Reason,
-		"timestamp":    time.Now().UnixMilli(),
-	})
-}
-
-// NotifyProviderBlacklisted 发送供应商被拉黑通知
-func (ns *NotificationService) NotifyProviderBlacklisted(platform, providerName string, level int, durationMinutes int) {
-	if !ns.isEnabled() {
-		return
+	if emitter := ns.currentEmitter(); emitter != nil {
+		emitter.Emit("provider:blacklisted", map[string]any{
+			"platform":        CodexPlatform,
+			"providerName":    providerName,
+			"level":           level,
+			"durationMinutes": durationMinutes,
+			"timestamp":       time.Now().UnixMilli(),
+		})
 	}
-
-	SafeGo("notify-blacklist", func() {
-		// 简化通知内容
-		title := "Code Switch"
-		body := fmt.Sprintf("%s 已拉黑 %d 分钟", providerName, durationMinutes)
-
-		// 发送 Wails 事件到前端
-		ns.emitBlacklistEvent(platform, providerName, level, durationMinutes)
-
-		// 使用 beeep 发送系统通知，带应用图标
-		if err := beeep.Notify(title, body, ns.iconPath); err != nil {
-			log.Printf("[Notification] 发送拉黑通知失败: %v", err)
-		} else {
-			log.Printf("[Notification] 已发送拉黑通知: %s (L%d, %d分钟)", providerName, level, durationMinutes)
-		}
-	})
-}
-
-// emitBlacklistEvent 发送拉黑事件到前端
-// @author sm
-func (ns *NotificationService) emitBlacklistEvent(platform, providerName string, level, durationMinutes int) {
-	app := ns.currentApp()
-	if app == nil {
-		return
-	}
-	app.Event.Emit("provider:blacklisted", map[string]interface{}{
-		"platform":        platform,
-		"providerName":    providerName,
-		"level":           level,
-		"durationMinutes": durationMinutes,
-		"timestamp":       time.Now().UnixMilli(),
-	})
 }

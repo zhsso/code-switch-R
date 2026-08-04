@@ -224,7 +224,7 @@ func TestConcurrentCalculateAndRebuild(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					_ = svc.CalculateCost("claude-opus-4-5", UsageSnapshot{InputTokens: 100, CacheReadTokens: 50})
+					_ = svc.CalculateCost("gpt-5", UsageSnapshot{InputTokens: 100, CacheReadTokens: 50})
 				}
 			}
 		}()
@@ -243,21 +243,21 @@ func TestConcurrentCalculateAndRebuild(t *testing.T) {
 // TestConvertCatalogs 前缀规则、单位换算与无价条目过滤。
 func TestConvertCatalogs(t *testing.T) {
 	catalogs := map[string]*RemoteCatalog{
-		"anthropic": {ID: "anthropic", Models: map[string]RemoteModel{
-			"claude-test": {ID: "claude-test", Cost: &RemoteCost{Input: f64(10), Output: f64(50), CacheRead: f64(1), CacheWrite: f64(12.5)}},
+		"openai": {ID: "openai", Models: map[string]RemoteModel{
+			"gpt-test": {ID: "gpt-test", Cost: &RemoteCost{Input: f64(10), Output: f64(50), CacheRead: f64(1), CacheWrite: f64(12.5)}},
 		}},
 		"alibaba": {ID: "alibaba", Models: map[string]RemoteModel{
 			"qwen-test": {ID: "qwen-test", Cost: &RemoteCost{Input: f64(1), Output: f64(2)}},
 		}},
-		"google": {ID: "google", Models: map[string]RemoteModel{
+		"unsupported": {ID: "unsupported", Models: map[string]RemoteModel{
 			"free-preview": {ID: "free-preview", Cost: &RemoteCost{Input: f64(0), Output: f64(0)}},
 			"no-cost":      {ID: "no-cost"},
 		}},
 	}
 	entries := ConvertCatalogs(catalogs)
-	claude, ok := entries["claude-test"]
-	if !ok || *claude.Input != 10e-6 || *claude.CacheWrite != 12.5e-6 {
-		t.Errorf("anthropic 裸名转换错误: %+v", claude)
+	gpt, ok := entries["gpt-test"]
+	if !ok || *gpt.Input != 10e-6 || *gpt.CacheWrite != 12.5e-6 {
+		t.Errorf("openai 裸名转换错误: %+v", gpt)
 	}
 	if _, ok := entries["dashscope/qwen-test"]; !ok {
 		t.Error("alibaba 应加 dashscope/ 前缀")
@@ -272,7 +272,7 @@ func TestConvertCatalogs(t *testing.T) {
 
 // TestParseRemoteCatalogValidation 回显校验与非法条目清洗。
 func TestParseRemoteCatalogValidation(t *testing.T) {
-	if _, err := ParseRemoteCatalog("openai", []byte(`{"id":"google","models":{"m":{}}}`)); err == nil {
+	if _, err := ParseRemoteCatalog("openai", []byte(`{"id":"other","models":{"m":{}}}`)); err == nil {
 		t.Error("id 回显不符应报错")
 	}
 	catalog, err := ParseRemoteCatalog("openai", []byte(`{
@@ -315,7 +315,7 @@ func TestEmbeddedSeedCatalogs(t *testing.T) {
 	if _, err := svc.Rebuild(ConvertCatalogs(seed)); err != nil {
 		t.Fatalf("Rebuild(seed): %v", err)
 	}
-	for _, model := range []string{"gpt-5.6", "gemini-3.5-flash", "claude-haiku-4-5-20251001", "claude-opus-5", "gemini-3.1-pro-preview", "claude-fable-5"} {
+	for _, model := range []string{"gpt-5.6", "deepseek-chat", "dashscope/qwen-max", "moonshot/kimi-k2.5", "zai/glm-5"} {
 		if !svc.HasPositivePricing(model) {
 			t.Errorf("种子重建后静态兜底/最新模型 %s 应有价", model)
 		}

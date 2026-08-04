@@ -1,4 +1,4 @@
-import { Call } from '@wailsio/runtime'
+import { Call } from '../runtime'
 
 // 连通性状态常量（与 relay-pulse 一致）
 export const StatusAvailable = 1    // 绿色：可用
@@ -34,18 +34,18 @@ const SERVICE = 'codeswitch/services.ConnectivityTestService'
 
 /**
  * 测试指定平台的所有启用检测的供应商
- * @param platform 'claude' | 'codex' | 'gemini'
+ * Runs tests for Codex providers.
  */
-export const testAllProviders = async (platform: string): Promise<ConnectivityResult[]> => {
-  return Call.ByName(`${SERVICE}.TestAll`, platform)
+export const testAllProviders = async (): Promise<ConnectivityResult[]> => {
+  return Call.ByName(`${SERVICE}.TestAll`, 'codex')
 }
 
 /**
  * 获取指定平台的测试结果（不触发新测试）
- * @param platform 'claude' | 'codex' | 'gemini'
+ * Returns the latest Codex provider results.
  */
-export const getConnectivityResults = async (platform: string): Promise<ConnectivityResult[]> => {
-  return Call.ByName(`${SERVICE}.GetResults`, platform)
+export const getConnectivityResults = async (): Promise<ConnectivityResult[]> => {
+  return Call.ByName(`${SERVICE}.GetResults`, 'codex')
 }
 
 /**
@@ -57,11 +57,11 @@ export const getAllConnectivityResults = async (): Promise<Record<string, Connec
 
 /**
  * 手动触发单个供应商测试
- * @param platform 'claude' | 'codex' | 'gemini'
+ * Runs a test for one Codex provider.
  * @param providerId provider ID
  */
-export const runSingleTest = async (platform: string, providerId: number): Promise<ConnectivityResult> => {
-  return Call.ByName(`${SERVICE}.RunSingleTest`, platform, providerId)
+export const runSingleTest = async (providerId: number): Promise<ConnectivityResult> => {
+  return Call.ByName(`${SERVICE}.RunSingleTest`, 'codex', providerId)
 }
 
 /**

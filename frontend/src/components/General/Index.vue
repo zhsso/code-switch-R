@@ -1,1148 +1,252 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { Call } from '@wailsio/runtime'
-import { GetSyncStatus, SyncNow, RestoreBuiltinPricing } from '../../../bindings/codeswitch/services/modelsyncservice'
-import { ExportWithDialog } from '../../../bindings/codeswitch/services/exportservice'
-import type { ModelSyncStatus } from '../../../bindings/codeswitch/services/models'
-import ListItem from '../Setting/ListRow.vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import ListRow from '../Setting/ListRow.vue'
 import LanguageSwitcher from '../Setting/LanguageSwitcher.vue'
 import ThemeSetting from '../Setting/ThemeSetting.vue'
-import NetworkWslSettings from '../Setting/NetworkWslSettings.vue'
+import { Call, Events } from '../../runtime'
 import { fetchAppSettings, saveAppSettings, type AppSettings } from '../../services/appSettings'
-import { getBlacklistSettings, updateBlacklistSettings, getLevelBlacklistEnabled, setLevelBlacklistEnabled, getBlacklistEnabled, setBlacklistEnabled, type BlacklistSettings } from '../../services/settings'
-import { fetchConfigImportStatus, importFromPath, type ConfigImportStatus } from '../../services/configImport'
-import { useI18n } from 'vue-i18n'
+import {
+  getBlacklistEnabled,
+  getBlacklistSettings,
+  getLevelBlacklistEnabled,
+  setBlacklistEnabled,
+  setLevelBlacklistEnabled,
+  updateBlacklistSettings,
+} from '../../services/settings'
+import {
+  GetSyncStatus,
+  RestoreBuiltinPricing,
+  SyncNow,
+  type ModelSyncStatus,
+} from '../../services/modelSync'
+import { cleanupConfiguredHistory, type HistoryCleanupResult } from '../../services/maintenance'
 import { extractErrorMessage } from '../../utils/error'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
-// 从 localStorage 读取缓存值作为初始值，避免加载时的视觉闪烁
-const getCachedValue = (key: string, defaultValue: boolean): boolean => {
-  const cached = localStorage.getItem(`app-settings-${key}`)
-  return cached !== null ? cached === 'true' : defaultValue
-}
-const getCachedNumber = (key: string, defaultValue: number): number => {
-  const cached = localStorage.getItem(`app-settings-${key}`)
-  if (cached === null) return defaultValue
-  const parsed = Number(cached)
-  return Number.isFinite(parsed) ? parsed : defaultValue
-}
-const getCachedString = (key: string, defaultValue: string): string => {
-  const cached = localStorage.getItem(`app-settings-${key}`)
-  return cached !== null ? cached : defaultValue
-}
-const heatmapEnabled = ref(getCachedValue('heatmap', true))
-const homeTitleVisible = ref(getCachedValue('homeTitle', true))
-const autoStartEnabled = ref(getCachedValue('autoStart', false))
-const autoConnectivityTestEnabled = ref(getCachedValue('autoConnectivityTest', true))
-const switchNotifyEnabled = ref(getCachedValue('switchNotify', true)) // 切换通知开关
-const roundRobinEnabled = ref(getCachedValue('roundRobin', false))    // 同 Level 轮询开关
-const trayPopupEnabled = ref(getCachedValue('trayPopup', true))       // 托盘弹窗开关（macOS）
-const autoUpdateEnabled = ref(getCachedValue('autoUpdate', true))     // 自动更新开关
-const autoSyncModelsEnabled = ref(getCachedValue('autoSyncModels', true)) // 模型价格自动同步开关
-const modelSyncStatus = ref<ModelSyncStatus | null>(null)
-const modelSyncBusy = ref(false)
-const budgetTotal = ref(getCachedNumber('budgetTotal', 0))
-const budgetUsedAdjustment = ref(getCachedNumber('budgetUsedAdjustment', 0))
-const budgetForecastMethod = ref(getCachedString('budgetForecastMethod', 'cycle'))
-const budgetCycleEnabled = ref(getCachedValue('budgetCycleEnabled', false))
-const budgetCycleMode = ref(getCachedString('budgetCycleMode', 'daily'))
-const budgetRefreshTime = ref(getCachedString('budgetRefreshTime', '00:00'))
-const budgetRefreshDay = ref(getCachedNumber('budgetRefreshDay', 1))
-const budgetShowCountdown = ref(getCachedValue('budgetShowCountdown', false))
-const budgetShowForecast = ref(getCachedValue('budgetShowForecast', false))
-const budgetTotalCodex = ref(getCachedNumber('budgetTotalCodex', 0))
-const budgetUsedAdjustmentCodex = ref(getCachedNumber('budgetUsedAdjustmentCodex', 0))
-const budgetForecastMethodCodex = ref(getCachedString('budgetForecastMethodCodex', 'cycle'))
-const budgetCycleEnabledCodex = ref(getCachedValue('budgetCycleEnabledCodex', false))
-const budgetCycleModeCodex = ref(getCachedString('budgetCycleModeCodex', 'daily'))
-const budgetRefreshTimeCodex = ref(getCachedString('budgetRefreshTimeCodex', '00:00'))
-const budgetRefreshDayCodex = ref(getCachedNumber('budgetRefreshDayCodex', 1))
-const budgetShowCountdownCodex = ref(getCachedValue('budgetShowCountdownCodex', false))
-const budgetShowForecastCodex = ref(getCachedValue('budgetShowForecastCodex', false))
-const settingsLoading = ref(true)
-const settingsLoadFailed = ref(false)  // 设置加载失败标记：为 true 时禁止整对象保存，防止用默认值覆盖后端配置
-const saveBusy = ref(false)
+const settings = reactive<AppSettings>({
+  show_heatmap: true,
+  show_home_title: true,
+  auto_sync_models: true,
+  auto_connectivity_test: true,
+  enable_switch_notify: true,
+  enable_round_robin: false,
+  history_retention_days: 30,
+})
 
-// 拉黑配置相关状态
-const blacklistEnabled = ref(false)  // 拉黑功能总开关
+const blacklistEnabled = ref(false)
+const levelBlacklistEnabled = ref(false)
 const blacklistThreshold = ref(3)
 const blacklistDuration = ref(30)
-const levelBlacklistEnabled = ref(false)
-const blacklistLoading = ref(false)
-const blacklistSaving = ref(false)
+const modelSync = ref<ModelSyncStatus | null>(null)
+const loading = ref(true)
+const saving = ref(false)
+const syncing = ref(false)
+const cleaning = ref(false)
+const notice = ref<{ kind: 'success' | 'error'; text: string } | null>(null)
 
-// cc-switch 导入相关状态
-const importStatus = ref<ConfigImportStatus | null>(null)
-const importPath = ref('')
-const importing = ref(false)
-const importLoading = ref(true)
-
-const normalizeBudgetForecastMethod = (value: string) => {
-  const trimmed = value?.trim()
-  if (trimmed === 'cycle' || trimmed === '10m' || trimmed === '1h' || trimmed === 'yesterday' || trimmed === 'last24h') {
-    return trimmed
-  }
-  return 'cycle'
-}
-
-const loadAppSettings = async () => {
-  settingsLoading.value = true
-  try {
-    const data = await fetchAppSettings()
-    heatmapEnabled.value = data?.show_heatmap ?? true
-    homeTitleVisible.value = data?.show_home_title ?? true
-    budgetTotal.value = Number(data?.budget_total ?? 0)
-    budgetUsedAdjustment.value = Number(data?.budget_used_adjustment ?? 0)
-    budgetForecastMethod.value = normalizeBudgetForecastMethod(data?.budget_forecast_method ?? 'cycle')
-    budgetCycleEnabled.value = data?.budget_cycle_enabled ?? false
-    budgetCycleMode.value = data?.budget_cycle_mode === 'weekly' ? 'weekly' : 'daily'
-    budgetRefreshTime.value = data?.budget_refresh_time || '00:00'
-    budgetRefreshDay.value = Number.isFinite(data?.budget_refresh_day) ? data?.budget_refresh_day : 1
-    budgetShowCountdown.value = data?.budget_show_countdown ?? false
-    budgetShowForecast.value = data?.budget_show_forecast ?? false
-    budgetTotalCodex.value = Number(data?.budget_total_codex ?? 0)
-    budgetUsedAdjustmentCodex.value = Number(data?.budget_used_adjustment_codex ?? 0)
-    budgetForecastMethodCodex.value = normalizeBudgetForecastMethod(data?.budget_forecast_method_codex ?? 'cycle')
-    budgetCycleEnabledCodex.value = data?.budget_cycle_enabled_codex ?? false
-    budgetCycleModeCodex.value = data?.budget_cycle_mode_codex === 'weekly' ? 'weekly' : 'daily'
-    budgetRefreshTimeCodex.value = data?.budget_refresh_time_codex || '00:00'
-    budgetRefreshDayCodex.value = Number.isFinite(data?.budget_refresh_day_codex) ? data?.budget_refresh_day_codex : 1
-    budgetShowCountdownCodex.value = data?.budget_show_countdown_codex ?? false
-    budgetShowForecastCodex.value = data?.budget_show_forecast_codex ?? false
-    autoStartEnabled.value = data?.auto_start ?? false
-    autoConnectivityTestEnabled.value = data?.auto_connectivity_test ?? false
-    switchNotifyEnabled.value = data?.enable_switch_notify ?? true
-    roundRobinEnabled.value = data?.enable_round_robin ?? false
-    trayPopupEnabled.value = data?.enable_tray_popup ?? true
-    autoUpdateEnabled.value = data?.auto_update ?? true
-    autoSyncModelsEnabled.value = data?.auto_sync_models ?? true
-
-    // 缓存到 localStorage，下次打开时直接显示正确状态
-    localStorage.setItem('app-settings-heatmap', String(heatmapEnabled.value))
-    localStorage.setItem('app-settings-homeTitle', String(homeTitleVisible.value))
-    localStorage.setItem('app-settings-budgetTotal', String(budgetTotal.value))
-    localStorage.setItem('app-settings-budgetUsedAdjustment', String(budgetUsedAdjustment.value))
-    localStorage.setItem('app-settings-budgetForecastMethod', budgetForecastMethod.value)
-    localStorage.setItem('app-settings-budgetCycleEnabled', String(budgetCycleEnabled.value))
-    localStorage.setItem('app-settings-budgetCycleMode', budgetCycleMode.value)
-    localStorage.setItem('app-settings-budgetRefreshTime', budgetRefreshTime.value)
-    localStorage.setItem('app-settings-budgetRefreshDay', String(budgetRefreshDay.value))
-    localStorage.setItem('app-settings-budgetShowCountdown', String(budgetShowCountdown.value))
-    localStorage.setItem('app-settings-budgetShowForecast', String(budgetShowForecast.value))
-    localStorage.setItem('app-settings-budgetTotalCodex', String(budgetTotalCodex.value))
-    localStorage.setItem('app-settings-budgetUsedAdjustmentCodex', String(budgetUsedAdjustmentCodex.value))
-    localStorage.setItem('app-settings-budgetForecastMethodCodex', budgetForecastMethodCodex.value)
-    localStorage.setItem('app-settings-budgetCycleEnabledCodex', String(budgetCycleEnabledCodex.value))
-    localStorage.setItem('app-settings-budgetCycleModeCodex', budgetCycleModeCodex.value)
-    localStorage.setItem('app-settings-budgetRefreshTimeCodex', budgetRefreshTimeCodex.value)
-    localStorage.setItem('app-settings-budgetRefreshDayCodex', String(budgetRefreshDayCodex.value))
-    localStorage.setItem('app-settings-budgetShowCountdownCodex', String(budgetShowCountdownCodex.value))
-    localStorage.setItem('app-settings-budgetShowForecastCodex', String(budgetShowForecastCodex.value))
-    localStorage.setItem('app-settings-autoStart', String(autoStartEnabled.value))
-    localStorage.setItem('app-settings-autoConnectivityTest', String(autoConnectivityTestEnabled.value))
-    localStorage.setItem('app-settings-switchNotify', String(switchNotifyEnabled.value))
-    localStorage.setItem('app-settings-roundRobin', String(roundRobinEnabled.value))
-    localStorage.setItem('app-settings-trayPopup', String(trayPopupEnabled.value))
-    localStorage.setItem('app-settings-autoUpdate', String(autoUpdateEnabled.value))
-    localStorage.setItem('app-settings-autoSyncModels', String(autoSyncModelsEnabled.value))
-    settingsLoadFailed.value = false
-  } catch (error) {
-    console.error('failed to load app settings', error)
-    // 加载失败时保留当前值（初始值来自 localStorage 缓存，是最接近真实的状态），
-    // 不重置为硬编码默认值；同时置失败标记，禁止整对象保存覆盖后端配置
-    settingsLoadFailed.value = true
-  } finally {
-    settingsLoading.value = false
-  }
-  void refreshModelSyncStatus()
-}
-
-// —— 模型数据同步 ——
-
-const refreshModelSyncStatus = async () => {
-  try {
-    modelSyncStatus.value = await GetSyncStatus()
-  } catch (error) {
-    console.error('failed to load model sync status', error)
-  }
-}
-
-const syncModelDataNow = async () => {
-  if (modelSyncBusy.value) return
-  modelSyncBusy.value = true
-  try {
-    modelSyncStatus.value = await SyncNow()
-  } catch (error) {
-    console.error('model data sync failed', error)
-    alert(t('components.general.label.modelSyncFailed') + extractErrorMessage(error))
-  } finally {
-    modelSyncBusy.value = false
-  }
-}
-
-const restoreBuiltinModelData = async () => {
-  // 与常规设置保存互斥:恢复动作在服务端会改写 AppSettings(关闭自动同步),
-  // 若与保存并发会用旧快照覆盖用户刚保存的设置
-  if (modelSyncBusy.value || saveBusy.value || settingsLoading.value) return
-  if (!window.confirm(t('components.general.label.modelRestoreConfirm'))) return
-  modelSyncBusy.value = true
-  saveBusy.value = true
-  try {
-    modelSyncStatus.value = await RestoreBuiltinPricing()
-    // 恢复内置会同时关闭自动同步(可再手动开启)
-    autoSyncModelsEnabled.value = false
-    localStorage.setItem('app-settings-autoSyncModels', 'false')
-  } catch (error) {
-    console.error('restore builtin model data failed', error)
-    alert(t('components.general.label.modelRestoreFailed') + extractErrorMessage(error))
-  } finally {
-    saveBusy.value = false
-    modelSyncBusy.value = false
-    if (pendingSave.value) {
-      pendingSave.value = false
-      void persistAppSettings()
-    }
-  }
-}
-
-const modelSyncStatusText = computed(() => {
-  const status = modelSyncStatus.value
-  if (!status) return '—'
-  const last = status.lastSuccess ? new Date(status.lastSuccess as unknown as string) : null
-  const never = !last || Number.isNaN(last.getTime()) || last.getFullYear() < 2000
-  const timeText = never ? t('components.general.label.modelSyncNever') : last!.toLocaleString()
-  return t('components.general.label.modelSyncSummary', {
-    time: timeText,
-    count: status.pricing?.totalModels ?? 0,
-  })
+const pricingCount = computed(() => {
+  const pricing = modelSync.value?.pricing
+  return Number(pricing?.totalModels ?? pricing?.TotalModels ?? 0)
 })
 
-const modelSyncDefaultsText = computed(() => {
-  const models = modelSyncStatus.value?.defaultModels
-  if (!models) return '—'
-  return t('components.general.sync.defaultsSummary', {
-    codex: models.codexDefault,
-    gemini: models.geminiDefault,
-    claude: models.claudeProbe,
-  })
+const lastSync = computed(() => {
+  const value = modelSync.value?.lastSuccess
+  if (!value || value.startsWith('0001-')) return t('components.general.label.modelSyncNever')
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString(locale.value, { hour12: false })
 })
 
-const pendingSave = ref(false)
-
-const persistAppSettings = async () => {
-  if (settingsLoading.value) return
-  if (settingsLoadFailed.value) {
-    // 设置尚未成功加载，此时整对象保存会把缓存/默认值写回后端，静默清空真实配置
-    alert(t('components.general.label.settingsLoadFailed'))
-    void loadAppSettings()
-    return
-  }
-  if (saveBusy.value) {
-    // 保存进行中:排队一次尾随保存,避免连续切换时后一次改动被静默丢弃
-    pendingSave.value = true
-    return
-  }
-  saveBusy.value = true
-  try {
-    const normalizedBudgetTotal = Number.isFinite(budgetTotal.value) ? Math.max(0, budgetTotal.value) : 0
-    budgetTotal.value = normalizedBudgetTotal
-    const normalizedBudgetUsedAdjustment = Number.isFinite(budgetUsedAdjustment.value)
-      ? budgetUsedAdjustment.value
-      : 0
-    budgetUsedAdjustment.value = normalizedBudgetUsedAdjustment
-    const normalizedBudgetForecastMethod = normalizeBudgetForecastMethod(budgetForecastMethod.value)
-    budgetForecastMethod.value = normalizedBudgetForecastMethod
-    const normalizedBudgetTotalCodex = Number.isFinite(budgetTotalCodex.value)
-      ? Math.max(0, budgetTotalCodex.value)
-      : 0
-    budgetTotalCodex.value = normalizedBudgetTotalCodex
-    const normalizedBudgetUsedAdjustmentCodex = Number.isFinite(budgetUsedAdjustmentCodex.value)
-      ? budgetUsedAdjustmentCodex.value
-      : 0
-    budgetUsedAdjustmentCodex.value = normalizedBudgetUsedAdjustmentCodex
-    const normalizedBudgetForecastMethodCodex = normalizeBudgetForecastMethod(budgetForecastMethodCodex.value)
-    budgetForecastMethodCodex.value = normalizedBudgetForecastMethodCodex
-    const normalizedBudgetRefreshDay = Number.isFinite(budgetRefreshDay.value)
-      ? Math.min(Math.max(Math.floor(budgetRefreshDay.value), 0), 6)
-      : 1
-    budgetRefreshDay.value = normalizedBudgetRefreshDay
-    const normalizedBudgetCycleMode = budgetCycleMode.value === 'weekly' ? 'weekly' : 'daily'
-    budgetCycleMode.value = normalizedBudgetCycleMode
-    const normalizedBudgetRefreshDayCodex = Number.isFinite(budgetRefreshDayCodex.value)
-      ? Math.min(Math.max(Math.floor(budgetRefreshDayCodex.value), 0), 6)
-      : 1
-    budgetRefreshDayCodex.value = normalizedBudgetRefreshDayCodex
-    const normalizedBudgetCycleModeCodex = budgetCycleModeCodex.value === 'weekly' ? 'weekly' : 'daily'
-    budgetCycleModeCodex.value = normalizedBudgetCycleModeCodex
-    const payload: AppSettings = {
-      show_heatmap: heatmapEnabled.value,
-      show_home_title: homeTitleVisible.value,
-      budget_total: normalizedBudgetTotal,
-      budget_used_adjustment: normalizedBudgetUsedAdjustment,
-      budget_forecast_method: normalizedBudgetForecastMethod,
-      budget_cycle_enabled: budgetCycleEnabled.value,
-      budget_cycle_mode: normalizedBudgetCycleMode,
-      budget_refresh_time: budgetRefreshTime.value || '00:00',
-      budget_refresh_day: normalizedBudgetRefreshDay,
-      budget_show_countdown: budgetShowCountdown.value,
-      budget_show_forecast: budgetShowForecast.value,
-      budget_total_codex: normalizedBudgetTotalCodex,
-      budget_used_adjustment_codex: normalizedBudgetUsedAdjustmentCodex,
-      budget_forecast_method_codex: normalizedBudgetForecastMethodCodex,
-      budget_cycle_enabled_codex: budgetCycleEnabledCodex.value,
-      budget_cycle_mode_codex: normalizedBudgetCycleModeCodex,
-      budget_refresh_time_codex: budgetRefreshTimeCodex.value || '00:00',
-      budget_refresh_day_codex: normalizedBudgetRefreshDayCodex,
-      budget_show_countdown_codex: budgetShowCountdownCodex.value,
-      budget_show_forecast_codex: budgetShowForecastCodex.value,
-      auto_start: autoStartEnabled.value,
-      auto_connectivity_test: autoConnectivityTestEnabled.value,
-      enable_switch_notify: switchNotifyEnabled.value,
-      enable_round_robin: roundRobinEnabled.value,
-      enable_tray_popup: trayPopupEnabled.value,
-      auto_update: autoUpdateEnabled.value,
-      auto_sync_models: autoSyncModelsEnabled.value,
-    }
-    await saveAppSettings(payload)
-
-    // 同步自动可用性监控设置到 HealthCheckService（复用旧字段名）
-    await Call.ByName(
-      'codeswitch/services.HealthCheckService.SetAutoAvailabilityPolling',
-      autoConnectivityTestEnabled.value
-    )
-
-    // 更新缓存
-    localStorage.setItem('app-settings-heatmap', String(heatmapEnabled.value))
-    localStorage.setItem('app-settings-homeTitle', String(homeTitleVisible.value))
-    localStorage.setItem('app-settings-budgetTotal', String(budgetTotal.value))
-    localStorage.setItem('app-settings-budgetUsedAdjustment', String(budgetUsedAdjustment.value))
-    localStorage.setItem('app-settings-budgetForecastMethod', budgetForecastMethod.value)
-    localStorage.setItem('app-settings-budgetCycleEnabled', String(budgetCycleEnabled.value))
-    localStorage.setItem('app-settings-budgetCycleMode', budgetCycleMode.value)
-    localStorage.setItem('app-settings-budgetRefreshTime', budgetRefreshTime.value)
-    localStorage.setItem('app-settings-budgetRefreshDay', String(budgetRefreshDay.value))
-    localStorage.setItem('app-settings-budgetShowCountdown', String(budgetShowCountdown.value))
-    localStorage.setItem('app-settings-budgetShowForecast', String(budgetShowForecast.value))
-    localStorage.setItem('app-settings-budgetTotalCodex', String(budgetTotalCodex.value))
-    localStorage.setItem('app-settings-budgetUsedAdjustmentCodex', String(budgetUsedAdjustmentCodex.value))
-    localStorage.setItem('app-settings-budgetForecastMethodCodex', budgetForecastMethodCodex.value)
-    localStorage.setItem('app-settings-budgetCycleEnabledCodex', String(budgetCycleEnabledCodex.value))
-    localStorage.setItem('app-settings-budgetCycleModeCodex', budgetCycleModeCodex.value)
-    localStorage.setItem('app-settings-budgetRefreshTimeCodex', budgetRefreshTimeCodex.value)
-    localStorage.setItem('app-settings-budgetRefreshDayCodex', String(budgetRefreshDayCodex.value))
-    localStorage.setItem('app-settings-budgetShowCountdownCodex', String(budgetShowCountdownCodex.value))
-    localStorage.setItem('app-settings-budgetShowForecastCodex', String(budgetShowForecastCodex.value))
-    localStorage.setItem('app-settings-autoStart', String(autoStartEnabled.value))
-    localStorage.setItem('app-settings-autoConnectivityTest', String(autoConnectivityTestEnabled.value))
-    localStorage.setItem('app-settings-switchNotify', String(switchNotifyEnabled.value))
-    localStorage.setItem('app-settings-roundRobin', String(roundRobinEnabled.value))
-    localStorage.setItem('app-settings-trayPopup', String(trayPopupEnabled.value))
-    localStorage.setItem('app-settings-autoUpdate', String(autoUpdateEnabled.value))
-    localStorage.setItem('app-settings-autoSyncModels', String(autoSyncModelsEnabled.value))
-
-    window.dispatchEvent(new CustomEvent('app-settings-updated'))
-  } catch (error) {
-    console.error('failed to save app settings', error)
-    alert(t('components.general.label.settingsSaveFailed') + extractErrorMessage(error))
-  } finally {
-    saveBusy.value = false
-    if (pendingSave.value) {
-      pendingSave.value = false
-      void persistAppSettings()
-    }
-  }
+function showNotice(kind: 'success' | 'error', text: string) {
+  notice.value = { kind, text }
 }
 
-// 加载拉黑配置
-const loadBlacklistSettings = async () => {
-  blacklistLoading.value = true
+async function load() {
+  loading.value = true
   try {
-    const settings = await getBlacklistSettings()
-    blacklistThreshold.value = settings.failureThreshold
-    blacklistDuration.value = settings.durationMinutes
-
-    // 加载拉黑功能总开关
-    const enabled = await getBlacklistEnabled()
+    const [saved, blacklist, enabled, levelEnabled, syncStatus] = await Promise.all([
+      fetchAppSettings(),
+      getBlacklistSettings(),
+      getBlacklistEnabled(),
+      getLevelBlacklistEnabled(),
+      GetSyncStatus(),
+    ])
+    Object.assign(settings, saved)
+    blacklistThreshold.value = blacklist.failureThreshold
+    blacklistDuration.value = blacklist.durationMinutes
     blacklistEnabled.value = enabled
-
-    // 加载等级拉黑开关状态
-    const levelEnabled = await getLevelBlacklistEnabled()
     levelBlacklistEnabled.value = levelEnabled
+    modelSync.value = syncStatus
   } catch (error) {
-    console.error('failed to load blacklist settings', error)
-    // 使用默认值
-    blacklistEnabled.value = false
-    blacklistThreshold.value = 3
-    blacklistDuration.value = 30
-    levelBlacklistEnabled.value = false
+    showNotice('error', t('components.general.label.settingsLoadFailed') + ': ' + extractErrorMessage(error))
   } finally {
-    blacklistLoading.value = false
+    loading.value = false
   }
 }
 
-// 保存拉黑配置
-const saveBlacklistSettings = async () => {
-  if (blacklistLoading.value || blacklistSaving.value) return
-  blacklistSaving.value = true
+async function save() {
+  if (saving.value || loading.value) return false
+  saving.value = true
+  notice.value = null
+  settings.history_retention_days = Math.min(3650, Math.max(1, Math.floor(settings.history_retention_days || 30)))
+  blacklistThreshold.value = Math.min(10, Math.max(1, Math.floor(blacklistThreshold.value || 3)))
+  blacklistDuration.value = Math.min(10080, Math.max(1, Math.floor(blacklistDuration.value || 30)))
   try {
-    await updateBlacklistSettings(blacklistThreshold.value, blacklistDuration.value)
-    alert(t('components.general.blacklist.saved'))
+    const saved = await saveAppSettings({ ...settings })
+    Object.assign(settings, saved)
+    await Promise.all([
+      setBlacklistEnabled(blacklistEnabled.value),
+      setLevelBlacklistEnabled(levelBlacklistEnabled.value),
+      updateBlacklistSettings(blacklistThreshold.value, blacklistDuration.value),
+      Call.ByName(
+        'codeswitch/services.HealthCheckService.SetAutoAvailabilityPolling',
+        settings.auto_connectivity_test,
+      ),
+    ])
+    window.dispatchEvent(new CustomEvent('app-settings-updated'))
+    showNotice('success', t('components.general.label.saved'))
+    return true
   } catch (error) {
-    console.error('failed to save blacklist settings', error)
-    alert(t('components.general.blacklist.saveFailed') + (error as Error).message)
+    showNotice('error', t('components.general.label.settingsSaveFailed') + extractErrorMessage(error))
+    return false
   } finally {
-    blacklistSaving.value = false
+    saving.value = false
   }
 }
 
-// 切换拉黑功能总开关
-const toggleBlacklist = async () => {
-  if (blacklistLoading.value || blacklistSaving.value) return
-  blacklistSaving.value = true
+async function syncModels() {
+  if (syncing.value) return
+  syncing.value = true
   try {
-    await setBlacklistEnabled(blacklistEnabled.value)
+    modelSync.value = await SyncNow()
   } catch (error) {
-    console.error('failed to toggle blacklist', error)
-    // 回滚状态
-    blacklistEnabled.value = !blacklistEnabled.value
-    alert(t('components.general.blacklist.toggleFailed') + (error as Error).message)
+    showNotice('error', t('components.general.label.modelSyncFailed') + extractErrorMessage(error))
   } finally {
-    blacklistSaving.value = false
+    syncing.value = false
   }
 }
 
-// 切换等级拉黑开关
-const toggleLevelBlacklist = async () => {
-  if (blacklistLoading.value || blacklistSaving.value) return
-  blacklistSaving.value = true
+async function restorePricing() {
+  if (!window.confirm(t('components.general.label.modelRestoreConfirm'))) return
+  syncing.value = true
   try {
-    await setLevelBlacklistEnabled(levelBlacklistEnabled.value)
+    modelSync.value = await RestoreBuiltinPricing()
+    settings.auto_sync_models = false
+    showNotice('success', t('components.general.label.modelRestored'))
   } catch (error) {
-    console.error('failed to toggle level blacklist', error)
-    // 回滚状态
-    levelBlacklistEnabled.value = !levelBlacklistEnabled.value
-    alert(t('components.general.blacklist.toggleFailed') + (error as Error).message)
+    showNotice('error', t('components.general.label.modelRestoreFailed') + extractErrorMessage(error))
   } finally {
-    blacklistSaving.value = false
+    syncing.value = false
   }
 }
 
-// 加载 cc-switch 导入状态
-const loadImportStatus = async () => {
-  importLoading.value = true
+async function cleanHistory() {
+  if (cleaning.value) return
+  if (!(await save())) return
+  cleaning.value = true
   try {
-    importStatus.value = await fetchConfigImportStatus()
-    // 设置默认路径
-    if (importStatus.value?.config_path) {
-      importPath.value = importStatus.value.config_path
-    }
-  } catch (error) {
-    console.error('failed to load import status', error)
-    importStatus.value = null
-  } finally {
-    importLoading.value = false
-  }
-}
-
-// ===== 配置导出 =====
-const exporting = ref(false)
-// 含密钥导出开关：不持久化，每次导出后自动恢复脱敏默认
-const exportIncludeSecrets = ref(false)
-
-const handleExport = async () => {
-  if (exporting.value) return
-  if (exportIncludeSecrets.value) {
-    // 明文导出属敏感操作，必须逐次确认
-    if (!window.confirm(t('components.general.export.confirmSecrets'))) return
-  }
-  exporting.value = true
-  try {
-    const result = await ExportWithDialog(exportIncludeSecrets.value)
-    if (result?.canceled) return
-    alert(t('components.general.export.success', {
-      path: result?.path ?? '',
-      providers: result?.providers ?? 0,
-      mcp: result?.mcp ?? 0,
-      prompts: result?.prompts ?? 0,
-    }) + (result?.redacted
-      ? '\n' + t('components.general.export.redactedNote', { count: result?.redactedFields ?? 0 })
-      : '\n' + t('components.general.export.secretsNote')))
-  } catch (error) {
-    console.error('export failed', error)
-    alert(t('components.general.export.failed') + ': ' + (error as Error).message)
-  } finally {
-    exporting.value = false
-    exportIncludeSecrets.value = false
-  }
-}
-
-// 执行导入
-const handleImport = async () => {
-  if (importing.value || !importPath.value.trim()) return
-  importing.value = true
-  try {
-    const result = await importFromPath(importPath.value.trim())
-    // 无论结果如何，都更新状态
-    importStatus.value = result.status
-    if (result.status.config_path) {
-      importPath.value = result.status.config_path
-    }
-    if (!result.status.config_exists) {
-      alert(t('components.general.import.fileNotFound'))
-      return
-    }
-    const warnings = result.warnings ?? []
-    if (warnings.length > 0) {
-      alert(warnings.join('\n'))
-    }
-    const imported = result.imported_providers + result.imported_mcp + result.imported_prompts
-    const stageErrors = result.errors ?? []
-    if (stageErrors.length > 0) {
-      alert(t('components.general.import.partial', {
-        providers: result.imported_providers,
-        mcp: result.imported_mcp,
-        prompts: result.imported_prompts,
-        error: stageErrors.join('\n')
-      }))
-    } else if (imported > 0) {
-      alert(t('components.general.import.success', {
-        providers: result.imported_providers,
-        mcp: result.imported_mcp,
-        prompts: result.imported_prompts
-      }))
-    } else {
-      alert(t('components.general.import.nothingToImport'))
-    }
-  } catch (error) {
-    console.error('import failed', error)
-    alert(t('components.general.import.failed') + ': ' + (error as Error).message)
-  } finally {
-    importing.value = false
-  }
-}
-
-// ===== 数据维护 =====
-const vacuuming = ref(false)
-
-// 字节数格式化为 MB/GB 展示
-const formatBytesSize = (bytes: number) => {
-  const mb = bytes / 1024 / 1024
-  if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`
-  return `${mb.toFixed(1)} MB`
-}
-
-// 回收数据库磁盘空间：VACUUM 会重写整个数据库文件，期间新请求日志不入库，
-// 耗时可能达分钟级，必须经确认框明示后再执行
-const handleVacuum = async () => {
-  if (vacuuming.value) return
-  if (!window.confirm(t('components.general.maintenance.vacuumConfirm'))) return
-  vacuuming.value = true
-  try {
-    const result = (await Call.ByName('codeswitch/services.ProviderRelayService.VacuumDatabase')) as {
-      before_bytes: number
-      after_bytes: number
-      freed_bytes: number
-    }
-    alert(t('components.general.maintenance.vacuumSuccess', {
-      freed: formatBytesSize(Math.max(result?.freed_bytes ?? 0, 0)),
-      before: formatBytesSize(result?.before_bytes ?? 0),
-      after: formatBytesSize(result?.after_bytes ?? 0),
+    const result: HistoryCleanupResult = await cleanupConfiguredHistory()
+    showNotice('success', t('components.general.history.cleaned', {
+      requests: result.request_logs,
+      health: result.health_checks,
     }))
   } catch (error) {
-    console.error('vacuum database failed', error)
-    // 后端会返回"请先停止抓包录制"/"已有清理任务进行中"等具体提示，原样透出
-    alert(t('components.general.maintenance.vacuumFailed') + extractErrorMessage(error))
+    showNotice('error', t('components.general.history.cleanupFailed') + ': ' + extractErrorMessage(error))
   } finally {
-    vacuuming.value = false
+    cleaning.value = false
   }
 }
 
+let stopSyncEvent: (() => void) | undefined
 onMounted(async () => {
-  await loadAppSettings()
-
-  // 加载拉黑配置
-  await loadBlacklistSettings()
-
-  // 加载导入状态
-  await loadImportStatus()
+  await load()
+  stopSyncEvent = Events.On('model-sync:updated', async () => {
+    modelSync.value = await GetSyncStatus()
+  })
 })
+onUnmounted(() => stopSyncEvent?.())
 </script>
 
 <template>
-  <div class="main-shell general-shell">
+  <div class="main-shell settings-shell">
     <header class="app-page-header">
       <div class="app-page-title-group">
-        <h1 class="app-page-title">{{ $t('sidebar.settings') }}</h1>
+        <h1 class="app-page-title">{{ t('sidebar.settings') }}</h1>
+      </div>
+      <div class="app-page-actions">
+        <button class="primary-action" :disabled="saving || loading" @click="save">
+          {{ saving ? t('components.general.label.saving') : t('components.general.label.save') }}
+        </button>
       </div>
     </header>
 
-    <div class="general-page">
-      <section>
-        <h2 class="mac-section-title">{{ $t('components.general.title.application') }}</h2>
-        <div class="mac-panel">
-          <ListItem :label="$t('components.general.label.heatmap')">
-            <label class="mac-switch">
-              <input
-                type="checkbox"
-                :disabled="settingsLoading || saveBusy"
-                v-model="heatmapEnabled"
-                @change="persistAppSettings"
-              />
-              <span></span>
-            </label>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.homeTitle')">
-            <label class="mac-switch">
-              <input
-                type="checkbox"
-                :disabled="settingsLoading || saveBusy"
-                v-model="homeTitleVisible"
-                @change="persistAppSettings"
-              />
-              <span></span>
-            </label>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.autoStart')">
-            <label class="mac-switch">
-              <input
-                type="checkbox"
-                :disabled="settingsLoading || saveBusy"
-                v-model="autoStartEnabled"
-                @change="persistAppSettings"
-              />
-              <span></span>
-            </label>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.switchNotify')">
-            <div class="toggle-with-hint">
-              <label class="mac-switch">
-                <input
-                  type="checkbox"
-                  :disabled="settingsLoading || saveBusy"
-                  v-model="switchNotifyEnabled"
-                  @change="persistAppSettings"
-                />
-                <span></span>
-              </label>
-              <span class="hint-text">{{ $t('components.general.label.switchNotifyHint') }}</span>
-            </div>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.roundRobin')">
-            <div class="toggle-with-hint">
-              <label class="mac-switch">
-                <input
-                  type="checkbox"
-                  :disabled="settingsLoading || saveBusy"
-                  v-model="roundRobinEnabled"
-                  @change="persistAppSettings"
-                />
-                <span></span>
-              </label>
-              <span class="hint-text">{{ $t('components.general.label.roundRobinHint') }}</span>
-            </div>
-          </ListItem>
-        </div>
+    <div class="app-page-container settings-page" :aria-busy="loading">
+      <p v-if="notice" :class="['settings-notice', notice.kind]">{{ notice.text }}</p>
+
+      <section class="settings-section">
+        <h2>{{ t('components.general.title.exterior') }}</h2>
+        <ListRow :label="t('components.general.label.language')"><LanguageSwitcher /></ListRow>
+        <ListRow :label="t('components.general.label.theme')"><ThemeSetting /></ListRow>
+        <ListRow :label="t('components.general.label.heatmap')">
+          <label class="mac-switch"><input v-model="settings.show_heatmap" type="checkbox"><span /></label>
+        </ListRow>
+        <ListRow :label="t('components.general.label.homeTitle')">
+          <label class="mac-switch"><input v-model="settings.show_home_title" type="checkbox"><span /></label>
+        </ListRow>
       </section>
 
-      <section>
-        <h2 class="mac-section-title">{{ $t('components.general.title.trayPanel') }}</h2>
-        <div class="mac-panel">
-          <ListItem :label="$t('components.general.label.enableTrayPopup')">
-            <div class="toggle-with-hint">
-              <label class="mac-switch">
-                <input
-                  type="checkbox"
-                  :disabled="settingsLoading || saveBusy"
-                  v-model="trayPopupEnabled"
-                  @change="persistAppSettings"
-                />
-                <span></span>
-              </label>
-              <span class="hint-text">{{ $t('components.general.label.enableTrayPopupHint') }}</span>
-            </div>
-          </ListItem>
-          <p class="panel-title">{{ $t('components.general.label.trayPanelClaude') }}</p>
-          <ListItem :label="$t('components.general.label.budgetTotal')">
-            <div class="toggle-with-hint">
-              <div class="budget-input">
-                <input
-                  type="number"
-                  inputmode="decimal"
-                  min="0"
-                  step="0.01"
-                  :disabled="settingsLoading || saveBusy"
-                  v-model.number="budgetTotal"
-                  @change="persistAppSettings"
-                  class="mac-input budget-input-field"
-                />
-                <span class="budget-unit">USD</span>
-              </div>
-              <span class="hint-text">{{ $t('components.general.label.budgetTotalHint') }}</span>
-            </div>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.budgetUsedAdjustment')">
-            <div class="toggle-with-hint">
-              <div class="budget-input">
-                <input
-                  type="number"
-                  inputmode="decimal"
-                  step="0.01"
-                  :disabled="settingsLoading || saveBusy"
-                  v-model.number="budgetUsedAdjustment"
-                  @change="persistAppSettings"
-                  class="mac-input budget-input-field"
-                />
-                <span class="budget-unit">USD</span>
-              </div>
-              <span class="hint-text">{{ $t('components.general.label.budgetUsedAdjustmentHint') }}</span>
-            </div>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.budgetCycle')">
-            <div class="toggle-with-hint">
-              <label class="mac-switch">
-                <input
-                  type="checkbox"
-                  :disabled="settingsLoading || saveBusy"
-                  v-model="budgetCycleEnabled"
-                  @change="persistAppSettings"
-                />
-                <span></span>
-              </label>
-              <span class="hint-text">{{ $t('components.general.label.budgetCycleHint') }}</span>
-            </div>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.budgetCycleMode')">
-            <select
-              v-model="budgetCycleMode"
-              :disabled="settingsLoading || saveBusy || !budgetCycleEnabled"
-              class="mac-select budget-select"
-              @change="persistAppSettings">
-              <option value="daily">{{ $t('components.general.label.budgetCycleModeDaily') }}</option>
-              <option value="weekly">{{ $t('components.general.label.budgetCycleModeWeekly') }}</option>
-            </select>
-          </ListItem>
-          <ListItem
-            v-if="budgetCycleMode === 'weekly'"
-            :label="$t('components.general.label.budgetRefreshDay')">
-            <select
-              v-model.number="budgetRefreshDay"
-              :disabled="settingsLoading || saveBusy || !budgetCycleEnabled"
-              class="mac-select budget-select"
-              @change="persistAppSettings">
-              <option :value="1">{{ $t('components.general.label.weekdayMon') }}</option>
-              <option :value="2">{{ $t('components.general.label.weekdayTue') }}</option>
-              <option :value="3">{{ $t('components.general.label.weekdayWed') }}</option>
-              <option :value="4">{{ $t('components.general.label.weekdayThu') }}</option>
-              <option :value="5">{{ $t('components.general.label.weekdayFri') }}</option>
-              <option :value="6">{{ $t('components.general.label.weekdaySat') }}</option>
-              <option :value="0">{{ $t('components.general.label.weekdaySun') }}</option>
-            </select>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.budgetRefreshTime')">
-            <input
-              type="time"
-              :disabled="settingsLoading || saveBusy || !budgetCycleEnabled"
-              v-model="budgetRefreshTime"
-              @change="persistAppSettings"
-              class="mac-input budget-time-input"
-            />
-          </ListItem>
-          <ListItem :label="$t('components.general.label.budgetShowCountdown')">
-            <label class="mac-switch">
-              <input
-                type="checkbox"
-                :disabled="settingsLoading || saveBusy"
-                v-model="budgetShowCountdown"
-                @change="persistAppSettings"
-              />
-              <span></span>
-            </label>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.budgetShowForecast')">
-            <label class="mac-switch">
-              <input
-                type="checkbox"
-                :disabled="settingsLoading || saveBusy"
-                v-model="budgetShowForecast"
-                @change="persistAppSettings"
-              />
-              <span></span>
-            </label>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.budgetForecastMethod')">
-            <div class="toggle-with-hint">
-              <select
-                v-model="budgetForecastMethod"
-                :disabled="settingsLoading || saveBusy || !budgetShowForecast"
-                class="mac-select budget-select"
-                @change="persistAppSettings">
-                <option value="cycle">{{ $t('components.general.label.budgetForecastMethodCycle') }}</option>
-                <option value="10m">{{ $t('components.general.label.budgetForecastMethod10m') }}</option>
-                <option value="1h">{{ $t('components.general.label.budgetForecastMethod1h') }}</option>
-                <option value="yesterday">{{ $t('components.general.label.budgetForecastMethodYesterday') }}</option>
-                <option value="last24h">{{ $t('components.general.label.budgetForecastMethod24h') }}</option>
-              </select>
-              <span class="hint-text">{{ $t('components.general.label.budgetForecastMethodHint') }}</span>
-            </div>
-          </ListItem>
-        </div>
-        <div class="mac-panel">
-          <p class="panel-title">{{ $t('components.general.label.trayPanelCodex') }}</p>
-          <ListItem :label="$t('components.general.label.budgetTotal')">
-            <div class="toggle-with-hint">
-              <div class="budget-input">
-                <input
-                  type="number"
-                  inputmode="decimal"
-                  min="0"
-                  step="0.01"
-                  :disabled="settingsLoading || saveBusy"
-                  v-model.number="budgetTotalCodex"
-                  @change="persistAppSettings"
-                  class="mac-input budget-input-field"
-                />
-                <span class="budget-unit">USD</span>
-              </div>
-              <span class="hint-text">{{ $t('components.general.label.budgetTotalHint') }}</span>
-            </div>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.budgetUsedAdjustment')">
-            <div class="toggle-with-hint">
-              <div class="budget-input">
-                <input
-                  type="number"
-                  inputmode="decimal"
-                  step="0.01"
-                  :disabled="settingsLoading || saveBusy"
-                  v-model.number="budgetUsedAdjustmentCodex"
-                  @change="persistAppSettings"
-                  class="mac-input budget-input-field"
-                />
-                <span class="budget-unit">USD</span>
-              </div>
-              <span class="hint-text">{{ $t('components.general.label.budgetUsedAdjustmentHint') }}</span>
-            </div>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.budgetCycle')">
-            <div class="toggle-with-hint">
-              <label class="mac-switch">
-                <input
-                  type="checkbox"
-                  :disabled="settingsLoading || saveBusy"
-                  v-model="budgetCycleEnabledCodex"
-                  @change="persistAppSettings"
-                />
-                <span></span>
-              </label>
-              <span class="hint-text">{{ $t('components.general.label.budgetCycleHint') }}</span>
-            </div>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.budgetCycleMode')">
-            <select
-              v-model="budgetCycleModeCodex"
-              :disabled="settingsLoading || saveBusy || !budgetCycleEnabledCodex"
-              class="mac-select budget-select"
-              @change="persistAppSettings">
-              <option value="daily">{{ $t('components.general.label.budgetCycleModeDaily') }}</option>
-              <option value="weekly">{{ $t('components.general.label.budgetCycleModeWeekly') }}</option>
-            </select>
-          </ListItem>
-          <ListItem
-            v-if="budgetCycleModeCodex === 'weekly'"
-            :label="$t('components.general.label.budgetRefreshDay')">
-            <select
-              v-model.number="budgetRefreshDayCodex"
-              :disabled="settingsLoading || saveBusy || !budgetCycleEnabledCodex"
-              class="mac-select budget-select"
-              @change="persistAppSettings">
-              <option :value="1">{{ $t('components.general.label.weekdayMon') }}</option>
-              <option :value="2">{{ $t('components.general.label.weekdayTue') }}</option>
-              <option :value="3">{{ $t('components.general.label.weekdayWed') }}</option>
-              <option :value="4">{{ $t('components.general.label.weekdayThu') }}</option>
-              <option :value="5">{{ $t('components.general.label.weekdayFri') }}</option>
-              <option :value="6">{{ $t('components.general.label.weekdaySat') }}</option>
-              <option :value="0">{{ $t('components.general.label.weekdaySun') }}</option>
-            </select>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.budgetRefreshTime')">
-            <input
-              type="time"
-              :disabled="settingsLoading || saveBusy || !budgetCycleEnabledCodex"
-              v-model="budgetRefreshTimeCodex"
-              @change="persistAppSettings"
-              class="mac-input budget-time-input"
-            />
-          </ListItem>
-          <ListItem :label="$t('components.general.label.budgetShowCountdown')">
-            <label class="mac-switch">
-              <input
-                type="checkbox"
-                :disabled="settingsLoading || saveBusy"
-                v-model="budgetShowCountdownCodex"
-                @change="persistAppSettings"
-              />
-              <span></span>
-            </label>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.budgetShowForecast')">
-            <label class="mac-switch">
-              <input
-                type="checkbox"
-                :disabled="settingsLoading || saveBusy"
-                v-model="budgetShowForecastCodex"
-                @change="persistAppSettings"
-              />
-              <span></span>
-            </label>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.budgetForecastMethod')">
-            <div class="toggle-with-hint">
-              <select
-                v-model="budgetForecastMethodCodex"
-                :disabled="settingsLoading || saveBusy || !budgetShowForecastCodex"
-                class="mac-select budget-select"
-                @change="persistAppSettings">
-                <option value="cycle">{{ $t('components.general.label.budgetForecastMethodCycle') }}</option>
-                <option value="10m">{{ $t('components.general.label.budgetForecastMethod10m') }}</option>
-                <option value="1h">{{ $t('components.general.label.budgetForecastMethod1h') }}</option>
-                <option value="yesterday">{{ $t('components.general.label.budgetForecastMethodYesterday') }}</option>
-                <option value="last24h">{{ $t('components.general.label.budgetForecastMethod24h') }}</option>
-              </select>
-              <span class="hint-text">{{ $t('components.general.label.budgetForecastMethodHint') }}</span>
-            </div>
-          </ListItem>
-        </div>
+      <section class="settings-section">
+        <h2>{{ t('components.general.title.relay') }}</h2>
+        <ListRow :label="t('components.general.label.roundRobin')" :sub-label="t('components.general.label.roundRobinHint')">
+          <label class="mac-switch"><input v-model="settings.enable_round_robin" type="checkbox"><span /></label>
+        </ListRow>
+        <ListRow :label="t('components.general.label.autoConnectivityTest')" :sub-label="t('components.general.label.autoConnectivityTestHint')">
+          <label class="mac-switch"><input v-model="settings.auto_connectivity_test" type="checkbox"><span /></label>
+        </ListRow>
+        <ListRow :label="t('components.general.label.switchNotify')" :sub-label="t('components.general.label.switchNotifyHintWeb')">
+          <label class="mac-switch"><input v-model="settings.enable_switch_notify" type="checkbox"><span /></label>
+        </ListRow>
       </section>
 
-      <section>
-        <h2 class="mac-section-title">{{ $t('components.general.title.connectivity') }}</h2>
-        <div class="mac-panel">
-          <ListItem :label="$t('components.general.label.autoConnectivityTest')">
-            <div class="toggle-with-hint">
-              <label class="mac-switch">
-                <input
-                  type="checkbox"
-                  :disabled="settingsLoading || saveBusy"
-                  v-model="autoConnectivityTestEnabled"
-                  @change="persistAppSettings"
-                />
-                <span></span>
-              </label>
-              <span class="hint-text">{{ $t('components.general.label.autoConnectivityTestHint') }}</span>
-            </div>
-          </ListItem>
-        </div>
+      <section class="settings-section">
+        <h2>{{ t('components.general.title.blacklist') }}</h2>
+        <ListRow :label="t('components.general.label.enableBlacklist')" :sub-label="t('components.general.label.enableBlacklistHint')">
+          <label class="mac-switch"><input v-model="blacklistEnabled" type="checkbox"><span /></label>
+        </ListRow>
+        <ListRow :label="t('components.general.label.enableLevelBlacklist')" :sub-label="t('components.general.label.enableLevelBlacklistHint')">
+          <label class="mac-switch"><input v-model="levelBlacklistEnabled" type="checkbox"><span /></label>
+        </ListRow>
+        <ListRow :label="t('components.general.label.blacklistThreshold')">
+          <div class="number-control"><input v-model.number="blacklistThreshold" type="number" min="1" max="10"><span>{{ t('components.general.label.times') }}</span></div>
+        </ListRow>
+        <ListRow v-if="!levelBlacklistEnabled" :label="t('components.general.label.blacklistDuration')">
+          <div class="number-control"><input v-model.number="blacklistDuration" type="number" min="1" max="10080"><span>{{ t('components.general.label.minutes') }}</span></div>
+        </ListRow>
       </section>
 
-      <section>
-        <h2 class="mac-section-title">{{ $t('components.general.title.modelData') }}</h2>
-        <div class="mac-panel">
-          <ListItem :label="$t('components.general.label.autoSyncModels')">
-            <div class="toggle-with-hint">
-              <label class="mac-switch">
-                <input
-                  type="checkbox"
-                  :disabled="settingsLoading || saveBusy || modelSyncBusy"
-                  v-model="autoSyncModelsEnabled"
-                  @change="persistAppSettings"
-                />
-                <span></span>
-              </label>
-              <span class="hint-text">{{ $t('components.general.label.autoSyncModelsHint') }}</span>
-            </div>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.modelSyncStatus')">
-            <span class="info-text">{{ modelSyncStatusText }}</span>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.modelSyncDefaults')">
-            <span class="info-text">{{ modelSyncDefaultsText }}</span>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.modelSyncActions')">
-            <div class="toggle-with-hint">
-              <button
-                @click="syncModelDataNow"
-                :disabled="settingsLoading || modelSyncBusy"
-                class="primary-btn">
-                {{ modelSyncBusy ? $t('components.general.label.modelSyncRunning') : $t('components.general.label.modelSyncNow') }}
-              </button>
-              <button
-                @click="restoreBuiltinModelData"
-                :disabled="settingsLoading || saveBusy || modelSyncBusy"
-                class="action-btn">
-                {{ $t('components.general.label.modelRestoreBuiltin') }}
-              </button>
-            </div>
-          </ListItem>
-        </div>
+      <section class="settings-section">
+        <h2>{{ t('components.general.title.modelData') }}</h2>
+        <ListRow :label="t('components.general.label.autoSyncModels')" :sub-label="t('components.general.label.autoSyncModelsHint')">
+          <label class="mac-switch"><input v-model="settings.auto_sync_models" type="checkbox"><span /></label>
+        </ListRow>
+        <ListRow :label="t('components.general.label.modelSyncStatus')" :sub-label="t('components.general.label.modelSyncSummary', { time: lastSync, count: pricingCount })">
+          <div class="button-row">
+            <button class="secondary-action" :disabled="syncing" @click="syncModels">{{ syncing ? t('components.general.label.modelSyncRunning') : t('components.general.label.modelSyncNow') }}</button>
+            <button class="secondary-action danger" :disabled="syncing" @click="restorePricing">{{ t('components.general.label.modelRestoreBuiltin') }}</button>
+          </div>
+        </ListRow>
       </section>
 
-      <!-- Network & WSL Settings -->
-      <NetworkWslSettings />
-
-      <section>
-        <h2 class="mac-section-title">{{ $t('components.general.title.blacklist') }}</h2>
-        <div class="mac-panel">
-          <ListItem :label="$t('components.general.label.enableBlacklist')">
-            <div class="toggle-with-hint">
-              <label class="mac-switch">
-                <input
-                  type="checkbox"
-                  :disabled="blacklistLoading || blacklistSaving"
-                  v-model="blacklistEnabled"
-                  @change="toggleBlacklist"
-                />
-                <span></span>
-              </label>
-              <span class="hint-text">{{ $t('components.general.label.enableBlacklistHint') }}</span>
-            </div>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.enableLevelBlacklist')">
-            <div class="toggle-with-hint">
-              <label class="mac-switch">
-                <input
-                  type="checkbox"
-                  :disabled="blacklistLoading || blacklistSaving"
-                  v-model="levelBlacklistEnabled"
-                  @change="toggleLevelBlacklist"
-                />
-                <span></span>
-              </label>
-              <span class="hint-text">{{ $t('components.general.label.enableLevelBlacklistHint') }}</span>
-            </div>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.blacklistThreshold')">
-            <select
-              v-model.number="blacklistThreshold"
-              :disabled="blacklistLoading || blacklistSaving"
-              class="mac-select">
-              <option :value="1">1 {{ $t('components.general.label.times') }}</option>
-              <option :value="2">2 {{ $t('components.general.label.times') }}</option>
-              <option :value="3">3 {{ $t('components.general.label.times') }}</option>
-              <option :value="4">4 {{ $t('components.general.label.times') }}</option>
-              <option :value="5">5 {{ $t('components.general.label.times') }}</option>
-              <option :value="6">6 {{ $t('components.general.label.times') }}</option>
-              <option :value="7">7 {{ $t('components.general.label.times') }}</option>
-              <option :value="8">8 {{ $t('components.general.label.times') }}</option>
-              <option :value="9">9 {{ $t('components.general.label.times') }}</option>
-            </select>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.blacklistDuration')">
-            <select
-              v-model.number="blacklistDuration"
-              :disabled="blacklistLoading || blacklistSaving"
-              class="mac-select">
-              <option :value="5">5 {{ $t('components.general.label.minutes') }}</option>
-              <option :value="15">15 {{ $t('components.general.label.minutes') }}</option>
-              <option :value="30">30 {{ $t('components.general.label.minutes') }}</option>
-              <option :value="60">60 {{ $t('components.general.label.minutes') }}</option>
-            </select>
-          </ListItem>
-          <ListItem :label="$t('components.general.label.saveBlacklist')">
-            <button
-              @click="saveBlacklistSettings"
-              :disabled="blacklistLoading || blacklistSaving"
-              class="primary-btn">
-              {{ blacklistSaving ? $t('components.general.label.saving') : $t('components.general.label.save') }}
-            </button>
-          </ListItem>
-        </div>
-      </section>
-
-      <section>
-        <h2 class="mac-section-title">{{ $t('components.general.title.dataImport') }}</h2>
-        <div class="mac-panel">
-          <ListItem :label="$t('components.general.import.configPath')">
-            <input
-              type="text"
-              v-model="importPath"
-              :placeholder="$t('components.general.import.pathPlaceholder')"
-              class="mac-input import-path-input"
-            />
-          </ListItem>
-          <ListItem :label="$t('components.general.import.status')">
-            <span class="info-text" v-if="importLoading">
-              {{ $t('components.general.import.loading') }}
-            </span>
-            <span class="info-text" v-else-if="importStatus?.config_exists">
-              {{ $t('components.general.import.configFound') }}
-              <span v-if="importStatus.pending_provider_count > 0 || importStatus.pending_mcp_count > 0 || importStatus.pending_prompt_count > 0">
-                ({{ $t('components.general.import.pendingCount', {
-                  providers: importStatus.pending_provider_count,
-                  mcp: importStatus.pending_mcp_count,
-                  prompts: importStatus.pending_prompt_count
-                }) }})
-              </span>
-            </span>
-            <span class="info-text warning" v-else-if="importStatus">
-              {{ $t('components.general.import.configNotFound') }}
-            </span>
-          </ListItem>
-          <ListItem :label="$t('components.general.import.action')">
-            <button
-              @click="handleImport"
-              :disabled="importing || !importPath.trim()"
-              class="action-btn">
-              {{ importing ? $t('components.general.import.importing') : $t('components.general.import.importBtn') }}
-            </button>
-          </ListItem>
-        </div>
-      </section>
-
-      <section>
-        <h2 class="mac-section-title">{{ $t('components.general.export.title') }}</h2>
-        <div class="mac-panel">
-          <ListItem :label="$t('components.general.export.includeSecrets')">
-            <div class="export-secrets-row">
-              <label class="mac-switch">
-                <input type="checkbox" v-model="exportIncludeSecrets" />
-                <span></span>
-              </label>
-              <span class="info-text warning" v-if="exportIncludeSecrets">
-                {{ $t('components.general.export.secretsWarning') }}
-              </span>
-              <span class="info-text" v-else>
-                {{ $t('components.general.export.redactedHint') }}
-              </span>
-            </div>
-          </ListItem>
-          <ListItem :label="$t('components.general.export.action')">
-            <button
-              @click="handleExport"
-              :disabled="exporting"
-              class="action-btn">
-              {{ exporting ? $t('components.general.export.exporting') : $t('components.general.export.exportBtn') }}
-            </button>
-          </ListItem>
-        </div>
-      </section>
-
-      <section>
-        <h2 class="mac-section-title">{{ $t('components.general.maintenance.title') }}</h2>
-        <div class="mac-panel">
-          <ListItem :label="$t('components.general.maintenance.vacuumLabel')">
-            <div class="toggle-with-hint">
-              <button
-                @click="handleVacuum"
-                :disabled="vacuuming"
-                class="action-btn">
-                {{ vacuuming ? $t('components.general.maintenance.vacuumRunning') : $t('components.general.maintenance.vacuumBtn') }}
-              </button>
-              <span class="hint-text">{{ $t('components.general.maintenance.vacuumHint') }}</span>
-            </div>
-          </ListItem>
-        </div>
-      </section>
-
-      <section>
-        <h2 class="mac-section-title">{{ $t('components.general.title.exterior') }}</h2>
-        <div class="mac-panel">
-          <ListItem :label="$t('components.general.label.language')">
-            <LanguageSwitcher />
-          </ListItem>
-          <ListItem :label="$t('components.general.label.theme')">
-            <ThemeSetting />
-          </ListItem>
+      <section class="settings-section">
+        <h2>{{ t('components.general.title.history') }}</h2>
+        <ListRow :label="t('components.general.history.retention')" :sub-label="t('components.general.history.retentionHint')">
+          <div class="number-control"><input v-model.number="settings.history_retention_days" type="number" min="1" max="3650"><span>{{ t('components.general.history.days') }}</span></div>
+        </ListRow>
+        <div class="section-actions">
+          <button class="secondary-action danger" :disabled="cleaning || saving" @click="cleanHistory">
+            {{ cleaning ? t('components.general.history.cleaning') : t('components.general.history.cleanNow') }}
+          </button>
         </div>
       </section>
     </div>
@@ -1150,101 +254,89 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.export-secrets-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  max-width: 420px;
+.settings-page {
+  width: min(920px, 100%);
+  min-width: 0;
+  margin: 0 auto;
+  padding-bottom: 48px;
 }
 
-.mac-input {
-  padding: 6px 12px;
+.settings-section {
+  border-bottom: 1px solid var(--mac-border);
+  padding: 22px 0;
+}
+
+.settings-section h2 {
+  margin: 0 18px 8px;
+  color: var(--mac-text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.settings-notice {
+  margin: 14px 18px 0;
+  padding: 10px 12px;
+  border-left: 3px solid currentColor;
+  font-size: 0.86rem;
+}
+
+.settings-notice.success { color: #15803d; background: rgba(34, 197, 94, 0.08); }
+.settings-notice.error { color: #dc2626; background: rgba(239, 68, 68, 0.08); }
+
+.primary-action,
+.secondary-action {
+  min-height: 34px;
   border: 1px solid var(--mac-border);
   border-radius: 6px;
-  background: var(--mac-surface);
+  padding: 0 14px;
   color: var(--mac-text);
-  font-size: 13px;
-  font-family: monospace;
-  min-width: 160px;
-  transition: border-color 0.2s;
+  background: var(--mac-card);
+  cursor: pointer;
 }
 
-.mac-input:focus {
-  outline: none;
-  border-color: var(--mac-accent);
+.primary-action { color: #fff; border-color: #0a84ff; background: #0a84ff; }
+.secondary-action.danger { color: #dc2626; }
+.primary-action:disabled,
+.secondary-action:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.button-row,
+.number-control,
+.section-actions { display: flex; align-items: center; gap: 8px; }
+.section-actions { justify-content: flex-end; padding: 8px 18px 0; }
+
+.number-control input {
+  width: 88px;
+  min-height: 34px;
+  border: 1px solid var(--mac-border);
+  border-radius: 6px;
+  padding: 0 9px;
+  color: var(--mac-text);
+  background: var(--mac-card);
 }
 
-.panel-title {
-  margin: 0;
-  padding: 12px 18px 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--mac-text-secondary);
-  letter-spacing: 0.02em;
-  border-bottom: 1px solid var(--mac-divider);
-}
+.number-control span { color: var(--mac-text-secondary); font-size: 0.82rem; }
 
-.mac-panel + .mac-panel {
-  margin-top: 12px;
-}
+@media (max-width: 680px) {
+  .button-row {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
 
-.toggle-with-hint {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
-}
+  .button-row .secondary-action {
+    width: 100%;
+  }
 
-.hint-text {
-  font-size: 11px;
-  color: var(--mac-text-secondary);
-  line-height: 1.4;
-  max-width: 320px;
-  text-align: right;
-  white-space: nowrap;
-}
+  .settings-section h2,
+  .settings-notice {
+    margin-right: 14px;
+    margin-left: 14px;
+  }
 
-:global(.dark) .hint-text {
-  color: rgba(255, 255, 255, 0.5);
-}
-
-.budget-input {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.budget-input-field {
-  width: 140px;
-}
-
-.budget-time-input {
-  width: 140px;
-}
-
-.budget-select {
-  width: 160px;
-}
-
-.budget-unit {
-  font-size: 12px;
-  color: var(--mac-text-secondary);
-}
-
-.import-path-input {
-  width: 280px;
-  font-size: 12px;
-}
-
-.info-text.warning {
-  color: var(--mac-text-warning, #e67e22);
-}
-
-:global(.dark) .info-text.warning {
-  color: #f39c12;
-}
-
-:global(.dark) .mac-input {
-  background: var(--mac-surface-strong);
+  .section-actions {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
 }
 </style>

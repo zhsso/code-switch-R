@@ -1,7 +1,7 @@
 <template>
   <Transition name="modal-fade">
     <div v-if="open" class="modal-backdrop" role="presentation">
-      <!-- 遮罩层：仅负责视觉，不接收点击（避免 WebView 命中测试/层合成导致误触关闭） -->
+      <!-- 遮罩层只负责视觉，不接收点击，避免层合成导致误触关闭。 -->
       <div class="modal-overlay-noevent" aria-hidden="true"></div>
 
       <!-- 点击空白处关闭：只有点到 wrapper 自身时才触发 -->

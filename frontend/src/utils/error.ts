@@ -1,6 +1,6 @@
 /**
  * 从未知类型中尽量提取可读错误信息
- * 兼容 Wails 可能返回的错误对象，避免显示 [object Object]
+ * 兼容 RPC 可能返回的错误对象，避免显示 [object Object]
  */
 export function extractErrorMessage(err: unknown, fallback = '未知错误'): string {
   if (err == null) return fallback

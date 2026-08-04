@@ -1,0 +1,16 @@
+.git
+.github
+.task
+bin
+build
+frontend/bindings
+frontend/dist
+frontend/node_modules
+node_modules
+*.db
+*.sqlite
+*.sqlite3
+*.log
+test-results-*.json
+Dockerfile*
+compose*.yaml

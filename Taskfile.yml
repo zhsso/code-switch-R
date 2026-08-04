@@ -1,34 +1,35 @@
 version: '3'
 
-includes:
-  common: ./build/Taskfile.yml
-  windows: ./build/windows/Taskfile.yml
-  darwin: ./build/darwin/Taskfile.yml
-  linux: ./build/linux/Taskfile.yml
-
-vars:
-  APP_NAME: "CodeSwitch"
-  BIN_DIR: "bin"
-  VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
-
 tasks:
   build:
-    summary: Builds the application
+    desc: Build the local linux/amd64 Docker image
     cmds:
-      - task: "{{OS}}:build"
+      - docker compose build
 
-  package:
-    summary: Packages a production build of the application
+  up:
+    desc: Build and start Codex++ with the persistent named volume
     cmds:
-      - task: "{{OS}}:package"
+      - docker compose up --build -d
 
-  run:
-    summary: Runs the application
+  down:
+    desc: Stop Codex++ without deleting its data volume
     cmds:
-      - task: "{{OS}}:run"
+      - docker compose down
 
-  dev:
-    summary: Runs the application in development mode
+  logs:
+    desc: Follow container logs
     cmds:
-      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+      - docker compose logs -f codeswitch
 
+  status:
+    desc: Show container and health status
+    cmds:
+      - docker compose ps
+
+  test:
+    desc: Run source checks used by the Docker build
+    cmds:
+      - go test ./...
+      - go vet ./...
+      - cd frontend && npm ci && npm run build
+      - docker compose config --quiet

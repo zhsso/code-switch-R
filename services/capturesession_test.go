@@ -1,52 +1,16 @@
 package services
 
 import (
-	"encoding/json"
-	"os"
 	"testing"
 )
-
-// verifyCaptureExportFile 校验导出文件是完整合法的 JSON 封套
-func verifyCaptureExportFile(t *testing.T, path string, sessionID int64, wantCount int) {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("读导出文件失败: %v", err)
-	}
-	var envelope struct {
-		Session  CaptureSessionInfo   `json:"session"`
-		Requests []captureExportEntry `json:"requests"`
-		Meta     struct {
-			ExportedAt string `json:"exported_at"`
-			Count      int    `json:"count"`
-		} `json:"meta"`
-	}
-	if err := json.Unmarshal(data, &envelope); err != nil {
-		t.Fatalf("导出文件不是合法 JSON: %v", err)
-	}
-	if envelope.Session.ID != sessionID {
-		t.Errorf("session.id 应为 %d, 实际 %d", sessionID, envelope.Session.ID)
-	}
-	if len(envelope.Requests) != wantCount || envelope.Meta.Count != wantCount {
-		t.Errorf("requests=%d meta.count=%d, 期望 %d", len(envelope.Requests), envelope.Meta.Count, wantCount)
-	}
-	if envelope.Meta.ExportedAt == "" {
-		t.Error("缺少 exported_at")
-	}
-	for _, r := range envelope.Requests {
-		if r.RequestBody == "" {
-			t.Errorf("导出行缺正文: %+v", r)
-		}
-	}
-}
 
 // newCaptureTestRelay 构造仅用于会话测试的 relay（不启动 HTTP 服务）
 func newCaptureTestRelay(t *testing.T) *ProviderRelayService {
 	t.Helper()
-	appSettings := NewAppSettingsService(NewAutoStartService())
+	appSettings := NewAppSettingsService()
 	notificationService := NewNotificationService(appSettings)
 	blacklistService := NewBlacklistService(NewSettingsService(), notificationService)
-	return NewProviderRelayService(NewProviderService(), NewGeminiService("127.0.0.1:18100", nil),
+	return NewProviderRelayService(NewProviderService(),
 		blacklistService, notificationService, appSettings, "")
 }
 
@@ -96,7 +60,7 @@ func TestCaptureSessionTaggingAndDelete(t *testing.T) {
 
 	// 模拟一条带抓包内容的落库
 	requestLog := &ReqeustLog{
-		Platform: "claude", Provider: "p", Model: "m",
+		Platform: "codex", Provider: "p", Model: "m",
 		RequestHeaders: `{"a":"b"}`, RequestBody: `{"x":1}`, BodyBytes: 7,
 		CaptureSessionID: first, captureGen: relay.captureClearGen.Load(),
 	}
@@ -148,7 +112,7 @@ func TestCaptureSessionTaggingAndDelete(t *testing.T) {
 
 	// 墓碑：属于已删除会话的在途行落库时自我置空
 	late := &ReqeustLog{
-		Platform: "claude", Provider: "p", Model: "m",
+		Platform: "codex", Provider: "p", Model: "m",
 		RequestHeaders: `{"late":"1"}`, RequestBody: `{"late":1}`, BodyBytes: 9,
 		CaptureSessionID: first, captureGen: relay.captureClearGen.Load(),
 	}
@@ -167,7 +131,7 @@ func TestCaptureClearAllRotatesActiveSession(t *testing.T) {
 
 	// 预置旧版抓包行（capture_session_id=0）
 	if _, err := db.Exec(`INSERT INTO request_log (platform, provider, model, request_headers, request_body, body_bytes)
-		VALUES ('claude', 'legacy', 'm', '{"h":"1"}', '{"b":1}', 7)`); err != nil {
+		VALUES ('codex', 'legacy', 'm', '{"h":"1"}', '{"b":1}', 7)`); err != nil {
 		t.Fatalf("预置旧数据失败: %v", err)
 	}
 
@@ -223,7 +187,7 @@ func TestCaptureStaleSessionRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO request_log (platform, provider, model, request_headers, capture_session_id, created_at)
-		VALUES ('claude', 'p', 'm', '{"h":"1"}', ?, '2026-08-01 00:10:00')`, staleID); err != nil {
+		VALUES ('codex', 'p', 'm', '{"h":"1"}', ?, '2026-08-01 00:10:00')`, staleID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -257,7 +221,7 @@ func TestCaptureSessionLogCursors(t *testing.T) {
 	sid := relay.captureSessionID.Load()
 	for i := 0; i < 5; i++ {
 		if _, err := db.Exec(`INSERT INTO request_log (platform, provider, model, request_headers, capture_session_id)
-			VALUES ('claude', 'p', 'm', '{"h":"1"}', ?)`, sid); err != nil {
+			VALUES ('codex', 'p', 'm', '{"h":"1"}', ?)`, sid); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -286,28 +250,163 @@ func TestCaptureSessionLogCursors(t *testing.T) {
 	}
 }
 
-// 导出：流式写文件、封套结构完整（不弹对话框，直接测底层流式函数）
-func TestCaptureSessionExportStream(t *testing.T) {
+func TestCaptureSessionsExposeCodexRowsOnly(t *testing.T) {
 	db := setupCaptureDBEnv(t)
 	relay := newCaptureTestRelay(t)
-	if err := relay.SetRequestCapture(true); err != nil {
-		t.Fatal(err)
+
+	newSession := func(start string) int64 {
+		t.Helper()
+		result, err := db.Exec(`INSERT INTO capture_session (started_at, ended_at) VALUES (?, ?)`, start, start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := result.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
 	}
-	sid := relay.captureSessionID.Load()
-	for i := 0; i < 3; i++ {
-		if _, err := db.Exec(`INSERT INTO request_log (platform, provider, model, http_code, request_url, request_headers, request_body, body_bytes, response_headers, response_body, response_bytes, capture_session_id)
-			VALUES ('claude', 'p', 'm', 200, 'https://up/v1', '{"h":["v"]}', '{"body":true}', 13, '{"Content-Type":["application/json"]}', '{"ok":true}', 11, ?)`, sid); err != nil {
+	mixedID := newSession("2026-08-01 00:00:00")
+	removedOnlyID := newSession("2026-08-01 01:00:00")
+	emptyID := newSession("2026-08-01 02:00:00")
+
+	rows := []struct {
+		platform string
+		body     string
+		session  int64
+	}{
+		{CodexPlatform, "codex-mixed", mixedID},
+		{"claude", "removed-mixed", mixedID},
+		{"claude", "removed-only", removedOnlyID},
+		{CodexPlatform, "codex-legacy", 0},
+		{"claude", "removed-legacy", 0},
+	}
+	for _, row := range rows {
+		if _, err := db.Exec(`INSERT INTO request_log
+			(platform, provider, model, request_body, capture_session_id)
+			VALUES (?, 'p', 'm', ?, ?)`, row.platform, row.body, row.session); err != nil {
 			t.Fatal(err)
 		}
 	}
-	dest := t.TempDir() + "/export.json"
-	opts := CaptureExportOptions{URL: true, RequestHeaders: true, RequestBody: true, ResponseHeaders: true, ResponseBody: true}
-	count, err := relay.streamCaptureExport(db, sid, opts, dest)
+
+	sessions, err := relay.ListCaptureSessions()
 	if err != nil {
-		t.Fatalf("导出失败: %v", err)
+		t.Fatal(err)
 	}
-	if count != 3 {
-		t.Errorf("应导出 3 条, 实际 %d", count)
+	counts := make(map[int64]int64, len(sessions))
+	for _, session := range sessions {
+		counts[session.ID] = session.RequestCount
 	}
-	verifyCaptureExportFile(t, dest, sid, 3)
+	if counts[mixedID] != 1 || counts[emptyID] != 0 || counts[0] != 1 {
+		t.Fatalf("Codex 会话计数异常: %+v", sessions)
+	}
+	if _, ok := counts[removedOnlyID]; ok {
+		t.Fatalf("仅含旧平台数据的会话不应展示: %+v", sessions)
+	}
+
+	total, err := relay.GetCaptureTotalBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBytes := int64(len("codex-mixed") + len("codex-legacy"))
+	if total != wantBytes {
+		t.Fatalf("Codex 抓包字节 = %d, want %d", total, wantBytes)
+	}
+
+	logs, err := relay.GetCaptureSessionLogs(mixedID, 0, 0, 10)
+	if err != nil || len(logs) != 1 || logs[0].Platform != CodexPlatform {
+		t.Fatalf("混合会话日志 = %+v, err=%v", logs, err)
+	}
+	legacy, err := relay.GetCaptureSessionLogs(0, 0, 0, 10)
+	if err != nil || len(legacy) != 1 || legacy[0].Platform != CodexPlatform {
+		t.Fatalf("旧版伪会话日志 = %+v, err=%v", legacy, err)
+	}
+
+}
+
+func TestCaptureCleanupPreservesRemovedPlatformRows(t *testing.T) {
+	db := setupCaptureDBEnv(t)
+	relay := newCaptureTestRelay(t)
+
+	newSession := func(start string) int64 {
+		t.Helper()
+		result, err := db.Exec(`INSERT INTO capture_session (started_at, ended_at) VALUES (?, ?)`, start, start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := result.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	deleteMixedID := newSession("2026-08-02 00:00:00")
+	removedOnlyID := newSession("2026-08-02 01:00:00")
+	clearMixedID := newSession("2026-08-02 02:00:00")
+
+	rows := []struct {
+		platform string
+		body     string
+		session  int64
+	}{
+		{CodexPlatform, "codex-delete", deleteMixedID},
+		{"claude", "removed-delete", deleteMixedID},
+		{"claude", "removed-only", removedOnlyID},
+		{CodexPlatform, "codex-clear", clearMixedID},
+		{"claude", "removed-clear", clearMixedID},
+		{CodexPlatform, "codex-legacy", 0},
+		{"claude", "removed-legacy", 0},
+	}
+	for _, row := range rows {
+		if _, err := db.Exec(`INSERT INTO request_log
+			(platform, provider, model, request_body, capture_session_id)
+			VALUES (?, 'p', 'm', ?, ?)`, row.platform, row.body, row.session); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	affected, err := relay.DeleteCaptureSession(deleteMixedID)
+	if err != nil || affected != 1 {
+		t.Fatalf("删除混合会话 affected=%d err=%v, want 1 条 Codex", affected, err)
+	}
+	var removedBody string
+	var removedSession int64
+	if err := db.QueryRow(`SELECT request_body, capture_session_id FROM request_log
+		WHERE platform = 'claude' AND request_body = 'removed-delete'`).Scan(&removedBody, &removedSession); err != nil {
+		t.Fatal(err)
+	}
+	if removedBody != "removed-delete" || removedSession != deleteMixedID {
+		t.Fatalf("删除会话改写了旧平台行: body=%q session=%d", removedBody, removedSession)
+	}
+	var metadataCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM capture_session WHERE id = ?`, deleteMixedID).Scan(&metadataCount); err != nil {
+		t.Fatal(err)
+	}
+	if metadataCount != 1 {
+		t.Fatal("仍被旧平台行引用的会话元数据不应删除")
+	}
+
+	affected, err = relay.ClearCapturedRequests()
+	if err != nil || affected != 2 {
+		t.Fatalf("清空全部 affected=%d err=%v, want 2 条 Codex", affected, err)
+	}
+	var removedPayloads, codexPayloads int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM request_log WHERE platform = 'claude' AND request_body != ''`).Scan(&removedPayloads); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM request_log WHERE platform = 'codex' AND request_body != ''`).Scan(&codexPayloads); err != nil {
+		t.Fatal(err)
+	}
+	if removedPayloads != 4 || codexPayloads != 0 {
+		t.Fatalf("清空后旧平台 payload=%d, Codex payload=%d", removedPayloads, codexPayloads)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM capture_session`).Scan(&metadataCount); err != nil {
+		t.Fatal(err)
+	}
+	if metadataCount != 3 {
+		t.Fatalf("旧平台仍引用的会话元数据应保留 3 条,实际 %d", metadataCount)
+	}
+	if sessions, err := relay.ListCaptureSessions(); err != nil || len(sessions) != 0 {
+		t.Fatalf("清空 Codex 后旧平台会话应全部隐藏: %+v err=%v", sessions, err)
+	}
 }

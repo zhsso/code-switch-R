@@ -81,15 +81,10 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { path: '/', icon: 'home', labelKey: 'sidebar.home' },
-  { path: '/prompts', icon: 'file-text', labelKey: 'sidebar.prompts', isNew: true },
-  { path: '/mcp', icon: 'plug', labelKey: 'sidebar.mcp' },
-  { path: '/skill', icon: 'tool', labelKey: 'sidebar.skill' },
   { path: '/availability', icon: 'activity', labelKey: 'sidebar.availability', isNew: true },
   { path: '/speedtest', icon: 'zap', labelKey: 'sidebar.speedtest', isNew: true },
-  { path: '/env', icon: 'search', labelKey: 'sidebar.env', isNew: true },
   { path: '/logs', icon: 'bar-chart', labelKey: 'sidebar.logs' },
   { path: '/capture', icon: 'search', labelKey: 'sidebar.capture', isNew: true },
-  { path: '/console', icon: 'terminal', labelKey: 'sidebar.console' },
   { path: '/settings', icon: 'settings', labelKey: 'sidebar.settings' },
 ]
 
@@ -103,7 +98,7 @@ const navigate = (path: string) => {
 <template>
   <nav class="mac-sidebar" :class="{ collapsed: isCollapsed }">
     <div class="sidebar-header">
-      <span class="sidebar-title" v-if="!isCollapsed">Code Switch R</span>
+      <span class="sidebar-title" v-if="!isCollapsed">Codex++</span>
       <button class="collapse-btn" @click="toggleCollapse" :title="isCollapsed ? 'Expand' : 'Collapse'">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline v-if="isCollapsed" points="9 18 15 12 9 6"></polyline>
@@ -118,7 +113,8 @@ const navigate = (path: string) => {
         :key="item.path"
         class="nav-item"
         :class="{ active: currentPath === item.path }"
-        :title="isCollapsed ? t(item.labelKey) : ''"
+        :title="t(item.labelKey)"
+        :aria-label="t(item.labelKey)"
         @click="navigate(item.path)"
       >
         <!-- Home -->
@@ -134,19 +130,6 @@ const navigate = (path: string) => {
           <line x1="16" y1="13" x2="8" y2="13"></line>
           <line x1="16" y1="17" x2="8" y2="17"></line>
           <polyline points="10 9 9 9 8 9"></polyline>
-        </svg>
-
-        <!-- Plug -->
-        <svg v-else-if="item.icon === 'plug'" class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 22v-5"></path>
-          <path d="M9 8V2"></path>
-          <path d="M15 8V2"></path>
-          <path d="M18 8v5a6 6 0 0 1-12 0V8h12z"></path>
-        </svg>
-
-        <!-- Tool -->
-        <svg v-else-if="item.icon === 'tool'" class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
         </svg>
 
         <!-- Activity -->
@@ -170,12 +153,6 @@ const navigate = (path: string) => {
           <line x1="12" y1="20" x2="12" y2="10"></line>
           <line x1="18" y1="20" x2="18" y2="4"></line>
           <line x1="6" y1="20" x2="6" y2="16"></line>
-        </svg>
-
-        <!-- Terminal -->
-        <svg v-else-if="item.icon === 'terminal'" class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="4 17 10 11 4 5"></polyline>
-          <line x1="12" y1="19" x2="20" y2="19"></line>
         </svg>
 
         <!-- Settings -->
@@ -229,7 +206,7 @@ const navigate = (path: string) => {
 }
 
 .sidebar-header {
-  /* macOS 红绿灯占位高度走全局变量，其余平台为常规留白 */
+  /* 页头留白由全局变量统一控制 */
   padding: var(--page-top-pad) 16px 16px;
   border-bottom: 1px solid var(--mac-border);
   display: grid;
@@ -237,13 +214,6 @@ const navigate = (path: string) => {
   align-items: center;
   justify-items: center;
   gap: 8px;
-  /* 拖拽区域 */
-  -webkit-app-region: drag;
-}
-
-.sidebar-header * {
-  /* 按钮等元素需要可点击 */
-  -webkit-app-region: no-drag;
 }
 
 .mac-sidebar.collapsed .sidebar-header {
@@ -256,7 +226,7 @@ const navigate = (path: string) => {
   font-size: 1.1rem;
   font-weight: 700;
   color: var(--mac-text);
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   white-space: nowrap;
   overflow: hidden;
   grid-column: 2;
@@ -441,5 +411,49 @@ html.dark .theme-toggle-switch:hover {
 .theme-toggle-switch svg {
   width: 16px;
   height: 16px;
+}
+
+@media (max-width: 700px) {
+  .mac-sidebar,
+  .mac-sidebar.collapsed {
+    width: 100%;
+    min-width: 0;
+    height: 56px;
+    min-height: 56px;
+    border-top: 1px solid var(--mac-border);
+    border-right: none;
+    flex-direction: row;
+  }
+
+  .sidebar-header,
+  .sidebar-footer {
+    display: none;
+  }
+
+  .nav-list,
+  .mac-sidebar.collapsed .nav-list {
+    flex-direction: row;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .nav-item,
+  .mac-sidebar.collapsed .nav-item {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 40px;
+    height: 44px;
+    margin: 0;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .nav-label,
+  .new-badge {
+    display: none;
+  }
 }
 </style>

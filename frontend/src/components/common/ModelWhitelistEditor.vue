@@ -68,13 +68,13 @@
       </p>
       <ul class="help-list">
         <li>
-          <code>claude-sonnet-4</code> - {{ $t('components.provider.modelWhitelist.examples.exact') }}
+          <code>gpt-5.6</code> - {{ $t('components.provider.modelWhitelist.examples.exact') }}
         </li>
         <li>
-          <code>claude-*</code> - {{ $t('components.provider.modelWhitelist.examples.prefix') }}
+          <code>gpt-*</code> - {{ $t('components.provider.modelWhitelist.examples.prefix') }}
         </li>
         <li>
-          <code>anthropic/claude-*</code> - {{ $t('components.provider.modelWhitelist.examples.vendor') }}
+          <code>openai/gpt-*</code> - {{ $t('components.provider.modelWhitelist.examples.vendor') }}
         </li>
       </ul>
     </div>

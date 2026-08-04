@@ -40,15 +40,6 @@
     <form class="logs-filter-row" @submit.prevent="applyFilters">
       <div class="filter-fields">
         <label class="filter-field">
-          <span>{{ t('components.logs.filters.platform') }}</span>
-          <select v-model="filters.platform" class="mac-select">
-            <option value="">{{ t('components.logs.filters.allPlatforms') }}</option>
-            <option value="claude">Claude</option>
-            <option value="codex">Codex</option>
-            <option value="gemini">Gemini</option>
-          </select>
-        </label>
-        <label class="filter-field">
           <span>{{ t('components.logs.filters.provider') }}</span>
           <select v-model="filters.provider" class="mac-select">
             <option value="">{{ t('components.logs.filters.allProviders') }}</option>
@@ -70,7 +61,6 @@
         <thead>
           <tr>
             <th class="col-time">{{ t('components.logs.table.time') }}</th>
-            <th class="col-platform">{{ t('components.logs.table.platform') }}</th>
             <th class="col-provider">{{ t('components.logs.table.provider') }}</th>
             <th class="col-model">{{ t('components.logs.table.model') }}</th>
             <th class="col-http">{{ t('components.logs.table.httpCode') }}</th>
@@ -84,7 +74,6 @@
         <tbody>
           <tr v-for="item in pagedLogs" :key="item.id">
             <td>{{ formatTime(item.created_at) }}</td>
-            <td>{{ item.platform || '—' }}</td>
             <td>{{ item.provider || '—' }}</td>
             <td>{{ item.model || '—' }}</td>
             <td :class="['code', httpCodeClass(item.http_code)]">{{ item.http_code }}</td>
@@ -197,7 +186,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, onMounted, watch, onUnmounted, onActivated, onDeactivated } from 'vue'
+import { computed, reactive, ref, onMounted, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseButton from '../common/BaseButton.vue'
 import BaseModal from '../common/BaseModal.vue'
@@ -226,7 +215,6 @@ import {
 } from 'chart.js'
 import type { ChartOptions } from 'chart.js'
 import { Line } from 'vue-chartjs'
-import { createPoller } from '../../composables/usePoller'
 
 Chart.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend)
 
@@ -235,7 +223,7 @@ const { t } = useI18n()
 const logs = ref<RequestLog[]>([])
 const stats = ref<LogStats | null>(null)
 const loading = ref(false)
-const filters = reactive<{ platform: LogPlatform | ''; provider: string }>({ platform: '', provider: '' })
+const filters = reactive<{ provider: string }>({ provider: '' })
 const page = ref(1)
 const PAGE_SIZE = 15
 const providerOptions = ref<string[]>([])
@@ -306,7 +294,7 @@ const openCostDetailModal = async () => {
   costDetailModal.data = []
 
   try {
-    const stats = await fetchProviderDailyStats(filters.platform)
+    const stats = await fetchProviderDailyStats('codex')
     // 按金额降序排序，过滤掉金额为 0 的
     costDetailModal.data = (stats ?? [])
       .filter(item => item.cost_total > 0)
@@ -481,34 +469,29 @@ const formatSeriesLabel = (value?: string) => {
 
 const REFRESH_INTERVAL = 30
 const countdown = ref(REFRESH_INTERVAL)
-// 倒计时触发的自动刷新单飞：上一轮仍在加载时跳过本轮，不排队
-let autoRefreshing = false
+let timer: number | undefined
 
 const resetTimer = () => {
   countdown.value = REFRESH_INTERVAL
 }
 
-// 每秒走一格倒计时，归零时自动刷新；仅页面激活期间运行（keep-alive 下切走即停）
-const countdownPoller = createPoller(() => {
-  if (countdown.value <= 1) {
-    countdown.value = REFRESH_INTERVAL
-    if (!autoRefreshing) {
-      autoRefreshing = true
-      void loadDashboard().finally(() => {
-        autoRefreshing = false
-      })
-    }
-  } else {
-    countdown.value -= 1
-  }
-}, 1000)
-
 const startCountdown = () => {
-  countdownPoller.start()
+  stopCountdown()
+  timer = window.setInterval(() => {
+    if (countdown.value <= 1) {
+      countdown.value = REFRESH_INTERVAL
+      void loadDashboard()
+    } else {
+      countdown.value -= 1
+    }
+  }, 1000)
 }
 
 const stopCountdown = () => {
-  countdownPoller.stop()
+  if (timer) {
+    clearInterval(timer)
+    timer = undefined
+  }
 }
 
 const normalizeProviderName = (value: string) => value.trim()
@@ -531,7 +514,7 @@ const loadLogs = async () => {
   loading.value = true
   try {
     const data = await fetchRequestLogs({
-      platform: filters.platform,
+      platform: 'codex',
       provider: filters.provider,
       limit: 200,
     })
@@ -546,7 +529,7 @@ const loadLogs = async () => {
 
 const loadStats = async () => {
   try {
-    const data = await fetchLogStats(filters.platform)
+    const data = await fetchLogStats('codex')
     stats.value = data ?? null
   } catch (error) {
     console.error('failed to load log stats', error)
@@ -730,7 +713,7 @@ const summaryDateLabel = computed(() => {
 
 const loadProviderOptions = async () => {
   try {
-    const list = await fetchLogProviders(filters.platform)
+    const list = await fetchLogProviders('codex')
     providerOptions.value = (list ?? []).map(normalizeProviderName).filter(Boolean)
     providerOptions.value.sort((a, b) => a.localeCompare(b))
   } catch (error) {
@@ -738,40 +721,18 @@ const loadProviderOptions = async () => {
   }
 }
 
-watch(
-  () => filters.platform,
-  async () => {
-    await loadProviderOptions()
-    if (filters.provider && !providerOptions.value.includes(filters.provider)) {
-      filters.provider = ''
-    }
-  },
-)
 
-// 首载 Promise：keep-alive 下首次进入 mounted 与 activated 均触发，
-// activated 等首载完成后再启动倒计时，避免双份加载
-let initialLoad: Promise<void> | null = null
-// 页面是否处于激活状态：首次加载期间离开页面时，阻止 await 之后再启动倒计时造成泄漏
-let pageActive = false
+// 卸载标记：首次加载期间离开页面时，阻止 await 之后再启动倒计时定时器造成泄漏
+let isUnmounted = false
 
-onMounted(() => {
-  initialLoad = loadDashboard()
-})
-
-onActivated(async () => {
-  pageActive = true
-  await initialLoad
-  if (!pageActive) return
+onMounted(async () => {
+  await loadDashboard()
+  if (isUnmounted) return
   startCountdown()
 })
 
-onDeactivated(() => {
-  pageActive = false
-  stopCountdown()
-})
-
 onUnmounted(() => {
-  pageActive = false
+  isUnmounted = true
   stopCountdown()
 })
 </script>

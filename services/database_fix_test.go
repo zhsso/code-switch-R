@@ -126,7 +126,7 @@ func TestEnsureBlacklistTablesMigratesOldSchema(t *testing.T) {
 	}
 
 	// 补列后典型的黑名单写入不应再报 no such column
-	if _, err := db.Exec(`INSERT INTO provider_blacklist (platform, provider_name, blacklist_level) VALUES ('claude', 'p1', 2)`); err != nil {
+	if _, err := db.Exec(`INSERT INTO provider_blacklist (platform, provider_name, blacklist_level) VALUES ('codex', 'p1', 2)`); err != nil {
 		t.Fatalf("写入含新列的记录失败: %v", err)
 	}
 }

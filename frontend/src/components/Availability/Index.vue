@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, onActivated, onDeactivated, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { createPoller } from '../../composables/usePoller'
 import {
   getLatestResults,
   runAllChecks,
@@ -37,18 +36,9 @@ const configForm = ref({
   timeout: 15000,
 })
 
-// 刷新与倒计时轮询：仅页面激活期间运行（keep-alive 下切走即停）
-// 每 60 秒刷新一次数据，并把倒计时拨回起点
-const refreshPoller = createPoller(async () => {
-  nextRefreshIn.value = 60
-  await loadData()
-}, 60000)
-// 每秒走一格倒计时
-const countdownPoller = createPoller(() => {
-  if (nextRefreshIn.value > 0) {
-    nextRefreshIn.value--
-  }
-}, 1000)
+// 刷新定时器
+let refreshTimer: ReturnType<typeof setInterval> | null = null
+let countdownTimer: ReturnType<typeof setInterval> | null = null
 
 // 计算属性：状态统计
 const statusStats = computed(() => {
@@ -174,17 +164,34 @@ function formatLastUpdated(): string {
   return lastUpdated.value.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-// 启动刷新轮询
+// 启动刷新定时器
 function startRefreshTimer() {
+  // 每 60 秒刷新一次
+  const refreshInterval = 60000
   nextRefreshIn.value = 60
-  refreshPoller.start()
-  countdownPoller.start()
+
+  refreshTimer = setInterval(() => {
+    loadData()
+    nextRefreshIn.value = 60
+  }, refreshInterval)
+
+  countdownTimer = setInterval(() => {
+    if (nextRefreshIn.value > 0) {
+      nextRefreshIn.value--
+    }
+  }, 1000)
 }
 
-// 停止轮询
+// 停止定时器
 function stopTimers() {
-  refreshPoller.stop()
-  countdownPoller.stop()
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
 }
 
 // 打开配置编辑弹窗
@@ -236,47 +243,24 @@ function displayConfigValue(value: string | number | undefined, label: string) {
   return String(value)
 }
 
-// 主页面的 Provider 更新事件处理器
-const handleProvidersUpdated = () => {
-  void loadData()
-}
+onMounted(async () => {
+  await loadData()
+  startRefreshTimer()
 
-// 首载 Promise：keep-alive 下首次进入 mounted 与 activated 均触发，
-// activated 等首载完成后再启动轮询，避免双份加载
-let initialLoad: Promise<void> | null = null
-// 页面是否处于激活状态：等待首载期间被切走时不得启动轮询
-let pageActive = false
-// 是否已激活过：首次激活紧随首载，无需立即再刷一遍
-let activatedOnce = false
-
-onMounted(() => {
-  // 监听主页面的 Provider 更新事件（监听器与轮询无关，整个生命周期有效）
-  window.addEventListener('providers-updated', handleProvidersUpdated)
-  initialLoad = loadData()
-})
-
-onActivated(async () => {
-  pageActive = true
-  await initialLoad
-  if (!pageActive) return
-  // 重新进入页面：数据可能已过期一分钟以上，立即刷新一次
-  if (activatedOnce) {
+  // 监听主页面的 Provider 更新事件
+  const handleProvidersUpdated = () => {
     void loadData()
   }
-  activatedOnce = true
-  startRefreshTimer()
-})
+  window.addEventListener('providers-updated', handleProvidersUpdated)
 
-onDeactivated(() => {
-  pageActive = false
-  stopTimers()
+  // 清理监听器
+  onUnmounted(() => {
+    window.removeEventListener('providers-updated', handleProvidersUpdated)
+    stopTimers()
+  })
 })
 
 onUnmounted(() => {
-  // 此前监听器清理注册在 onMounted 的 await 之后，已脱离同步 setup 上下文而失效；
-  // 统一移到顶层 onUnmounted 里清理
-  window.removeEventListener('providers-updated', handleProvidersUpdated)
-  pageActive = false
   stopTimers()
 })
 </script>

@@ -26,31 +26,31 @@ func TestCheckNamesNotOccupiedByAlias(t *testing.T) {
 	for _, s := range seed {
 		if _, err := db.Exec(
 			`INSERT INTO provider_alias (platform, provider_id, alias_name, canonical_name, expires_at)
-			 VALUES ('claude', ?, ?, ?, `+s.expires+`)`, s.owner, s.alias, s.alias); err != nil {
+			 VALUES (?, ?, ?, ?, `+s.expires+`)`, CodexPlatform, s.owner, s.alias, s.alias); err != nil {
 			t.Fatalf("预置 alias 失败: %v", err)
 		}
 	}
 
-	if err := checkNamesNotOccupiedByAlias("claude", nil); err != nil {
+	if err := checkNamesNotOccupiedByAlias(CodexPlatform, nil); err != nil {
 		t.Errorf("空列表应放行: %v", err)
 	}
-	if err := checkNamesNotOccupiedByAlias("claude", []Provider{{ID: 1, Name: "Fresh"}}); err != nil {
+	if err := checkNamesNotOccupiedByAlias(CodexPlatform, []Provider{{ID: 1, Name: "Fresh"}}); err != nil {
 		t.Errorf("未占用名字应放行: %v", err)
 	}
-	if err := checkNamesNotOccupiedByAlias("claude", []Provider{{ID: 1, Name: "Expired"}}); err != nil {
+	if err := checkNamesNotOccupiedByAlias(CodexPlatform, []Provider{{ID: 1, Name: "Expired"}}); err != nil {
 		t.Errorf("过期别名应放行: %v", err)
 	}
-	if err := checkNamesNotOccupiedByAlias("claude", []Provider{{ID: 7, Name: "mine"}}); err != nil {
+	if err := checkNamesNotOccupiedByAlias(CodexPlatform, []Provider{{ID: 7, Name: "mine"}}); err != nil {
 		t.Errorf("自有别名(大小写不同)应放行: %v", err)
 	}
-	if err := checkNamesNotOccupiedByAlias("claude", []Provider{{ID: 1, Name: "taken"}}); err == nil {
+	if err := checkNamesNotOccupiedByAlias(CodexPlatform, []Provider{{ID: 1, Name: "taken"}}); err == nil {
 		t.Error("他人活动别名(大小写不同)应拒绝")
 	}
-	if err := checkNamesNotOccupiedByAlias("claude", []Provider{{ID: 1, Name: "Taken"}}); err == nil {
+	if err := checkNamesNotOccupiedByAlias(CodexPlatform, []Provider{{ID: 1, Name: "Taken"}}); err == nil {
 		t.Error("他人活动别名应拒绝")
 	}
 	// 混合列表：一个冲突即整体拒绝
-	if err := checkNamesNotOccupiedByAlias("claude", []Provider{
+	if err := checkNamesNotOccupiedByAlias(CodexPlatform, []Provider{
 		{ID: 1, Name: "Fresh"}, {ID: 2, Name: "TAKEN"},
 	}); err == nil {
 		t.Error("混合列表包含冲突应拒绝")

@@ -1,6 +1,6 @@
-import { Call } from '@wailsio/runtime'
-
 export const fetchCurrentVersion = async (): Promise<string> => {
-  const version = await Call.ByName('main.VersionService.CurrentVersion') as string
-  return version ?? ''
+  const response = await fetch('/api/info')
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const info = await response.json() as { version?: string }
+  return info.version ?? ''
 }

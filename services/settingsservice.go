@@ -156,13 +156,8 @@ func (ss *SettingsService) UpdateBlacklistEnabled(enabled bool) error {
 // UpdateBlacklistSettings 更新黑名单配置
 // 使用 Saga 模式保证数据一致性（因队列无法使用事务）
 func (ss *SettingsService) UpdateBlacklistSettings(threshold int, duration int) error {
-	// 验证参数
-	if threshold < 1 || threshold > 9 {
-		return fmt.Errorf("失败阈值必须在 1-9 之间")
-	}
-
-	if duration != 5 && duration != 15 && duration != 30 && duration != 60 {
-		return fmt.Errorf("拉黑时长只支持 5/15/30/60 分钟")
+	if err := validateBlacklistSettings(threshold, duration); err != nil {
+		return err
 	}
 
 	// 单条语句原子更新两个键:SQLite 单语句自带原子性,
@@ -178,6 +173,16 @@ func (ss *SettingsService) UpdateBlacklistSettings(threshold int, duration int) 
 		return fmt.Errorf("更新拉黑配置失败: %w", err)
 	}
 
+	return nil
+}
+
+func validateBlacklistSettings(threshold int, duration int) error {
+	if threshold < 1 || threshold > 10 {
+		return fmt.Errorf("失败阈值必须在 1-10 之间")
+	}
+	if duration < 1 || duration > 10080 {
+		return fmt.Errorf("拉黑时长必须在 1-10080 分钟之间")
+	}
 	return nil
 }
 

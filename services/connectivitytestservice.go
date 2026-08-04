@@ -84,9 +84,7 @@ func NewConnectivityTestService(
 		settingsService:  settingsService,
 		policy:           policy,
 		results: map[string]map[int64]*ConnectivityResult{
-			"claude": {},
-			"codex":  {},
-			"gemini": {},
+			CodexPlatform: {},
 		},
 		autoTestEnabled: false,
 		client: &http.Client{
@@ -121,6 +119,11 @@ func (cts *ConnectivityTestService) TestProvider(ctx context.Context, provider P
 		SubStatus:    SubStatusNone,
 		LastChecked:  time.Now(),
 	}
+	if err := requireCodexPlatform(platform); err != nil {
+		result.Status = StatusMissing
+		result.Message = err.Error()
+		return result
+	}
 
 	// 构建测试请求
 	reqBody, contentField := cts.buildTestRequest(platform, &provider)
@@ -135,11 +138,6 @@ func (cts *ConnectivityTestService) TestProvider(ctx context.Context, provider P
 	authType := cts.getEffectiveAuthType(&provider, platform)
 
 	// 调试日志：打印最终请求信息
-	fmt.Printf("[DEBUG] 连通性测试请求:\n")
-	fmt.Printf("  targetURL: %s\n", targetURL)
-	fmt.Printf("  authType:  %s\n", authType)
-	fmt.Printf("  reqBody:   %s\n", string(reqBody))
-
 	// 创建 HTTP 请求
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(reqBody))
 	if err != nil {
@@ -156,7 +154,6 @@ func (cts *ConnectivityTestService) TestProvider(ctx context.Context, provider P
 		switch authTypeLower {
 		case "x-api-key":
 			req.Header.Set("x-api-key", provider.APIKey)
-			req.Header.Set("anthropic-version", "2023-06-01")
 		case "bearer":
 			req.Header.Set("Authorization", "Bearer "+provider.APIKey)
 		default:
@@ -227,15 +224,10 @@ func (cts *ConnectivityTestService) getEffectiveEndpoint(provider *Provider, pla
 	if endpoint != "" {
 		return endpoint
 	}
-	// 平台默认端点
-	switch strings.ToLower(platform) {
-	case "claude":
-		return "/v1/messages"
-	case "codex":
-		return "/responses"
-	default:
-		return "/v1/chat/completions"
+	if requireCodexPlatform(platform) != nil {
+		return ""
 	}
+	return "/responses"
 }
 
 // getEffectiveAuthType 获取有效认证方式（含平台默认值）
@@ -245,32 +237,22 @@ func (cts *ConnectivityTestService) getEffectiveAuthType(provider *Provider, pla
 	if authType != "" {
 		return authType
 	}
-	// 平台默认认证方式
-	if strings.ToLower(platform) == "claude" {
-		return "x-api-key"
+	if requireCodexPlatform(platform) != nil {
+		return ""
 	}
 	return "bearer"
 }
 
 // buildTestRequest 根据端点构建测试请求体
 func (cts *ConnectivityTestService) buildTestRequest(platform string, provider *Provider) ([]byte, string) {
+	if requireCodexPlatform(platform) != nil {
+		return nil, ""
+	}
 	model := strings.TrimSpace(provider.ConnectivityTestModel)
 	if model == "" {
-		// Claude/Codex 提供默认探测模型(动态解析+白名单交集);
-		// Gemini 平台默认端点为 OpenAI 兼容格式,原生 Google 端点形态各异,仍需用户显式配置
-		var fallback string
-		switch strings.ToLower(platform) {
-		case "claude":
-			fallback = FallbackClaudeProbeModel
-		case "codex":
-			fallback = FallbackCodexProbeModel
-		default:
-			return nil, ""
-		}
-		model = fallback
+		model = FallbackCodexProbeModel
 		if cts.policy != nil {
-			// 候选链:动态解析值 → 静态兜底;声明了白名单的供应商取其支持的首个,
-			// 全不支持时仍用动态首选(配合模型拒绝分类,不会误拉黑)
+			// 探测模型固定；供应商仍可用自己的测试模型配置显式覆盖。
 			if candidates := cts.policy.ProbeCandidates(platform); len(candidates) > 0 {
 				model = candidates[0]
 				for _, candidate := range candidates {
@@ -285,43 +267,13 @@ func (cts *ConnectivityTestService) buildTestRequest(platform string, provider *
 	// 与真实转发一致:应用供应商的模型映射后再发起探测
 	model = provider.GetEffectiveModel(model)
 
-	// 获取有效端点（含平台默认值）
-	endpoint := strings.ToLower(cts.getEffectiveEndpoint(provider, platform))
-
-	// Anthropic 格式: /v1/messages
-	if strings.Contains(endpoint, "/messages") {
-		reqBody := map[string]interface{}{
-			"model":      model,
-			"max_tokens": 1,
-			"messages": []map[string]string{
-				{"role": "user", "content": "hi"},
-			},
-		}
-		data, _ := json.Marshal(reqBody)
-		return data, "content"
-	}
-
-	// Codex /responses 走 OpenAI Responses 协议(原先误发 Chat 体必然 400)
-	if strings.Contains(endpoint, "/responses") {
-		reqBody := map[string]interface{}{
-			"model":             model,
-			"input":             "hi",
-			"max_output_tokens": 16,
-		}
-		data, _ := json.Marshal(reqBody)
-		return data, "output"
-	}
-
-	// 默认 OpenAI 格式: /v1/chat/completions
 	reqBody := map[string]interface{}{
-		"model":      model,
-		"max_tokens": 1,
-		"messages": []map[string]string{
-			{"role": "user", "content": "hi"},
-		},
+		"model":  model,
+		"input":  "ping",
+		"stream": false,
 	}
 	data, _ := json.Marshal(reqBody)
-	return data, "choices"
+	return data, "output"
 }
 
 // determineStatus 根据 HTTP 状态码和延迟判定状态
@@ -438,6 +390,9 @@ func isTimeoutError(err error) bool {
 
 // TestAll 测试指定平台的所有启用检测的供应商
 func (cts *ConnectivityTestService) TestAll(platform string) []ConnectivityResult {
+	if requireCodexPlatform(platform) != nil {
+		return nil
+	}
 	providers, err := cts.providerService.LoadProviders(platform)
 	if err != nil {
 		log.Printf("[ConnectivityTest] 加载 %s 供应商失败: %v", platform, err)
@@ -521,6 +476,9 @@ func (cts *ConnectivityTestService) handleBlacklistIntegration(platform, provide
 
 // GetResults 获取指定平台的测试结果
 func (cts *ConnectivityTestService) GetResults(platform string) []ConnectivityResult {
+	if requireCodexPlatform(platform) != nil {
+		return nil
+	}
 	cts.mu.RLock()
 	defer cts.mu.RUnlock()
 
@@ -551,6 +509,9 @@ func (cts *ConnectivityTestService) GetAllResults() map[string][]ConnectivityRes
 
 // RunSingleTest 手动触发单个供应商测试
 func (cts *ConnectivityTestService) RunSingleTest(platform string, providerID int64) (*ConnectivityResult, error) {
+	if err := requireCodexPlatform(platform); err != nil {
+		return nil, err
+	}
 	providers, err := cts.providerService.LoadProviders(platform)
 	if err != nil {
 		return nil, fmt.Errorf("加载供应商失败: %w", err)
@@ -665,15 +626,13 @@ func (cts *ConnectivityTestService) stopAutoTest() {
 
 // runAllPlatformTests 执行所有平台的测试
 func (cts *ConnectivityTestService) runAllPlatformTests() {
-	// 仅轮询 ProviderService 支持的平台，避免无意义的错误日志
-	// Gemini 使用独立的 GeminiService，暂未接入
-	platforms := []string{"claude", "codex"}
+	platforms := []string{CodexPlatform}
 	for _, platform := range platforms {
 		cts.TestAll(platform)
 	}
 }
 
-// Wails 生命周期方法
+// Service lifecycle methods.
 func (cts *ConnectivityTestService) Start() error {
 	return nil
 }
@@ -708,17 +667,8 @@ func (cts *ConnectivityTestService) TestProviderManual(
 	insecureSkipVerify bool,
 ) ManualTestResult {
 	// 调试日志：打印前端传递的参数
-	fmt.Printf("[DEBUG] TestProviderManual 收到参数:\n")
-	fmt.Printf("  platform: %q\n", platform)
-	fmt.Printf("  apiURL:   %q\n", apiURL)
-	fmt.Printf("  apiKey:   %q (len=%d)\n", maskAPIKey(apiKey), len(apiKey))
-	fmt.Printf("  model:    %q\n", model)
-	fmt.Printf("  endpoint: %q\n", endpoint)
-	fmt.Printf("  authType: %q\n", authType)
-
-	// 平台参数校验
-	if platform == "" {
-		platform = "claude"
+	if err := requireCodexPlatform(platform); err != nil {
+		return ManualTestResult{Message: err.Error()}
 	}
 
 	// 构建临时 Provider
@@ -742,12 +692,4 @@ func (cts *ConnectivityTestService) TestProviderManual(
 		HTTPCode:  result.HTTPCode,
 		Message:   result.Message,
 	}
-}
-
-// maskAPIKey 隐藏 API Key 的中间部分，用于安全日志输出
-func maskAPIKey(key string) string {
-	if len(key) <= 10 {
-		return "***"
-	}
-	return key[:6] + "..." + key[len(key)-4:]
 }

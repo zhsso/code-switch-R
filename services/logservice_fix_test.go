@@ -50,11 +50,9 @@ func setupLogFixTestDB(t *testing.T) *sql.DB {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		platform TEXT, model TEXT, provider TEXT,
 		http_code INTEGER, input_tokens INTEGER, output_tokens INTEGER,
-		cache_create_tokens INTEGER, cache_read_tokens INTEGER,
+			cache_read_tokens INTEGER,
 		reasoning_tokens INTEGER, is_stream INTEGER DEFAULT 0,
 		duration_sec REAL DEFAULT 0,
-		ephemeral_5m_tokens INTEGER DEFAULT 0,
-		ephemeral_1h_tokens INTEGER DEFAULT 0,
 		service_tier TEXT DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`
@@ -69,8 +67,8 @@ func insertLogFixRecord(t *testing.T, db *sql.DB, createdAt string) {
 
 	const insertSQL = `INSERT INTO request_log
 		(platform, model, provider, http_code, input_tokens, output_tokens,
-		 cache_create_tokens, cache_read_tokens, reasoning_tokens, created_at)
-		VALUES ('claude', 'claude-haiku-4-5', 'p1', 200, 1000000, 0, 0, 0, 0, ?)`
+		 cache_read_tokens, reasoning_tokens, created_at)
+		VALUES ('codex', 'gpt-5', 'p1', 200, 1000000, 0, 0, 0, ?)`
 	if _, err := db.Exec(insertSQL, createdAt); err != nil {
 		t.Fatalf("插入记录失败: %v", err)
 	}

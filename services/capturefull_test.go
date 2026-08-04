@@ -1,10 +1,8 @@
 package services
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -48,52 +46,6 @@ func TestCaptureBufferGlobalBudget(t *testing.T) {
 	cb.release()
 }
 
-// 导出按类别裁剪：只选响应体时，请求体/URL 不进导出
-func TestCaptureExportCategoryProjection(t *testing.T) {
-	db := setupCaptureDBEnv(t)
-	relay := newCaptureTestRelay(t)
-	if err := relay.SetRequestCapture(true); err != nil {
-		t.Fatal(err)
-	}
-	sid := relay.captureSessionID.Load()
-	if _, err := db.Exec(`INSERT INTO request_log (platform, provider, model, http_code, request_url, request_headers, request_body, response_body, capture_session_id)
-		VALUES ('claude','p','m',200,'https://secret-url/v1','{"Authorization":["Bearer sk-xxx"]}','{"prompt":"secret"}','{"answer":1}',?)`, sid); err != nil {
-		t.Fatal(err)
-	}
-	dest := t.TempDir() + "/resp-only.json"
-	// 仅导出响应体
-	count, err := relay.streamCaptureExport(db, sid, CaptureExportOptions{ResponseBody: true}, dest)
-	if err != nil || count != 1 {
-		t.Fatalf("导出失败: count=%d err=%v", count, err)
-	}
-	data, _ := os.ReadFile(dest)
-	s := string(data)
-	if strings.Contains(s, "secret-url") || strings.Contains(s, "sk-xxx") || strings.Contains(s, "prompt") {
-		t.Errorf("未选类别不应出现在导出中: %s", s)
-	}
-	if !strings.Contains(s, "answer") {
-		t.Errorf("已选响应体应出现: %s", s)
-	}
-	// 全 false 应报错
-	if _, err := relay.ExportCaptureSessionWithDialog(sid, CaptureExportOptions{}); err == nil {
-		t.Error("全 false 导出应报错")
-	}
-	// 封套元数据
-	var env struct {
-		Meta struct {
-			Version       int  `json:"version"`
-			RawUnredacted bool `json:"raw_unredacted"`
-			Count         int  `json:"count"`
-		} `json:"meta"`
-	}
-	if err := json.Unmarshal(data, &env); err != nil {
-		t.Fatalf("导出非合法 JSON: %v", err)
-	}
-	if env.Meta.Version != 1 || !env.Meta.RawUnredacted || env.Meta.Count != 1 {
-		t.Errorf("封套元数据异常: %+v", env.Meta)
-	}
-}
-
 // GetCaptureTotalBytes 统计抓包字节
 func TestCaptureTotalBytes(t *testing.T) {
 	db := setupCaptureDBEnv(t)
@@ -103,7 +55,7 @@ func TestCaptureTotalBytes(t *testing.T) {
 	}
 	sid := relay.captureSessionID.Load()
 	if _, err := db.Exec(`INSERT INTO request_log (platform, provider, model, request_body, capture_session_id)
-		VALUES ('claude','p','m','1234567890', ?)`, sid); err != nil {
+		VALUES ('codex','p','m','1234567890', ?)`, sid); err != nil {
 		t.Fatal(err)
 	}
 	total, err := relay.GetCaptureTotalBytes()
@@ -140,7 +92,7 @@ func TestCaptureFullErrorResponseBody(t *testing.T) {
 	req, _ := http.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
 	c.Request = req
 	// 400 是客户端类错误，forwardRequest 返回 false
-	prs.forwardRequest(c, "claude", provider, "/v1/messages",
+	prs.forwardRequest(c, CodexPlatform, provider, "/responses",
 		map[string]string{}, map[string]string{"Content-Type": "application/json"}, []byte(`{"model":"m"}`), false, "m", 0)
 
 	var respBody string

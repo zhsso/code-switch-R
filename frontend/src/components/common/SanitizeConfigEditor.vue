@@ -44,16 +44,6 @@
         @update="updateField('blockedHeaders', $event)"
       />
 
-      <!-- 要移除的 anthropic-beta 值 -->
-      <SanitizeFieldList
-        :label="$t('components.provider.sanitizeConfig.blockedBetaValues')"
-        :items="config.blockedBetaValues || []"
-        :placeholder="$t('components.provider.sanitizeConfig.placeholderBeta')"
-        :default-hint="$t('components.provider.sanitizeConfig.defaultHint')"
-        :explicit-empty="isExplicitEmpty(config.blockedBetaValues)"
-        :empty-hint="$t('components.provider.sanitizeConfig.emptyHint')"
-        @update="updateField('blockedBetaValues', $event)"
-      />
     </div>
   </div>
 </template>
@@ -65,7 +55,6 @@ import SanitizeFieldList from './SanitizeFieldList.vue'
 interface SanitizeConfig {
   blockedBodyFields?: string[]
   blockedHeaders?: string[]
-  blockedBetaValues?: string[]
 }
 
 interface Props {

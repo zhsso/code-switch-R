@@ -16,8 +16,8 @@ import (
 // 响应体）。录制开关为进程内状态、重启即关（调试态功能）。
 //
 // 【安全告警】不做任何脱敏：明文 API Key、完整提示词与响应内容都会原样落库。
-// 这是用户显式选择的调试模式，导出文件切勿分享。数据库删除仅为逻辑删除，
-// 磁盘回收依赖 ClearCapturedRequests 的 VACUUM。
+// 这是用户显式选择的调试模式，数据库文件和 WebUI 展示内容均不得分享。
+// 数据库删除仅为逻辑删除，磁盘回收依赖 ClearCapturedRequests 的 VACUUM。
 
 const (
 	// captureFieldLimit 单个字段（请求体/响应体）落库上限。超出即截断并置标记，
@@ -29,7 +29,7 @@ const (
 	// 与落库前的字符串副本，因此不是进程总内存的硬保证
 	captureInflightBudget = 128 * 1024 * 1024
 	// captureDetailPreviewLimit 明细接口每字段返回的预览上限。整段 50MiB 直接
-	// 塞进 <pre> 会冻死 webview，完整内容只能走导出
+	// 塞进 <pre> 会阻塞浏览器，WebUI 只提供有界预览。
 	captureDetailPreviewLimit = 256 * 1024
 )
 
@@ -81,7 +81,7 @@ func rawResponseHeaders(header http.Header) string {
 }
 
 // rawHTTPHeaders 与 rawResponseHeaders 同构：把 http.Header 序列化为 JSON 对象
-// （值为数组，保留多值），供 Gemini 请求头采集复用（不逗号合并）
+// （值为数组，保留多值），避免逗号合并破坏原始值。
 func rawHTTPHeaders(header http.Header) string {
 	return rawResponseHeaders(header)
 }
@@ -156,7 +156,7 @@ func (cb *captureBuffer) release() {
 }
 
 // markTruncated 强制标记为截断（非"触及上限"，而是读取被中断，如 SSE 错误体
-// 读取超时）。使详情/导出如实呈现"内容不完整"，不把空/残缺当成完整响应
+// 读取超时）。使详情如实呈现"内容不完整"，不把空/残缺当成完整响应
 func (cb *captureBuffer) markTruncated() {
 	if cb != nil {
 		cb.truncated = true
@@ -164,7 +164,7 @@ func (cb *captureBuffer) markTruncated() {
 }
 
 // captureTeeReader 包装上游响应体：转发读取的同时把原始字节喂给 captureBuffer。
-// 用于 Claude/Codex/custom 路径——xrequest 的逐行 hook 会剥掉行尾、跳过空行，
+// 用于 Codex 路径：xrequest 的逐行 hook 会剥掉行尾、跳过空行，
 // 无法还原原始 SSE，必须在字节流层 tee
 type captureTeeReader struct {
 	src io.ReadCloser

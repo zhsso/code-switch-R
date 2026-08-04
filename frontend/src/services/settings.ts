@@ -1,13 +1,13 @@
 /**
  * 全局配置服务 API 封装
  */
-import { Call } from '@wailsio/runtime'
+import { Call } from '../runtime'
 
 const SETTINGS_SERVICE = 'codeswitch/services.SettingsService'
 
 export interface BlacklistSettings {
   failureThreshold: number // 失败次数阈值（1-10）
-  durationMinutes: number  // 拉黑时长（分钟：15/30/60）
+  durationMinutes: number  // 固定拉黑时长（分钟：1-10080）
 }
 
 /**
@@ -21,7 +21,7 @@ export const getBlacklistSettings = async (): Promise<BlacklistSettings> => {
 /**
  * 更新拉黑配置
  * @param threshold 失败阈值（1-10）
- * @param duration 拉黑时长（15/30/60 分钟）
+ * @param duration 固定拉黑时长（1-10080 分钟）
  */
 export const updateBlacklistSettings = async (
   threshold: number,

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -67,6 +68,66 @@ func TestValidateBatchCanary(t *testing.T) {
 	}
 }
 
+func TestModelSyncKeepsNonRemovedProviders(t *testing.T) {
+	want := []string{"openai", "deepseek", "alibaba", "moonshotai", "zhipuai"}
+	got := modelSyncTargets([]string{"anthropic", "openai", "google", "deepseek", "alibaba", "moonshotai", "zhipuai"})
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("同步目标 = %v, want %v", got, want)
+	}
+
+	s := newTestSyncService(t, nil)
+	canaries := map[string]string{
+		"openai": "gpt-5.6", "deepseek": "deepseek-v3", "alibaba": "qwen-max",
+		"moonshotai": "kimi-k2", "zhipuai": "glm-5",
+	}
+	for providerID, modelID := range canaries {
+		body := testCatalogJSON(providerID, map[string]map[string]any{modelID: testModelSpec(1, 2)})
+		if _, err := s.validateBatch(providerID, body, nil, nil); err != nil {
+			t.Errorf("剩余厂商 %s 的合法目录被拒绝: %v", providerID, err)
+		}
+	}
+	for _, providerID := range []string{"anthropic", "google"} {
+		body := testCatalogJSON(providerID, map[string]map[string]any{"removed": testModelSpec(1, 2)})
+		if _, err := s.validateBatch(providerID, body, nil, nil); err == nil {
+			t.Errorf("已删除厂商 %s 的目录应被拒绝", providerID)
+		}
+	}
+}
+
+func TestRunSyncSupportsDeepSeekCatalog(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/providers/deepseek.json" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(testCatalogJSON("deepseek", map[string]map[string]any{
+			"deepseek-v3-sync-test": testModelSpec(1, 2),
+		}))
+	}))
+	defer server.Close()
+
+	s := newTestSyncService(t, []string{server.URL})
+	s.runSync([]string{"anthropic", "deepseek", "google"})
+
+	s.mu.Lock()
+	state := s.state.Providers["deepseek"]
+	removedState := s.state.Providers["anthropic"]
+	source := s.sources["deepseek"]
+	s.mu.Unlock()
+	if state == nil || state.LastError != "" || source != "remote" {
+		t.Fatalf("DeepSeek 同步失败: state=%+v source=%q", state, source)
+	}
+	if removedState != nil {
+		t.Fatalf("已删除厂商不应产生状态: %+v", removedState)
+	}
+	if _, err := os.Stat(filepath.Join(s.dir, "deepseek.json")); err != nil {
+		t.Fatalf("DeepSeek 缓存未落盘: %v", err)
+	}
+	if !s.pricing.HasPositivePricing("deepseek-v3-sync-test") {
+		t.Fatal("DeepSeek 同步目录未更新价格快照")
+	}
+}
+
 func TestValidateBatchHighWaterShrink(t *testing.T) {
 	s := newTestSyncService(t, nil)
 	prev := &providerSyncState{HighWater: 10, HighWaterAt: time.Now()}
@@ -103,18 +164,18 @@ func TestValidateBatchPriceJump(t *testing.T) {
 
 func TestValidateBatchFamilyRegression(t *testing.T) {
 	s := newTestSyncService(t, nil)
-	prevCatalog, err := modelpricing.ParseRemoteCatalog("google", testCatalogJSON("google", map[string]map[string]any{
-		"gemini-3.1-pro-preview": testModelSpec(2, 12),
-		"gemini-3.5-flash":       testModelSpec(1.5, 9),
+	prevCatalog, err := modelpricing.ParseRemoteCatalog("openai", testCatalogJSON("openai", map[string]map[string]any{
+		"gpt-5.6":      testModelSpec(5, 30),
+		"gpt-5.6-chat": testModelSpec(5, 30),
 	}))
 	if err != nil {
 		t.Fatalf("ParseRemoteCatalog: %v", err)
 	}
-	body := testCatalogJSON("google", map[string]map[string]any{
-		"gemini-3.5-flash": testModelSpec(1.5, 9), // pro 家族整族消失
+	body := testCatalogJSON("openai", map[string]map[string]any{
+		"gpt-5.6-chat": testModelSpec(5, 30), // 主线版本家族消失
 	})
-	if _, err := s.validateBatch("google", body, nil, prevCatalog); err == nil {
-		t.Error("既有 pro 家族整族消失应隔离")
+	if _, err := s.validateBatch("openai", body, nil, prevCatalog); err == nil {
+		t.Error("既有主线版本家族消失应隔离")
 	}
 }
 
@@ -127,20 +188,13 @@ func TestRunSyncEndToEnd(t *testing.T) {
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
-		var body []byte
-		switch r.URL.Path {
-		case "/api/providers/anthropic.json":
-			body = testCatalogJSON("anthropic", map[string]map[string]any{
-				"claude-sync-test": testModelSpec(10, 50),
-			})
-		case "/api/providers/openai.json":
-			body = testCatalogJSON("openai", map[string]map[string]any{
-				"gpt-5.6": testModelSpec(5, 30),
-			})
-		default:
+		if r.URL.Path != "/api/providers/openai.json" {
 			http.NotFound(w, r)
 			return
 		}
+		body := testCatalogJSON("openai", map[string]map[string]any{
+			"gpt-5.6-sync-test": testModelSpec(5, 30),
+		})
 		w.Header().Set("ETag", `W/"gen-1"`)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(body)
@@ -148,16 +202,16 @@ func TestRunSyncEndToEnd(t *testing.T) {
 	defer server.Close()
 
 	s := newTestSyncService(t, []string{server.URL})
-	s.runSync([]string{"anthropic", "openai"})
+	s.runSync([]string{"unsupported", "openai"})
 
 	s.mu.Lock()
-	anthropicState := s.state.Providers["anthropic"]
 	openaiState := s.state.Providers["openai"]
-	source := s.sources["anthropic"]
+	unsupportedState := s.state.Providers["unsupported"]
+	source := s.sources["openai"]
 	s.mu.Unlock()
 
-	if anthropicState == nil || anthropicState.ModelCount != 1 || anthropicState.LastError != "" {
-		t.Fatalf("anthropic 状态异常: %+v", anthropicState)
+	if unsupportedState != nil {
+		t.Fatalf("不支持的同步目标不应产生状态: %+v", unsupportedState)
 	}
 	if openaiState == nil || openaiState.ETagByOrigin[server.URL] != `W/"gen-1"` {
 		t.Fatalf("openai ETag 未记录: %+v", openaiState)
@@ -165,10 +219,10 @@ func TestRunSyncEndToEnd(t *testing.T) {
 	if source != "remote" {
 		t.Errorf("来源应为 remote,实际 %s", source)
 	}
-	if _, err := os.Stat(filepath.Join(s.dir, "anthropic.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(s.dir, "openai.json")); err != nil {
 		t.Errorf("缓存文件未落盘: %v", err)
 	}
-	if !s.pricing.HasPositivePricing("claude-sync-test") {
+	if !s.pricing.HasPositivePricing("gpt-5.6-sync-test") {
 		t.Error("同步后新模型应有价")
 	}
 

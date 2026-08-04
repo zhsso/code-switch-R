@@ -1,75 +1,14 @@
 {
   "app": {
-    "title": "我的应用",
+    "title": "Codex++",
     "login": "登录"
-  },
-  "update": {
-    "newVersion": "新版本 {version} 可用",
-    "checking": "检查中...",
-    "downloadNow": "立即下载",
-    "downloading": "下载中",
-    "restartNow": "重启更新",
-    "later": "稍后提醒",
-    "cancel": "取消",
-    "retry": "重试",
-    "close": "关闭",
-    "error": "更新出错",
-    "noUpdate": "已是最新版本",
-    "checkFailed": "检查更新失败",
-    "downloadFailed": "下载失败",
-    "applyFailed": "应用更新失败",
-    "releaseNotes": "更新日志",
-    "currentVersion": "当前版本",
-    "latestVersion": "最新版本",
-    "checkUpdate": "检查更新",
-    "autoCheck": "自动检查更新",
-    "ignoredVersion": "已忽略此版本"
-  },
-  "settings": {
-    "network": {
-      "title": "网络设置",
-      "listenMode": "监听模式",
-      "modes": {
-        "localhost": "仅本地 (127.0.0.1)",
-        "wslAuto": "WSL 自动检测",
-        "lan": "局域网 (0.0.0.0)",
-        "custom": "自定义地址"
-      },
-      "customAddress": "自定义地址",
-      "currentAddress": "当前监听地址",
-      "lanWarningTitle": "安全警告",
-      "lanWarningText": "局域网模式会将 API 密钥暴露给局域网内的其他设备，请仅在可信环境中使用。",
-      "wslTitle": "WSL 配置",
-      "wslAutoConfig": "WSL 自动配置",
-      "wslAutoConfigHint": "自动配置 WSL 中的 CLI 工具使用宿主机代理",
-      "wslStatus": "WSL 状态",
-      "wslDetected": "已检测到 WSL",
-      "wslNotDetected": "未检测到 WSL",
-      "wslDistros": "已检测的发行版",
-      "targetCli": "目标 CLI 工具",
-      "configureNow": "立即配置",
-      "configureSuccess": "WSL CLI 工具配置成功",
-      "configureFailed": "配置 WSL CLI 工具失败",
-      "saveFailed": "保存网络设置失败"
-    }
-  },
-  "menus": {
-    "general": "通用设置",
-    "shortcut": "快捷键",
-    "about": "关于"
   },
   "sidebar": {
     "home": "首页",
-    "prompts": "提示词",
-    "mcp": "MCP",
-    "skill": "技能",
-    "gemini": "Gemini",
     "availability": "可用性",
     "speedtest": "测速",
-    "env": "环境",
     "logs": "日志",
     "capture": "抓包",
-    "console": "控制台",
     "settings": "设置",
     "toggleTheme": "切换明暗主题",
     "switchToLight": "切换到亮色模式",
@@ -142,35 +81,6 @@
     "cancel": "取消",
     "close": "关闭"
   },
-  "prompts": {
-    "hero": {
-      "eyebrow": "提示词管理",
-      "title": "管理系统提示词",
-      "lead": "为 Claude Code、Codex 和 Gemini 配置自定义系统提示词，增强 AI 编程助手的能力。"
-    },
-    "stats": {
-      "total": "共 {count} 个提示词",
-      "enabled": "已启用"
-    },
-    "empty": "暂无提示词，点击下方按钮创建",
-    "loading": "加载中...",
-    "confirmDelete": "确认删除此提示词？",
-    "actions": {
-      "create": "新增提示词",
-      "import": "从文件导入"
-    },
-    "form": {
-      "createTitle": "新增提示词",
-      "editTitle": "编辑提示词",
-      "name": "名称",
-      "namePlaceholder": "例如：代码审查专家",
-      "description": "描述",
-      "descriptionPlaceholder": "简短描述此提示词的用途",
-      "content": "提示词内容",
-      "cancel": "取消",
-      "save": "保存"
-    }
-  },
   "speedtest": {
     "hero": {
       "eyebrow": "API 速度测试",
@@ -189,48 +99,33 @@
     "loadingTip": "正在从首页同步供应商端点...",
     "syncError": "同步失败，请手动刷新"
   },
-  "envcheck": {
-    "hero": {
-      "eyebrow": "环境变量检测",
-      "title": "检测环境变量冲突",
-      "lead": "扫描系统环境变量和配置文件，发现可能影响 AI 编程工具的变量冲突。"
-    },
-    "checking": "检测中...",
-    "error": "检测失败",
-    "found": "发现 {count} 个冲突的环境变量",
-    "noConflicts": "未发现环境变量冲突",
-    "value": "值",
-    "source": "来源",
-    "sourceSystem": "系统环境变量",
-    "refresh": "重新检测"
-  },
   "components": {
     "home": {},
     "provider": {
       "modelWhitelist": {
         "label": "模型白名单",
-        "tooltip": "声明该供应商支持的模型。支持精确匹配（claude-sonnet-4）和通配符（claude-*）",
-        "placeholder": "输入模型名称，如 claude-*",
+        "tooltip": "声明该供应商支持的 Codex 模型。支持精确匹配（gpt-5.6）和通配符（gpt-*）",
+        "placeholder": "输入模型名称，如 gpt-*",
         "add": "添加",
         "remove": "删除模型",
         "examples": {
           "title": "示例：",
           "exact": "精确匹配",
-          "prefix": "前缀匹配所有 Claude 模型",
+          "prefix": "前缀匹配所有 GPT 模型",
           "vendor": "匹配带供应商前缀的模型"
         }
       },
       "modelMapping": {
         "label": "模型映射",
-        "tooltip": "将 CLI 请求的模型名映射到供应商实际支持的模型名。支持通配符展开",
-        "keyPlaceholder": "CLI 模型（如 claude-*）",
+        "tooltip": "将 Codex 请求的模型名映射到供应商实际支持的模型名。支持通配符展开",
+        "keyPlaceholder": "Codex 模型（如 gpt-*）",
         "valuePlaceholder": "供应商模型（如 kimi-k2-thinking）",
         "add": "添加",
         "remove": "删除映射",
         "examples": {
           "title": "示例：",
           "exact": "精确映射",
-          "wildcard": "通配符映射，自动展开 claude-sonnet-4 → anthropic/claude-sonnet-4",
+          "wildcard": "通配符映射，自动展开 gpt-* → openai/gpt-*",
           "prefix": "前缀映射"
         }
       },
@@ -238,10 +133,8 @@
         "label": "请求清理高级配置",
         "blockedBodyFields": "要移除的请求体字段",
         "blockedHeaders": "要移除的请求头",
-        "blockedBetaValues": "anthropic-beta 要移除的值",
         "placeholder": "输入字段名，如 prompt_caching",
         "placeholderHeader": "输入请求头（小写），如 x-custom-header",
-        "placeholderBeta": "输入 beta 值，如 prompt-caching-scope-2026-01-05",
         "add": "添加",
         "remove": "移除",
         "defaultHint": "未配置，使用内置默认值",
@@ -250,7 +143,7 @@
     },
     "main": {
       "hero": {
-        "eyebrow": "Claude & Codex 供应商总览",
+        "eyebrow": "Codex 供应商总览",
         "title": "实时掌握 AI 编程供给",
         "lead": "下方绿砖墙展示每日算力与额度消耗情况，帮助我们快速洞察不同供应商的负载趋势"
       },
@@ -267,89 +160,19 @@
           "cost": "金额"
         }
       },
-      "tabs": {
-        "ariaLabel": "AI 供应商切换",
-        "addCard": "新增供应商卡片",
-        "refresh": "刷新数据",
-        "others": "其他"
-      },
-      "relayToggle": {
-        "label": "Claude proxy",
-        "hostClaude": "托管 Claude Code",
-        "hostCodex": "托管 Codex",
-        "hostGemini": "托管 Gemini CLI",
-        "hostOthers": "托管自定义 CLI",
-        "tooltip": "通过本地转发托管 API 访问，统一管理密钥与配额。",
-        "statusOn": "已托管",
-        "statusOff": "未托管",
-        "toggleFailed": "切换托管状态失败"
-      },
-      "customCli": {
-        "selectToolFirst": "请先选择一个 CLI 工具",
-        "noTools": "暂无自定义 CLI 工具",
-        "addTool": "添加 CLI 工具",
-        "toolName": "工具名称",
-        "toolNamePlaceholder": "例如：Droid、RooCode",
-        "configFiles": "配置文件",
-        "proxySettings": "代理注入设置",
-        "selectTool": "选择 CLI 工具",
-        "createTitle": "新建 CLI 工具",
-        "editTitle": "编辑 CLI 工具",
-        "deleteTitle": "删除 CLI 工具",
-        "deleteMessage": "确认删除 {name} 吗？此操作不可撤销。",
-        "primaryConfig": "主配置文件",
-        "labelPlaceholder": "配置文件标签",
-        "pathPlaceholder": "配置文件路径，如 ~/.droid/config.json",
-        "primary": "主文件",
-        "selectConfigFile": "选择目标配置文件",
-        "unnamed": "未命名",
-        "baseUrlFieldPlaceholder": "Base URL 字段路径，如 env.ANTHROPIC_BASE_URL",
-        "authTokenFieldPlaceholder": "认证 Token 字段路径（可选）",
-        "proxyHint": "代理注入会将本地代理地址写入指定的配置文件字段",
-        "presetSection": "从预设开始",
-        "presetStateNone": "未检测到 opencode 配置，启用代理时将自动创建并写入供应商配置",
-        "presetStateExisting": "检测到现有配置，启用代理时只补齐缺失字段，不覆盖已有内容",
-        "presetStateJsonc": "检测到 .jsonc 配置：不含注释的可直接使用；含注释的暂不支持，启用会失败并给出提示",
-        "presetStateBoth": "同时存在 .json 与 .jsonc，opencode 未定义两者的读取优先级，已预填 .json，请确认实际使用的文件",
-        "seedFieldsBadge": "含 {count} 个预设管理字段（启用代理时自动补齐，不覆盖已有配置）",
-        "nameRequired": "请输入工具名称",
-        "configRequired": "请至少添加一个有效的配置文件路径",
-        "createSuccess": "CLI 工具创建成功",
-        "updateSuccess": "CLI 工具更新成功",
-        "deleteSuccess": "CLI 工具已删除",
-        "saveFailed": "保存 CLI 工具失败",
-        "deleteFailed": "删除 CLI 工具失败",
-        "invalidProxyTarget": "代理注入目标配置文件无效",
-        "proxyInjectionIncomplete": "代理注入配置不完整，请为已填写的注入行选择目标配置文件并填写 Base URL 字段",
-        "proxyTargetPathRequired": "代理注入目标配置文件缺少路径，请先填写该配置文件的路径"
-      },
       "logs": {
         "view": "查看日志",
         "streamOn": "流式",
         "streamOff": "非流"
       },
       "controls": {
+        "addCard": "新增供应商",
+        "refresh": "刷新数据",
         "github": "打开 GitHub",
         "theme": "切换主题",
         "settings": "打开设置",
-        "mcp": "打开 MCP 面板",
-        "skill": "打开 Skill 列表",
-        "gemini": "打开 Gemini CLI 管理",
-        "import": "导入 cc-switch 配置",
         "duplicate": "复制供应商",
         "duplicateFailed": "复制供应商失败"
-      },
-      "importConfig": {
-        "tooltip": "导入 {providers} 个供应商 · {servers} 个 MCP 服务器 · {prompts} 个提示词",
-        "success": "已导入 {providers} 个供应商、{servers} 个 MCP 服务器与 {prompts} 个提示词（提示词默认未启用）",
-        "partial": "部分导入完成：{providers} 个供应商、{servers} 个 MCP、{prompts} 个提示词；失败原因：{error}",
-        "empty": "cc-switch 中的供应商、MCP 与提示词均已同步",
-        "error": "导入 cc-switch 配置失败"
-      },
-      "firstRun": {
-        "message": "欢迎使用 Code Switch R！如果你有 cc-switch 的配置，可以前往设置页导入。",
-        "goToSettings": "前往设置",
-        "dismiss": "稍后"
       },
       "providers": {
         "requests": "请求数",
@@ -360,25 +183,26 @@
         "noData": "今日暂无数据",
         "lastUsed": "正在使用"
       },
-      "directApply": {
-        "title": "直接应用",
-        "inUse": "使用中",
-        "currentBadge": "当前使用",
-        "success": "{name} 已应用",
-        "failed": "应用失败",
-        "proxyEnabled": "请先关闭代理"
-      },
       "form": {
         "createTitle": "新增供应商",
         "editTitle": "编辑供应商",
+        "presets": {
+          "label": "快速预设",
+          "deepseekV4Flash": "DeepSeek V4 Flash"
+        },
+        "compatibility": {
+          "standard": "标准 Codex",
+          "deepseekCodex": "DeepSeek Codex"
+        },
         "labels": {
           "name": "供应商名称",
           "apiUrl": "API 地址",
           "fallbackApiUrls": "备用 API 地址",
           "maxConcurrency": "最大并发请求数",
+          "costMultiplier": "费用倍率",
           "apiKey": "API 密钥",
           "apiEndpoint": "API 端点（可选）",
-          "upstreamProtocol": "上游协议",
+          "compatibilityMode": "请求兼容模式",
           "insecureSkipVerify": "跳过 TLS 证书验证",
           "requestSanitize": "请求清理",
           "officialSite": "官网地址",
@@ -415,10 +239,10 @@
         "noIconResults": "未找到匹配的图标",
         "hints": {
           "maxConcurrency": "同一时刻最多向该供应商转发的请求数（0=不限）。满载时请求会先转其它供应商，全部满载则短暂排队。仅限本机代理转发生效",
+          "costMultiplier": "1 为模型原价，当前倍率会应用到该供应商的全部费用统计",
           "fallbackApiUrls": "主地址失败且属可切换错误（网络失败/408/421/429/5xx）时，同一请求内按序改试备用地址；全部失败才算该供应商一次失败",
           "level": "数字越小优先级越高，Level 1 会被优先尝试，失败后依次尝试 Level 2、Level 3 等",
-          "apiEndpoint": "覆盖平台默认端点。留空使用默认（claude: /v1/messages, codex: /responses）。GLM 模型请使用 /v1/chat/completions",
-          "upstreamProtocol": "指定上游 API 的协议类型。选择 auto 时根据端点自动检测；选择 openai_chat 时自动转换请求和响应格式",
+          "apiEndpoint": "覆盖 Codex 默认端点；留空使用 /responses。",
           "insecureSkipVerify": "开启后不再验证该供应商的 TLS 证书（自签名证书/企业代理场景）。存在中间人风险，请仅对信任的内网地址开启",
           "requestSanitize": "启用后会自动移除转发请求中的非标准字段和不支持的请求头，解决 LiteLLM 等中转的兼容性问题",
           "availabilityMonitor": "启用后会定期进行健康检查，监控此供应商的可用性状态",
@@ -430,42 +254,37 @@
           "connectivityCheck": "启用后会定期检测此供应商的连通性，开启该选项可能会消耗少量 tokens",
           "connectivityTestModel": "选择用于连通性测试的模型，留空则使用平台默认模型",
           "connectivityTestEndpoint": "选择或输入 API 端点路径",
-          "connectivityAuthType": "默认使用 Bearer。Anthropic 官方 API 请选择 X-API-Key。如需自定义请在下方输入 Header 名称。"
+          "connectivityAuthType": "默认使用 Bearer。Codex 兼容端点需要时可选择 X-API-Key，或输入自定义 Header 名称。"
         },
         "actions": {
           "cancel": "取消",
           "save": "保存",
-          "saveAndApply": "保存并应用",
           "delete": "删除",
+          "revealApiKey": "显示 API 密钥",
+          "hideApiKey": "隐藏 API 密钥",
           "testConnectivity": "测试连通性",
           "testing": "测试中..."
         },
         "connectivity": {
           "success": "连接成功（延迟: {latency}ms）",
           "failed": "连接失败",
+          "revealToTest": "请先显式显示已配置的 API 密钥，再进行连通性测试",
           "error": "测试出错: {error}"
         },
         "switch": {
           "on": "已启用",
           "off": "未启用"
         },
-        "upstreamProtocol": {
-          "auto": "自动检测",
-          "autoDesc": "根据 API 端点自动判断协议类型",
-          "anthropic": "Anthropic",
-          "anthropicDesc": "使用 Anthropic Messages API（默认）",
-          "openaiChat": "OpenAI Chat",
-          "openaiChatDesc": "使用 OpenAI Chat Completions API，自动转换格式"
-        },
         "confirmDeleteTitle": "删除供应商",
         "confirmDeleteMessage": "确认删除 {name} 吗？此操作不可撤销。",
         "errors": {
           "invalidUrl": "请输入合法的 API 地址",
           "tooManyFallbacks": "备用地址最多 4 个",
-          "invalidFallbackUrl": "备用地址必须是合法的 http/https 地址"
+          "invalidFallbackUrl": "备用地址必须是合法的 http/https 地址",
+          "revealApiKeyFailed": "显示 API 密钥失败",
+          "invalidCostMultiplier": "费用倍率必须在 0.01–100 之间"
         },
-        "saveFailed": "保存供应商配置失败",
-        "cliConfigSaveFailed": "CLI 配置保存失败"
+        "saveFailed": "保存供应商配置失败"
       },
       "levelDesc": {
         "highest": "最高优先级",
@@ -527,7 +346,7 @@
     "logs": {
       "eyebrow": "请求追踪",
       "title": "代理请求日志",
-      "subtitle": "查看 Claude Code、Codex 与 Gemini 代理的最新访问记录。",
+      "subtitle": "查看 Codex 代理的最新访问记录。",
       "loading": "加载中...",
       "refresh": "刷新",
       "applyFilters": "应用筛选",
@@ -577,9 +396,9 @@
         "reqBody": "请求正文",
         "respHeaders": "响应头",
         "respBody": "响应正文",
-        "sensitiveWarning": "全量不脱敏：含明文 API Key 与完整对话/响应内容，切勿分享导出文件",
-        "previewHint": "内容较大，此处仅显示预览（前 256KB）；完整内容原始大小 {bytes}，请使用导出查看",
-        "captureTruncatedHint": "内容在采集时已超上限被截断（原始大小 {bytes}），超出部分未保存、导出也无法获取",
+        "sensitiveWarning": "全量不脱敏：含明文 API Key 与完整对话/响应内容，切勿分享数据库或页面内容",
+        "previewHint": "内容较大，此处仅显示前 256KB 预览；存储的原始大小为 {bytes}",
+        "captureTruncatedHint": "内容在采集时已超上限被截断（原始大小 {bytes}），超出部分未保存",
         "budgetSkippedHint": "响应过大超出内存预算，正文未保存",
         "empty": "该请求未录制内容",
         "copy": "复制",
@@ -607,83 +426,27 @@
       }
     },
     "general": {
-      "blacklist": {
-        "saved": "拉黑配置已保存",
-        "saveFailed": "保存失败：",
-        "toggleFailed": "切换失败："
-      },
-      "sync": {
-        "defaultsSummary": "Codex: {codex} · Gemini: {gemini} · Claude（探测）: {claude}"
-      },
       "title": {
-        "power": "权限设置",
-        "application": "应用设置",
-        "trayPanel": "托盘弹窗",
         "exterior": "外观设置",
+        "relay": "转发服务",
         "blacklist": "拉黑配置",
-        "dataImport": "数据导入",
-        "connectivity": "连通性检测",
-        "modelData": "模型数据"
+        "modelData": "模型数据",
+        "history": "历史记录"
       },
       "label": {
-        "assistant_access": "辅助功能访问权限",
-        "disk_access": "完全磁盘访问权限",
-        "startup": "登录时启动",
         "language": "界面语言",
         "theme": "主题模式",
         "heatmap": "显示主界面热力墙",
         "homeTitle": "显示首页标题",
-        "budgetTotal": "预算总额",
-        "budgetTotalHint": "用于托盘菜单进度条（USD）",
-        "budgetUsedAdjustment": "已用额度调整",
-        "budgetUsedAdjustmentHint": "用于补录已用金额（USD）",
-        "budgetCycle": "启用刷新周期",
-        "budgetCycleHint": "开启后按刷新时间重置预算统计",
-        "budgetCycleMode": "刷新周期",
-        "budgetCycleModeDaily": "每日",
-        "budgetCycleModeWeekly": "每周",
-        "budgetRefreshTime": "刷新时间",
-        "budgetRefreshDay": "刷新星期",
-        "weekdayMon": "周一",
-        "weekdayTue": "周二",
-        "weekdayWed": "周三",
-        "weekdayThu": "周四",
-        "weekdayFri": "周五",
-        "weekdaySat": "周六",
-        "weekdaySun": "周日",
-        "budgetShowCountdown": "显示重置倒计时",
-        "budgetShowForecast": "显示预算耗尽预测",
-        "budgetForecastMethod": "预测方法",
-        "budgetForecastMethodHint": "选择预算耗尽预测的计算方式",
-        "budgetForecastMethodCycle": "本周期平均速度",
-        "budgetForecastMethod10m": "近 10 分钟速度",
-        "budgetForecastMethod1h": "近 1 小时速度",
-        "budgetForecastMethodYesterday": "昨日平均速度",
-        "budgetForecastMethod24h": "近 24 小时速度",
-        "trayPanelClaude": "Claude Code",
-        "trayPanelCodex": "Codex",
-        "enableTrayPopup": "启用托盘弹窗",
-        "enableTrayPopupHint": "关闭后点击托盘图标直接打开主窗口（仅 macOS；重新开启需重启应用）",
-        "autoStart": "开机自启动",
         "switchNotify": "切换通知",
-        "switchNotifyHint": "供应商切换或拉黑时发送系统通知",
+        "switchNotifyHintWeb": "供应商切换或拉黑时通过 WebUI 实时通知",
         "roundRobin": "同 Level 轮询",
         "roundRobinHint": "启用后同 Level 的供应商轮流处理请求，关闭则始终从第一个开始",
-        "autoUpdate": "自动更新",
-        "lastCheck": "上次检查",
-        "currentVersion": "当前版本",
-        "latestVersion": "最新版本",
-        "checkNow": "立即检查",
-        "manualUpdate": "手动更新",
-        "automatic_up": "自动检查更新",
-        "next_up": "下次启动自动检查更新",
         "autoConnectivityTest": "自动可用性监控",
         "autoConnectivityTestHint": "启用后会每分钟自动检测已启用监控的供应商可用性",
         "autoSyncModels": "自动同步模型与价格",
         "autoSyncModelsHint": "每天从 llm-metadata 数据源同步最新模型目录与价格，默认模型自动跟随最新",
         "modelSyncStatus": "同步状态",
-        "modelSyncDefaults": "当前默认模型",
-        "modelSyncActions": "操作",
         "modelSyncNow": "立即同步",
         "modelSyncRunning": "同步中...",
         "modelRestoreBuiltin": "恢复内置数据",
@@ -692,329 +455,29 @@
         "modelSyncSummary": "上次同步：{time} · 价格表共 {count} 个条目",
         "modelSyncFailed": "同步失败：",
         "modelRestoreFailed": "恢复内置数据失败：",
+        "modelRestored": "已恢复内置模型与价格数据",
         "settingsSaveFailed": "设置保存失败：",
+        "saved": "设置已保存",
         "blacklistThreshold": "失败次数阈值",
         "blacklistDuration": "拉黑时长",
-        "saveBlacklist": "保存配置",
+        "minutes": "分钟",
         "enableBlacklist": "启用拉黑功能",
         "enableBlacklistHint": "关闭后将不再自动拉黑失败的供应商",
         "enableLevelBlacklist": "启用等级拉黑",
         "enableLevelBlacklistHint": "开启后使用分级拉黑机制（L1-L5），关闭则使用固定时长",
         "times": "次",
-        "minutes": "分钟",
         "save": "保存",
         "saving": "保存中...",
         "settingsLoadFailed": "设置加载失败，为避免覆盖已有配置，本次修改未保存，正在重新加载设置"
       },
-      "subLabel": {
-        "sb_assistant_access": "需要无障碍访问权限来操作剪切板内容",
-        "sb_disk_access": "需要完全磁盘访问权限来实现文件预览"
-      },
-      "buttons": {
-        "authorized": "已授权",
-        "go_authorized": "去授权",
-        "back": "返回首页"
-      },
-      "import": {
-        "configPath": "配置文件路径",
-        "pathPlaceholder": "输入 cc-switch 配置文件路径",
-        "status": "配置状态",
-        "loading": "加载中...",
-        "configFound": "已找到配置文件",
-        "configNotFound": "未找到配置文件",
-        "pendingCount": "{providers} 个供应商，{mcp} 个 MCP，{prompts} 个提示词",
-        "action": "导入操作",
-        "importBtn": "导入配置",
-        "importing": "导入中...",
-        "success": "导入成功：{providers} 个供应商，{mcp} 个 MCP 服务器，{prompts} 个提示词（提示词默认未启用，可在提示词页手动启用）",
-        "partial": "部分导入完成：{providers} 个供应商，{mcp} 个 MCP，{prompts} 个提示词。失败原因：{error}",
-        "nothingToImport": "没有需要导入的配置（可能已全部导入）",
-        "failed": "导入失败",
-        "fileNotFound": "配置文件不存在，请检查路径是否正确"
-      },
-      "export": {
-        "title": "配置导出",
-        "includeSecrets": "包含明文凭据",
-        "redactedHint": "默认脱敏：清除已识别的密钥字段（不扫描提示词等自由文本）",
-        "secretsWarning": "导出文件将包含明文凭据（密钥/令牌等），请勿放入共享或同步目录",
-        "confirmSecrets": "确定要导出包含明文凭据的配置包吗？拿到该文件的任何人都能使用你的密钥与令牌。",
-        "action": "导出操作",
-        "exportBtn": "导出配置包",
-        "exporting": "导出中...",
-        "success": "已导出到 {path}：{providers} 个供应商，{mcp} 个 MCP，{prompts} 个提示词",
-        "redactedNote": "已清除 {count} 处凭据字段；该包可导回本应用，恢复的供应商为禁用状态，补上凭据即可启用",
-        "secretsNote": "该文件包含明文凭据，请妥善保管",
-        "failed": "导出失败"
-      },
-      "maintenance": {
-        "title": "数据维护",
-        "vacuumLabel": "回收数据库磁盘空间",
-        "vacuumHint": "清空/删除抓包记录后文件不会自动变小，回收会重写数据库文件以真正释放空间",
-        "vacuumBtn": "立即回收",
-        "vacuumRunning": "回收中...",
-        "vacuumConfirm": "回收会重写整个数据库文件，期间新请求的日志不会入库，耗时可能较长（数据量大时数分钟），建议在应用空闲时执行。确定继续？",
-        "vacuumSuccess": "回收完成：已释放 {freed}（{before} → {after}）",
-        "vacuumFailed": "回收失败："
-      }
-    },
-    "mcp": {
-      "hero": {
-        "eyebrow": "MCP 管理",
-        "title": "管理 MCP 服务器",
-        "lead": "集中维护本地 / 远程 MCP Servers，了解各平台的启用状态并快速编辑配置。"
-      },
-      "controls": {
-        "back": "返回主页",
-        "settings": "打开设置",
-        "refresh": "刷新列表",
-        "create": "新增服务器"
-      },
-      "import": {
-        "title": "批量导入 MCP 服务器",
-        "inputDesc": "粘贴 MCP 配置 JSON，支持 Claude Desktop 格式、数组格式或服务器映射格式。",
-        "placeholder": "粘贴 Claude Desktop 或标准 MCP 配置 JSON...",
-        "next": "下一步",
-        "parsing": "解析中...",
-        "back": "上一步",
-        "reviewTitle": "共解析 {count} 个服务器",
-        "selectAll": "全选",
-        "conflictNotice": "{count} 个服务器与现有配置冲突",
-        "strategySkip": "跳过冲突",
-        "strategyOverwrite": "覆盖现有",
-        "status": {
-          "new": "新增",
-          "conflict": "冲突"
-        },
-        "submit": "导入 {count} 个",
-        "importing": "导入中...",
-        "success": "成功导入 {count} 个 MCP 服务器",
-        "allSkipped": "所有服务器均已跳过，未导入任何内容",
-        "noServers": "未找到有效的服务器配置",
-        "needName": "单服务器配置需要提供名称",
-        "parseError": "JSON 解析失败",
-        "importError": "导入失败，请重试"
-      },
-      "section": {
-        "title": "已注册服务器",
-        "subtitle": "数据来自 ~/.code-switch/mcp.json，修改后立即保存"
-      },
-      "list": {
-        "loading": "正在载入服务器...",
-        "empty": "暂无 MCP 服务器，点击下方按钮快速创建",
-        "loadError": "加载 MCP 服务器失败",
-        "saveError": "保存 MCP 服务器失败",
-        "edit": "编辑服务器",
-        "delete": "删除服务器",
-        "placeholderWarning": "请先替换变量：{vars}"
-      },
-      "toast": {
-        "placeholder": "请先替换变量：{vars}"
-      },
-      "status": {
-        "active": "已启用",
-        "inactive": "未启用"
-      },
-      "types": {
-        "stdio": "本地进程 (stdio)",
-        "stdioShort": "本地进程",
-        "http": "远程 HTTP",
-        "httpShort": "HTTP 服务"
-      },
-      "platforms": {
-        "claude": "Claude Code",
-        "codex": "Codex",
-        "gemini": "Gemini CLI"
-      },
-      "form": {
-        "createTitle": "新增 MCP 服务器",
-        "editTitle": "编辑 MCP 服务器",
-        "name": "服务器名称",
-        "type": "类型",
-        "command": "执行命令",
-        "args": "命令参数",
-        "argsHint": "每行一个参数，保存时会自动按顺序传入",
-        "url": "服务地址",
-        "website": "官网地址",
-        "tips": "提示信息",
-        "tipsHint": "例如：请前往 ref.tools 获取 API Key",
-        "jsonEditor": {
-          "title": "JSON 配置",
-          "dirty": "未应用",
-          "lock": "锁定",
-          "unlock": "解锁",
-          "apply": "应用到表单",
-          "reset": "重置",
-          "hint": "此 JSON 不包含 name 与平台。名称、官网、提示与目标平台仍以表单为准。",
-          "toast": {
-            "dirtyNotApplied": "JSON 修改未应用，将按表单内容保存"
-          },
-          "errors": {
-            "empty": "请输入 JSON 内容",
-            "invalidJson": "JSON 格式无效：{message}",
-            "mustBeObject": "JSON 顶层必须是对象",
-            "typeRequired": "缺少 type 字段（必须为 stdio 或 http）",
-            "typeInvalid": "type 必须为 stdio 或 http",
-            "commandRequired": "stdio 类型需要 command",
-            "urlRequired": "http 类型需要 url",
-            "argsInvalid": "args 必须是字符串数组",
-            "envInvalid": "env 必须是对象，且所有值为字符串",
-            "applyFailed": "应用失败，请检查 JSON 内容"
-          }
-        },
-        "env": "环境变量",
-        "envKey": "变量名",
-        "envValue": "变量值",
-        "envAdd": "新增变量",
-        "envRemove": "删除变量",
-        "platforms": {
-          "title": "目标平台"
-        },
-        "actions": {
-          "cancel": "取消",
-          "save": "保存",
-          "delete": "删除"
-        },
-        "errors": {
-          "name": "请输入服务器名称",
-          "command": "stdio 类型需要提供 command",
-          "url": "http 类型需要提供 URL",
-          "duplicate": "名称已存在，请使用其他名称",
-          "noPlatformSelected": "请至少勾选一个平台（Claude Code 或 Codex）"
-        },
-        "warnings": {
-          "savedWithPlaceholders": "✅ 配置已保存，但因包含占位符（{vars}），未同步到 Claude/Codex。请填写占位符后重新保存。"
-        },
-        "deleteTitle": "删除 MCP 服务器",
-        "deleteMessage": "确认删除 {name} 吗？此操作不可撤销。"
-      }
-    },
-    "gemini": {
-      "hero": {
-        "eyebrow": "Gemini CLI 管理",
-        "title": "管理 Gemini 供应商",
-        "lead": "配置 Gemini CLI 的 API 供应商，支持 Google 官方和第三方中转服务。"
-      },
-      "controls": {
-        "back": "返回主页",
-        "settings": "打开设置",
-        "refresh": "刷新",
-        "create": "新增供应商"
-      },
-      "status": {
-        "enabled": "已启用",
-        "disabled": "未配置",
-        "active": "当前使用"
-      },
-      "auth": {
-        "oauth": "OAuth 认证",
-        "apiKey": "API Key 认证"
-      },
-      "category": {
-        "official": "官方",
-        "thirdParty": "第三方",
-        "custom": "自定义"
-      },
-      "presets": {
-        "title": "预设供应商"
-      },
-      "providers": {
-        "title": "已配置的供应商"
-      },
-      "list": {
-        "loading": "加载中...",
-        "empty": "暂无配置的供应商，点击预设卡片快速添加",
-        "edit": "编辑",
-        "delete": "删除"
-      },
-      "actions": {
-        "switch": "切换"
-      },
-      "form": {
-        "createTitle": "新增 Gemini 供应商",
-        "editTitle": "编辑 Gemini 供应商",
-        "deleteTitle": "删除供应商",
-        "deleteMessage": "确认删除 {name} 吗？此操作不可撤销。",
-        "name": "供应商名称",
-        "baseUrl": "API 地址",
-        "apiKey": "API 密钥",
-        "model": "默认模型",
-        "cancel": "取消",
-        "save": "保存",
-        "delete": "删除"
-      }
-    },
-    "skill": {
-      "hero": {
-        "eyebrow": "Skill 仓库",
-        "title": "Claude Skill",
-        "lead": "从 Skill 仓库中获取 Claude Skill，点击右上角按钮可添加更多 Skill 仓库。"
-      },
-      "platform": {
-        "claude": "Claude Code",
-        "codex": "Codex"
-      },
-      "groups": {
-        "project": "项目级技能",
-        "user": "用户级技能",
-        "available": "可用技能"
-      },
-      "actions": {
-        "back": "返回首页",
-        "loading": "处理中...",
-        "refresh": "刷新列表",
-        "view": "查看 GitHub",
-        "install": "安装",
-        "uninstall": "卸载",
-        "installError": "安装 {name} 失败，请重试",
-        "uninstallError": "卸载 {name} 失败，请重试",
-        "toggle": "启用/禁用",
-        "viewContent": "查看内容",
-        "hideContent": "收起内容",
-        "openFolder": "打开文件夹",
-        "loadFailed": "加载内容失败",
-        "toggleError": "切换技能状态失败"
-      },
-      "list": {
-        "title": "可用技能",
-        "subtitle": "描述信息来源于各目录内 SKILL.md 的 front matter。",
-        "loading": "正在加载技能...",
-        "empty": "仓库中没有可用技能。",
-        "error": "技能列表加载失败，请检查网络后重试。",
-        "noDescription": "SKILL.md 未提供描述",
-        "missingRepo": "缺少对应的仓库信息，无法安装",
-        "noInstalled": "当前没有已安装的技能"
-      },
-      "install": {
-        "title": "选择安装位置",
-        "desc": "将 {name} 安装到：",
-        "locationLabel": "安装位置",
-        "userLevel": "用户级（全局）",
-        "userLevelDesc": "~/.{platform}/skills/",
-        "projectLevel": "项目级（当前目录）",
-        "projectLevelDesc": "./.{platform}/skills/",
-        "gitWarning": "项目级技能可能需要添加到 .gitignore",
-        "installing": "安装中...",
-        "confirm": "确认安装"
-      },
-      "license": {
-        "complete": "完整条款见 {file}"
-      },
-      "repos": {
-        "open": "管理仓库",
-        "title": "技能仓库",
-        "subtitle": "维护 GitHub 仓库以加载更多技能来源。",
-        "urlPlaceholder": "https://github.com/owner/repo",
-        "branchPlaceholder": "分支",
-        "addLabel": "新增仓库",
-        "viewLabel": "打开 GitHub",
-        "removeLabel": "删除仓库",
-        "loadError": "仓库列表加载失败",
-        "addError": "新增仓库失败",
-        "removeError": "删除仓库失败",
-        "formError": "请填写所有者和仓库名称",
-        "loading": "正在加载仓库...",
-        "empty": "当前没有配置任何仓库。",
-        "branchLabel": "分支：{branch}"
+      "history": {
+        "retention": "保留天数",
+        "retentionHint": "自动清理更早的请求记录、费用统计和健康检查记录",
+        "days": "天",
+        "cleanNow": "立即清理",
+        "cleaning": "清理中...",
+        "cleaned": "已清理 {requests} 条请求记录和 {health} 条健康检查记录",
+        "cleanupFailed": "清理失败"
       }
     },
     "themesetting": {
@@ -1024,111 +487,12 @@
         "opt_system": "跟随系统"
       }
     },
-    "shortcut": {
-      "title": "快捷键",
-      "helper": "按下需要的组合键，随时唤起应用。",
-      "rows": {
-        "openMain": "打开主窗口",
-        "openPreferences": "打开偏好设置窗口"
-      },
-      "descriptions": {
-        "openMain": "必须至少包含一个修饰键和一个主键",
-        "openPreferences": "建议设置不同的组合以避免冲突"
-      },
-      "messages": {
-        "saved": "快捷键已保存",
-        "failed": "快捷键保存失败",
-        "invalid": "组合无效，请包含修饰键"
-      },
-      "placeholder": "点击并按下组合键"
-    },
-    "deeplink": {
-      "title": "从深度链接导入供应商",
-      "preview": "请确认以下信息后点击导入：",
-      "import": "导入",
-      "importing": "正在导入...",
-      "success": "导入成功！",
-      "error": {
-        "title": "导入失败"
-      },
-      "field": {
-        "name": "名称",
-        "app": "平台",
-        "homepage": "主页",
-        "endpoint": "端点",
-        "apiKey": "API密钥",
-        "model": "模型",
-        "notes": "备注"
-      }
-    },
-    "cliConfig": {
-      "title": "CLI 配置",
-      "lockedFields": "代理托管字段（只读）",
-      "editableFields": "可编辑字段",
-      "customFields": "自定义字段",
-      "noCustomFields": "暂无自定义字段，点击 + 添加",
-      "addField": "添加字段",
-      "removeField": "删除字段",
-      "keyPlaceholder": "键名",
-      "valuePlaceholder": "值",
-      "keyConflictLocked": "键名与锁定字段冲突",
-      "keyConflictPreset": "键名与预设字段冲突",
-      "keyDuplicate": "键名已存在",
-      "loading": "加载配置中...",
-      "loadError": "加载配置失败",
-      "setAsTemplate": "设为新供应商的默认模板",
-      "restoreDefault": "恢复默认",
-      "restoreConfirm": "确定恢复默认配置吗？这会覆盖当前配置。",
-      "restoreSuccess": "配置已恢复默认",
-      "restoreError": "恢复默认配置失败",
-      "templateSaved": "模板已保存",
-      "templateSaveError": "保存模板失败",
-      "jsonParseError": "JSON 格式无效，请检查输入",
-      "previewTitle": "配置文件预览",
-      "previewUnknownPath": "路径未知",
-      "smartPasteSuccess": "已识别 {format} 配置并填充字段",
-      "smartPasteFailed": "未识别粘贴内容，请使用 JSON / TOML / .env 格式",
-      "previewEditLocked": "只读",
-      "previewEditUnlocked": "已解锁",
-      "previewApply": "应用",
-      "previewReset": "还原",
-      "previewParseError": "配置格式无效，请检查语法",
-      "previewApplySuccess": "配置已应用",
-      "saveAllFailed": "所有配置文件保存失败",
-      "savePartialSuccess": "成功 {success} 个，失败 {fail} 个",
-      "tabPreview": "预览效果",
-      "tabCurrent": "磁盘现状",
-      "saveError": "保存配置失败"
-    },
-    "console": {
-      "title": "控制台",
-      "clear": "清空日志",
-      "autoScroll": "自动滚动",
-      "loading": "加载中...",
-      "empty": "暂无日志",
-      "clearConfirm": "确定清空所有控制台日志吗？",
-      "clearFailed": "清空失败："
-    },
-    "tray": {
-      "dayUnit": "天",
-      "notSet": "未设置",
-      "budgetWeekly": "本周预算",
-      "budgetDaily": "今日预算",
-      "hosting": "托管中",
-      "notHosting": "未托管",
-      "resetCountdown": "重置倒计时 {time}",
-      "resettingSoon": "即将重置",
-      "forecastExhaust": "预计耗尽 {time}",
-      "budgetReached": "已达预算",
-      "forecastNone": "预计耗尽 —",
-      "used": "已用"
-    },
     "capture": {
       "title": "抓包",
-      "subtitle": "录制代理转发的出站请求，按会话保留、可导出",
+      "subtitle": "录制代理转发的出站请求，并按会话保留",
       "recording": "录制中",
       "recordOff": "开始录制",
-      "recordHint": "开启后转发的出站请求头/正文将按会话写入（已脱敏已知认证信息，正文仍可能包含敏感内容），应用重启自动停止录制",
+      "recordHint": "开启后请求与响应会按会话原样写入，可能包含明文凭据和敏感内容；服务重启后自动停止录制",
       "toggleFailed": "切换录制失败：",
       "sessions": "抓包会话",
       "noSessions": "暂无会话，打开录制开关开始第一次抓包",
@@ -1145,12 +509,7 @@
       "clearConfirm": "确定清空所有会话的抓包内容吗？（统计数据保留；录制中会自动开启新会话）",
       "clearDone": "已清除 {count} 条请求详情",
       "clearFailed": "清空失败：",
-      "export": "导出",
-      "exporting": "导出中...",
-      "exportTitle": "选择导出内容",
-      "exportDone": "已导出 {count} 条到 {path}",
-      "exportFailed": "导出失败：",
-      "sensitiveHint": "全量不脱敏：导出与展示内容含明文 API Key 与完整对话/响应，切勿分享",
+      "sensitiveHint": "全量不脱敏：展示内容含明文 API Key 与完整对话/响应，切勿分享",
       "sizeWarning": "抓包数据已达 {size}，建议删除不需要的会话或清空以回收磁盘",
       "budgetSkipped": "响应过大，超出内存预算部分未暂存",
       "noRequests": "该会话暂无抓包的请求",

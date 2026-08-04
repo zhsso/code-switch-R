@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,29 +22,29 @@ import (
 // cloneHeaders 保留的是 Go 规范化后的键名(X-Api-Key),小写字面量 delete 删不掉。
 func TestSanitizeUpstreamHeadersDropsClientCredentials(t *testing.T) {
 	headers := map[string]string{
-		"X-Api-Key":       "client-real-key",
-		"Authorization":   "Bearer client-token",
-		"Api-Key":         "another",
-		"X-Goog-Api-Key":  "gemini-key",
-		"Accept-Encoding": "gzip, deflate",
-		"Connection":      "keep-alive",
-		"Content-Type":    "application/json",
-		"Anthropic-Beta":  "prompt-caching-2024-07-31",
+		"X-Api-Key":           "client-real-key",
+		"x-GoOg-aPi-KeY":      "client-google-key",
+		"Authorization":       "Bearer client-token",
+		"Api-Key":             "another",
+		"Accept-Encoding":     "gzip, deflate",
+		"Connection":          "keep-alive",
+		"Content-Type":        "application/json",
+		"OpenAI-Organization": "org-test",
 	}
 
 	sanitizeUpstreamHeaders(headers)
 
-	for _, name := range []string{"x-api-key", "authorization", "api-key", "x-goog-api-key", "accept-encoding", "connection"} {
+	for _, name := range []string{"x-api-key", "x-goog-api-key", "authorization", "api-key", "accept-encoding", "connection"} {
 		if got := getHeaderFold(headers, name); got != "" {
 			t.Errorf("头 %s 应被清理,实际仍为 %q", name, got)
 		}
 	}
-	// 业务头必须保留:Anthropic-Beta 承载 prompt caching 等特性开关
+	// 非凭据业务头必须保留。
 	if headers["Content-Type"] != "application/json" {
 		t.Errorf("Content-Type 被误删")
 	}
-	if headers["Anthropic-Beta"] == "" {
-		t.Errorf("Anthropic-Beta 被误删,会丢失上游特性开关")
+	if headers["OpenAI-Organization"] == "" {
+		t.Errorf("OpenAI-Organization 被误删")
 	}
 }
 
@@ -93,11 +92,11 @@ func TestForwardRequestSendsOnlyProviderCredentials(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	req, err := http.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+	req, err := http.NewRequest("POST", "/responses", strings.NewReader(`{"model":"m"}`))
 	if err != nil {
 		t.Fatalf("构造请求失败: %v", err)
 	}
-	// 客户端带上自己的凭据与压缩协商,模拟 Claude Code 的真实请求头
+	// 客户端带上自己的凭据与压缩协商，模拟 Codex 的真实请求头。
 	req.Header.Set("X-Api-Key", "client-real-key")
 	req.Header.Set("Authorization", "Bearer client-token")
 	req.Header.Set("Accept-Encoding", "gzip, deflate")
@@ -110,7 +109,7 @@ func TestForwardRequestSendsOnlyProviderCredentials(t *testing.T) {
 		Enabled:              true,
 		ConnectivityAuthType: "x-api-key",
 	}
-	ok, ferr := prs.forwardRequest(c, "claude", provider, "/v1/messages",
+	ok, ferr := prs.forwardRequest(c, CodexPlatform, provider, "/responses",
 		map[string]string{}, cloneHeaders(req.Header), []byte(`{"model":"m"}`), false, "m", 0)
 	if !ok {
 		t.Fatalf("转发应成功,实际失败: %v", ferr)
@@ -163,16 +162,16 @@ func TestIsClientSideUpstreamStatus(t *testing.T) {
 	}
 }
 
-// TestMaskSensitiveQuery Gemini 端点常带 ?key=<API Key>,日志必须脱敏。
+// TestMaskSensitiveQuery URL 查询参数中的凭据必须在日志中脱敏。
 func TestMaskSensitiveQuery(t *testing.T) {
 	cases := []struct {
 		in   string
 		want string
 	}{
-		{"/v1beta/models/gemini-2.5-pro:generateContent", "/v1beta/models/gemini-2.5-pro:generateContent"},
-		{"/v1beta/x?alt=sse&key=AIzaSecret", "/v1beta/x?alt=sse&key=***"},
-		{"/v1beta/x?KEY=AIzaSecret", "/v1beta/x?KEY=***"},
-		{"/v1beta/x?access_token=tok&alt=sse", "/v1beta/x?access_token=***&alt=sse"},
+		{"/responses?trace=1", "/responses?trace=1"},
+		{"/responses?stream=true&key=secret", "/responses?stream=true&key=***"},
+		{"/responses?KEY=secret", "/responses?KEY=***"},
+		{"/responses?access_token=tok&stream=true", "/responses?access_token=***&stream=true"},
 	}
 	for _, tc := range cases {
 		if got := maskSensitiveQuery(tc.in); got != tc.want {
@@ -226,101 +225,6 @@ func TestCodexUsageStreamingStillParsed(t *testing.T) {
 	}
 }
 
-// TestGeminiUsageTotalFallbackExcludesThoughts totalTokenCount 含 thoughtsTokenCount,
-// 直接 total-prompt 会把思考 token 也算进输出,与单独入库的 ReasoningTokens 重复计费。
-func TestGeminiUsageTotalFallbackExcludesThoughts(t *testing.T) {
-	data := `{"usageMetadata":{"promptTokenCount":100,"thoughtsTokenCount":40,"totalTokenCount":200}}`
-
-	usage := &ReqeustLog{}
-	GeminiParseTokenUsageFromResponse(data, usage)
-
-	if usage.ReasoningTokens != 40 {
-		t.Errorf("ReasoningTokens = %d, want 40", usage.ReasoningTokens)
-	}
-	if usage.OutputTokens != 60 {
-		t.Errorf("OutputTokens = %d, want 60(200-100-40),否则思考 token 被重复计费", usage.OutputTokens)
-	}
-}
-
-// TestGeminiUsageKeepsExplicitCandidates 上游给出 candidatesTokenCount 时不走估算分支。
-func TestGeminiUsageKeepsExplicitCandidates(t *testing.T) {
-	data := `{"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":70,"thoughtsTokenCount":40,"totalTokenCount":210}}`
-
-	usage := &ReqeustLog{}
-	GeminiParseTokenUsageFromResponse(data, usage)
-
-	if usage.OutputTokens != 70 {
-		t.Errorf("OutputTokens = %d, want 70(上游显式值)", usage.OutputTokens)
-	}
-}
-
-// TestAnthropicSSEConverterEmitsEventLines Anthropic 流式规范要求每个事件带 "event: <类型>" 行,
-// 官方 anthropic SDK(Claude Code 使用)按事件名分发,只有 data: 行的流会被整体丢弃。
-func TestAnthropicSSEConverterEmitsEventLines(t *testing.T) {
-	conv := NewOpenAIToAnthropicSSEConverter("test-model")
-
-	out := conv.ProcessLine(`data: {"choices":[{"delta":{"content":"hi"}}]}`)
-	for _, want := range []string{"event: message_start", "event: content_block_start", "event: content_block_delta"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("输出缺少 %q\n实际输出:\n%s", want, out)
-		}
-	}
-	// data: 行必须仍然存在,代理自身的 usage 解析只看 data:
-	if !strings.Contains(out, "data: {") {
-		t.Errorf("输出缺少 data: 行:\n%s", out)
-	}
-
-	done := conv.ProcessLine("data: [DONE]")
-	for _, want := range []string{"event: content_block_stop", "event: message_delta", "event: message_stop"} {
-		if !strings.Contains(done, want) {
-			t.Errorf("终止事件缺少 %q\n实际输出:\n%s", want, done)
-		}
-	}
-
-	// 每个事件块的 event: 行必须紧跟一个 data: 行
-	for _, block := range strings.Split(strings.TrimSpace(out+done), "\n\n") {
-		lines := strings.Split(strings.TrimSpace(block), "\n")
-		if len(lines) != 2 || !strings.HasPrefix(lines[0], "event: ") || !strings.HasPrefix(lines[1], "data: ") {
-			t.Errorf("事件块格式不符 SSE 规范: %q", block)
-		}
-	}
-}
-
-// TestAnthropicSSEConverterFinalizeOnAbruptEnd 上游未发 [DONE] 就断流时必须补齐终止事件,
-// 否则客户端一直等 message_stop,且 message_delta 里的 usage 也随之丢失。
-func TestAnthropicSSEConverterFinalizeOnAbruptEnd(t *testing.T) {
-	conv := NewOpenAIToAnthropicSSEConverter("test-model")
-	conv.ProcessLine(`data: {"usage":{"prompt_tokens":30,"completion_tokens":7},"choices":[{"delta":{"content":"hi"}}]}`)
-
-	tail := conv.FinalizeIfUnterminated()
-	if !strings.Contains(tail, "event: message_stop") {
-		t.Fatalf("断流后应补齐 message_stop,实际:\n%s", tail)
-	}
-
-	// 补齐的 message_delta 必须带上已捕获的 usage,供计费落库
-	usage := &ReqeustLog{}
-	parseEventPayload(tail, ClaudeCodeParseTokenUsageFromResponse, usage)
-	if usage.InputTokens != 30 || usage.OutputTokens != 7 {
-		t.Errorf("补齐事件未带上 usage: input=%d output=%d, want 30/7", usage.InputTokens, usage.OutputTokens)
-	}
-
-	// 已终止后重复调用不应再输出
-	if again := conv.FinalizeIfUnterminated(); again != "" {
-		t.Errorf("重复 finalize 应返回空串,实际:\n%s", again)
-	}
-}
-
-// TestAnthropicSSEConverterFinalizeNoopAfterDone 正常收到 [DONE] 后不应重复补事件。
-func TestAnthropicSSEConverterFinalizeNoopAfterDone(t *testing.T) {
-	conv := NewOpenAIToAnthropicSSEConverter("test-model")
-	conv.ProcessLine(`data: {"choices":[{"delta":{"content":"hi"}}]}`)
-	conv.ProcessLine("data: [DONE]")
-
-	if tail := conv.FinalizeIfUnterminated(); tail != "" {
-		t.Errorf("已正常终止,不应再补事件,实际:\n%s", tail)
-	}
-}
-
 // TestEnsureRequestLogCreatedAtOnLegacyTable SQLite 不允许 ALTER TABLE ADD COLUMN 带
 // CURRENT_TIMESTAMP 这类非常量默认值。建表时没有 created_at 的旧库若走通用迁移会直接失败,
 // 让 InitDatabase 报错、应用无法启动;迁移后新插入的行还必须能拿到时间戳。
@@ -336,7 +240,7 @@ func TestEnsureRequestLogCreatedAtOnLegacyTable(t *testing.T) {
 		id INTEGER PRIMARY KEY AUTOINCREMENT, platform TEXT, model TEXT, provider TEXT)`); err != nil {
 		t.Fatalf("建旧表失败: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO request_log (platform) VALUES ('claude')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO request_log (platform) VALUES ('codex')`); err != nil {
 		t.Fatalf("写历史数据失败: %v", err)
 	}
 
@@ -384,7 +288,7 @@ func TestEnsureRequestLogTableOnFreshDB(t *testing.T) {
 	if err := ensureRequestLogTableWithDB(db); err != nil {
 		t.Fatalf("新库建表失败: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO request_log (platform) VALUES ('claude')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO request_log (platform) VALUES ('codex')`); err != nil {
 		t.Fatalf("插入失败: %v", err)
 	}
 	var createdAt sql.NullString
@@ -437,11 +341,11 @@ func TestProxyHandlerRejectsInvalidJSONBody(t *testing.T) {
 
 	prs := newTestRelayService(NewProviderService())
 	router := gin.New()
-	router.POST("/v1/messages", prs.proxyHandler("claude", "/v1/messages"))
+	router.POST("/responses", prs.proxyHandler(CodexPlatform, "/responses"))
 
 	for _, body := range []string{"", "not-json", "{\"model\":"} {
 		recorder := httptest.NewRecorder()
-		req, _ := http.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+		req, _ := http.NewRequest("POST", "/responses", strings.NewReader(body))
 		router.ServeHTTP(recorder, req)
 
 		if recorder.Code != http.StatusBadRequest {
@@ -455,8 +359,8 @@ func TestProxyHandlerRejectsInvalidJSONBody(t *testing.T) {
 	}
 }
 
-// TestStripCredentialQueryParams Gemini REST 支持 ?key=<API Key>,原样转发会把用户本机的
-// 真实 Key 发给降级链上每一个第三方供应商;非凭据参数(alt=sse 等)必须原样保留。
+// TestStripCredentialQueryParams 查询串中的真实凭据不能转发给降级链上的第三方供应商；
+// 非凭据参数必须原样保留。
 func TestStripCredentialQueryParams(t *testing.T) {
 	cases := []struct {
 		name string
@@ -464,10 +368,10 @@ func TestStripCredentialQueryParams(t *testing.T) {
 		want string
 	}{
 		{"空查询串", "", ""},
-		{"剔除 key", "alt=sse&key=AIzaSecret", "alt=sse"},
-		{"大小写不敏感", "KEY=AIzaSecret&alt=sse", "alt=sse"},
+		{"剔除 key", "stream=true&key=secret", "stream=true"},
+		{"大小写不敏感", "KEY=secret&stream=true", "stream=true"},
 		{"剔除多种凭据", "key=a&access_token=b&api_key=c&alt=sse&token=d", "alt=sse"},
-		{"只有凭据时清空", "key=AIzaSecret", ""},
+		{"只有凭据时清空", "key=secret", ""},
 		{"非凭据参数原样保留", "alt=sse&pageSize=10", "alt=sse&pageSize=10"},
 		{"值中的等号与编码不被改写", "alt=sse&filter=a%3Db%3Dc", "alt=sse&filter=a%3Db%3Dc"},
 		{"无值参数保留", "prettyPrint&alt=sse", "prettyPrint&alt=sse"},
@@ -505,7 +409,7 @@ func TestRespondAllProvidersFailedStatus(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
-			c.Request, _ = http.NewRequest("POST", "/v1/messages", nil)
+			c.Request, _ = http.NewRequest("POST", "/responses", nil)
 
 			respondAllProvidersFailed(c, tc.lastError, tc.allClientErrors, gin.H{"error": "all failed"})
 
@@ -540,10 +444,10 @@ func TestForwardRequestDegradesWhenNothingWritten(t *testing.T) {
 	prs := newTestRelayService(NewProviderService())
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request, _ = http.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+	c.Request, _ = http.NewRequest("POST", "/responses", strings.NewReader(`{"model":"m"}`))
 
 	provider := Provider{Name: "p1", APIURL: upstream.URL, APIKey: "k", Enabled: true}
-	ok, err := prs.forwardRequest(c, "claude", provider, "/v1/messages",
+	ok, err := prs.forwardRequest(c, CodexPlatform, provider, "/responses",
 		map[string]string{}, map[string]string{}, []byte(`{"model":"m"}`), true, "m", 0)
 
 	if ok {
@@ -555,115 +459,6 @@ func TestForwardRequestDegradesWhenNothingWritten(t *testing.T) {
 	}
 	if errors.Is(err, errUpstreamStreamAborted) {
 		t.Errorf("未写出任何字节却被判为已部分写出，调用方会放弃降级: %v", err)
-	}
-}
-
-// TestRelayConnectAddressNormalizesBindAddress 绑定地址不能直接当连接地址写进 CLI 配置：
-// lan 模式绑的是 0.0.0.0，把它写成 base_url 客户端根本连不上
-// （Windows 上 connect 0.0.0.0 直接返回 WSAEADDRNOTAVAIL）。
-func TestRelayConnectAddressNormalizesBindAddress(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"回环原样保留", "127.0.0.1:18100", "127.0.0.1:18100"},
-		{"全网卡归一为回环", "0.0.0.0:18100", "127.0.0.1:18100"},
-		{"IPv6 全网卡归一为回环", "[::]:18100", "127.0.0.1:18100"},
-		{"省略 host 归一为回环", ":18100", "127.0.0.1:18100"},
-		{"具体网卡地址保留", "172.20.16.1:18100", "172.20.16.1:18100"},
-		{"非法地址回落", "not-an-address", "127.0.0.1:18100"},
-		{"空串回落", "", "127.0.0.1:18100"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := RelayConnectAddress(tc.in); got != tc.want {
-				t.Errorf("RelayConnectAddress(%q) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
-	}
-}
-
-// TestResolveRelayListenAddressFallsBackToLoopback 网络设置缺失或损坏时必须回落到仅回环，
-// 绝不能意外绑到全网卡把带供应商密钥的代理暴露出去。
-func TestResolveRelayListenAddressFallsBackToLoopback(t *testing.T) {
-	const loopback = "127.0.0.1:18100"
-
-	t.Run("设置文件不存在", func(t *testing.T) {
-		tmp := t.TempDir()
-		t.Setenv("HOME", tmp)
-		t.Setenv("USERPROFILE", tmp)
-		assertHomeIsolated(t, tmp)
-
-		if got := ResolveRelayListenAddress(); got != loopback {
-			t.Errorf("无设置文件时应回落到 %s，实际 %s", loopback, got)
-		}
-	})
-
-	t.Run("设置文件损坏", func(t *testing.T) {
-		tmp := t.TempDir()
-		t.Setenv("HOME", tmp)
-		t.Setenv("USERPROFILE", tmp)
-		assertHomeIsolated(t, tmp)
-
-		dir := filepath.Join(tmp, appSettingsDir)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("建目录失败: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, networkSettingsFile), []byte("{not json"), 0o644); err != nil {
-			t.Fatalf("写损坏设置失败: %v", err)
-		}
-
-		if got := ResolveRelayListenAddress(); got != loopback {
-			t.Errorf("设置损坏时应回落到 %s，实际 %s", loopback, got)
-		}
-	})
-
-	t.Run("显式 lan 模式绑全网卡", func(t *testing.T) {
-		tmp := t.TempDir()
-		t.Setenv("HOME", tmp)
-		t.Setenv("USERPROFILE", tmp)
-		assertHomeIsolated(t, tmp)
-
-		dir := filepath.Join(tmp, appSettingsDir)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("建目录失败: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, networkSettingsFile),
-			[]byte(`{"listenMode":"lan"}`), 0o644); err != nil {
-			t.Fatalf("写设置失败: %v", err)
-		}
-
-		got := ResolveRelayListenAddress()
-		if got != "0.0.0.0:18100" {
-			t.Errorf("lan 模式应绑 0.0.0.0:18100，实际 %s", got)
-		}
-		// 但写进 CLI 配置的连接地址必须归一化，否则客户端连不上
-		if conn := RelayConnectAddress(got); conn != loopback {
-			t.Errorf("lan 模式的连接地址应为 %s，实际 %s", loopback, conn)
-		}
-	})
-}
-
-// TestGeminiClientErrorNotCountedAsProviderFailure Gemini 路径也必须区分
-// "上游拒绝请求内容"与"供应商故障"，否则一个坏请求会把全部 Gemini 供应商拉黑。
-func TestGeminiClientErrorNotCountedAsProviderFailure(t *testing.T) {
-	cases := []struct {
-		name   string
-		errMsg string
-		want   bool
-	}{
-		{"请求内容被拒", geminiClientErrorPrefix + "HTTP 400: bad request", true},
-		{"普通供应商故障", "HTTP 503: upstream down", false},
-		{"客户端中断", geminiClientAbortMsg, false},
-		{"空错误", "", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := isGeminiClientError(tc.errMsg); got != tc.want {
-				t.Errorf("isGeminiClientError(%q) = %v, want %v", tc.errMsg, got, tc.want)
-			}
-		})
 	}
 }
 
@@ -707,104 +502,8 @@ func TestCheckNonStreamTruncated(t *testing.T) {
 	}
 }
 
-// TestResolveRelayListenAddressesWSLAutoKeepsLoopback wsl_auto 必须保留回环为主地址：
-// 只绑 WSL 网卡会让本机 CLI 全部连不上，绑 0.0.0.0 又会把无鉴权、
-// 自动注入供应商密钥的代理暴露给整个物理局域网。
-func TestResolveRelayListenAddressesWSLAutoKeepsLoopback(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	t.Setenv("USERPROFILE", tmp)
-	assertHomeIsolated(t, tmp)
-
-	dir := filepath.Join(tmp, appSettingsDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("建目录失败: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, networkSettingsFile),
-		[]byte(`{"listenMode":"wsl_auto"}`), 0o644); err != nil {
-		t.Fatalf("写设置失败: %v", err)
-	}
-
-	addrs := ResolveRelayListenAddresses()
-	if len(addrs) == 0 {
-		t.Fatal("至少应返回一个监听地址")
-	}
-	if addrs[0] != "127.0.0.1:18100" {
-		t.Errorf("主监听地址应为回环，实际 %s", addrs[0])
-	}
-	for _, a := range addrs {
-		if strings.HasPrefix(a, "0.0.0.0:") {
-			t.Errorf("wsl_auto 不应绑定 0.0.0.0（会暴露到物理局域网），实际地址列表 %v", addrs)
-		}
-	}
-	// 连接地址始终由主地址派生，必须可连
-	if conn := RelayConnectAddress(addrs[0]); conn != "127.0.0.1:18100" {
-		t.Errorf("连接地址 = %s, want 127.0.0.1:18100", conn)
-	}
-}
-
-// TestRelayStartBindsExtraAddresses 额外监听地址应真正被绑定，
-// 且其中一个失败不能影响主地址继续服务。
-func TestRelayStartBindsExtraAddresses(t *testing.T) {
-	setupRenameTestEnv(t)
-
-	// 先占住一个端口，用它当"必然绑定失败"的额外地址
-	occupied, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("占位监听失败: %v", err)
-	}
-	defer occupied.Close()
-
-	// 主地址取一个空闲端口
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("探测空闲端口失败: %v", err)
-	}
-	primary := probe.Addr().String()
-	_ = probe.Close()
-
-	prs := newTestRelayService(NewProviderService())
-	prs.addr = primary
-	prs.extraAddrs = []string{occupied.Addr().String()}
-
-	if err := prs.Start(); err != nil {
-		t.Fatalf("额外地址绑定失败不应导致启动失败: %v", err)
-	}
-	defer prs.Stop()
-
-	// 主地址必须真的在监听
-	conn, err := net.Dial("tcp", primary)
-	if err != nil {
-		t.Fatalf("主地址未在监听: %v", err)
-	}
-	_ = conn.Close()
-}
-
-// TestIsLoopbackHostPort WSL2 里的 127.0.0.1 是 WSL 自己的回环，到不了宿主机代理，
-// 因此判断"WSL 能否访问"时必须把回环地址排除掉。
-func TestIsLoopbackHostPort(t *testing.T) {
-	cases := []struct {
-		in   string
-		want bool
-	}{
-		{"127.0.0.1:18100", true},
-		{"127.0.0.5:18100", true},
-		{"localhost:18100", true},
-		{"[::1]:18100", true},
-		{"0.0.0.0:18100", false},
-		{"172.20.144.1:18100", false},
-		{"不是地址", false},
-		{"", false},
-	}
-	for _, tc := range cases {
-		if got := isLoopbackHostPort(tc.in); got != tc.want {
-			t.Errorf("isLoopbackHostPort(%q) = %v, want %v", tc.in, got, tc.want)
-		}
-	}
-}
-
 // TestBoundAddressesReflectsActualListeners 监听地址在启动时冻结，
-// UI 展示与"WSL 能不能连"的判断都要以实际绑定为准。
+// UI 展示必须以实际绑定为准。
 func TestBoundAddressesReflectsActualListeners(t *testing.T) {
 	setupRenameTestEnv(t)
 
@@ -840,7 +539,7 @@ func TestBoundAddressesReflectsActualListeners(t *testing.T) {
 }
 
 // TestBoundAddressesClearedAfterStop 停掉之后再对外报告"正在监听 xxx"
-// 会误导 UI 与 WSL 可达性判断。
+// 会误导 UI。
 func TestBoundAddressesClearedAfterStop(t *testing.T) {
 	setupRenameTestEnv(t)
 
@@ -869,108 +568,6 @@ func TestBoundAddressesClearedAfterStop(t *testing.T) {
 	}
 }
 
-// TestResolveWSLReachableAddress WSL 可达性判定必须覆盖三种网络形态，
-// 既不能把合法场景误杀（镜像模式、绑具体网卡），也不能对真正不可达的情况报成功。
-func TestResolveWSLReachableAddress(t *testing.T) {
-	ns := &NetworkService{}
-
-	cases := []struct {
-		name     string
-		wslHost  string
-		bound    []string
-		want     string
-		wantFail bool
-	}{
-		{
-			name:    "绑全部网卡且探测到 WSL 网段",
-			wslHost: "172.20.144.1",
-			bound:   []string{"0.0.0.0:18100"},
-			want:    "172.20.144.1:18100",
-		},
-		{
-			name:    "回环+WSL 网段双监听",
-			wslHost: "172.20.144.1",
-			bound:   []string{"127.0.0.1:18100", "172.20.144.1:18100"},
-			want:    "172.20.144.1:18100",
-		},
-		{
-			// custom 模式绑具体局域网 IP：NAT 下的 WSL 能路由到宿主机局域网地址，
-			// 不该一律拒绝
-			name:    "绑具体局域网网卡",
-			wslHost: "172.20.144.1",
-			bound:   []string{"192.168.1.10:18100"},
-			want:    "192.168.1.10:18100",
-		},
-		{
-			// networkingMode=mirrored 下没有 vEthernet(WSL) 网卡，
-			// 且 WSL 内的 127.0.0.1 就是宿主机回环
-			name:    "镜像模式：探测不到网卡且只绑回环",
-			wslHost: "",
-			bound:   []string{"127.0.0.1:18100"},
-			want:    "127.0.0.1:18100",
-		},
-		{
-			name:    "自定义端口的镜像模式",
-			wslHost: "",
-			bound:   []string{"127.0.0.1:9000"},
-			want:    "127.0.0.1:9000",
-		},
-		{
-			// NAT 模式（探测到网卡）却只绑回环：真的连不上，必须失败
-			name:     "NAT 模式只绑回环",
-			wslHost:  "172.20.144.1",
-			bound:    []string{"127.0.0.1:18100"},
-			wantFail: true,
-		},
-		{
-			name:     "代理未启动",
-			wslHost:  "172.20.144.1",
-			bound:    nil,
-			wantFail: true,
-		},
-		{
-			// 绑全部网卡必然覆盖回环，严格比"只绑回环"更可达；
-			// 探测不到网卡按镜像模式处理，不能反而判失败
-			name:    "镜像模式下绑全部网卡",
-			wslHost: "",
-			bound:   []string{"0.0.0.0:18100"},
-			want:    "127.0.0.1:18100",
-		},
-		{
-			// 解析不了的地址不能影响判定，更不能被当成"只绑回环"而误报可达
-			name:     "监听地址全部无法解析",
-			wslHost:  "",
-			bound:    []string{"这不是地址", "也不是"},
-			wantFail: true,
-		},
-		{
-			// 混合输入：无法解析的项被跳过，回环项决定走镜像模式分支并沿用其端口
-			name:    "无法解析项混在回环里",
-			wslHost: "",
-			bound:   []string{"垃圾", "127.0.0.1:9100"},
-			want:    "127.0.0.1:9100",
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, failure := ns.resolveWSLReachableAddress(tc.wslHost, tc.bound)
-			if tc.wantFail {
-				if got != "" {
-					t.Errorf("应判定为不可达，实际返回 %q", got)
-				}
-				if failure == "" {
-					t.Errorf("不可达时必须给出失败原因")
-				}
-				return
-			}
-			if got != tc.want {
-				t.Errorf("可达地址 = %q, want %q（失败原因: %s）", got, tc.want, failure)
-			}
-		})
-	}
-}
-
 // respondNoEligibleProviders 按跳过原因分支输出可操作的排查文案（issue #29）
 func TestRespondNoEligibleProvidersBranches(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -986,7 +583,7 @@ func TestRespondNoEligibleProvidersBranches(t *testing.T) {
 		msg, _ := body["error"].(string)
 		return msg
 	}
-	if msg := run("claude-x", 2, 1, 0); !strings.Contains(msg, "claude-x") ||
+	if msg := run("gpt-x", 2, 1, 0); !strings.Contains(msg, "gpt-x") ||
 		!strings.Contains(msg, "白名单") || !strings.Contains(msg, "拉黑") {
 		t.Errorf("白名单分支文案缺要素: %s", msg)
 	}

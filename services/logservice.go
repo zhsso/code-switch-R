@@ -16,11 +16,26 @@ import (
 const timeLayout = "2006-01-02 15:04:05"
 
 type LogService struct {
-	pricing *modelpricing.Service
+	pricing         *modelpricing.Service
+	providerService *ProviderService
+}
+
+type costContext struct {
+	multipliers    map[string]float64
+	resolveAliases bool
 }
 
 func (ls *LogService) CostSince(start string, platform string) (float64, error) {
+	if platform != "" {
+		if err := requireCodexPlatform(platform); err != nil {
+			return 0, err
+		}
+	}
 	startTime, err := parseTimeInput(start)
+	if err != nil {
+		return 0, err
+	}
+	costs, err := ls.newCostContext()
 	if err != nil {
 		return 0, err
 	}
@@ -29,20 +44,16 @@ func (ls *LogService) CostSince(start string, platform string) (float64, error) 
 	// 查询边界必须先转 UTC 再格式化,否则非 UTC 时区下与存储口径错位
 	options := []xdb.Option{
 		xdb.WhereGte("created_at", startTime.UTC().Format(timeLayout)),
+		xdb.WhereEq("platform", CodexPlatform),
 		xdb.Field(
+			"provider",
 			"model",
 			"input_tokens",
 			"output_tokens",
 			"reasoning_tokens",
-			"cache_create_tokens",
 			"cache_read_tokens",
-			"ephemeral_5m_tokens",
-			"ephemeral_1h_tokens",
 			"service_tier",
 		),
-	}
-	if platform != "" {
-		options = append(options, xdb.WhereEq("platform", platform))
 	}
 	records, err := model.Selects(options...)
 	if err != nil {
@@ -54,48 +65,137 @@ func (ls *LogService) CostSince(start string, platform string) (float64, error) 
 	total := 0.0
 	for _, record := range records {
 		usage := buildSnapshotFromRecord(record)
-		cost := ls.calculateCost(record.GetString("model"), usage)
+		cost := ls.calculateCost(costs, record.GetString("provider"), record.GetString("model"), usage)
 		total += cost.TotalCost
 	}
 	return total, nil
 }
 
-// buildSnapshotFromRecord 从 request_log 记录构造定价输入,统一处理 ephemeral 拆分 + service_tier。
+// buildSnapshotFromRecord 从 Codex request_log 记录构造定价输入。
 func buildSnapshotFromRecord(record xdb.Record) modelpricing.UsageSnapshot {
-	total := record.GetInt("cache_create_tokens")
-	fiveM := record.GetInt("ephemeral_5m_tokens")
-	oneH := record.GetInt("ephemeral_1h_tokens")
-	snap := modelpricing.UsageSnapshot{
-		InputTokens:       record.GetInt("input_tokens"),
-		OutputTokens:      record.GetInt("output_tokens"),
-		ReasoningTokens:   record.GetInt("reasoning_tokens"),
-		CacheCreateTokens: total,
-		CacheReadTokens:   record.GetInt("cache_read_tokens"),
-		ServiceTier:       modelpricing.ServiceTier(strings.ToLower(strings.TrimSpace(record.GetString("service_tier")))),
+	return modelpricing.UsageSnapshot{
+		InputTokens:     record.GetInt("input_tokens"),
+		OutputTokens:    record.GetInt("output_tokens"),
+		ReasoningTokens: record.GetInt("reasoning_tokens"),
+		CacheReadTokens: record.GetInt("cache_read_tokens"),
+		ServiceTier:     modelpricing.ServiceTier(strings.ToLower(strings.TrimSpace(record.GetString("service_tier")))),
 	}
-	if fiveM > 0 || oneH > 0 {
-		snap.CacheCreation = &modelpricing.CacheCreationDetail{
-			Ephemeral5mTokens: fiveM,
-			Ephemeral1hTokens: oneH,
-		}
-	}
-	return snap
 }
 
-func NewLogService() *LogService {
+func NewLogService(providerServices ...*ProviderService) *LogService {
 	svc, err := modelpricing.DefaultService()
 	if err != nil {
 		log.Printf("pricing service init failed: %v", err)
 	}
-	return &LogService{pricing: svc}
+	var providerService *ProviderService
+	if len(providerServices) > 0 {
+		providerService = providerServices[0]
+	}
+	return &LogService{pricing: svc, providerService: providerService}
+}
+
+func (ls *LogService) newCostContext() (*costContext, error) {
+	context := &costContext{multipliers: make(map[string]float64)}
+	if ls == nil || ls.providerService == nil {
+		return context, nil
+	}
+
+	providers, err := ls.providerService.LoadProviders(CodexPlatform)
+	if err != nil {
+		return nil, fmt.Errorf("加载 Provider 费用倍率失败: %w", err)
+	}
+	for _, provider := range providers {
+		if err := validateCostMultiplier(provider.CostMultiplier); err != nil {
+			return nil, fmt.Errorf("Provider %q: %w", provider.Name, err)
+		}
+		name := strings.TrimSpace(provider.Name)
+		if name != "" {
+			context.multipliers[name] = provider.EffectiveCostMultiplier()
+		}
+	}
+	context.resolveAliases = true
+	return context, nil
+}
+
+func (context *costContext) multiplierFor(provider string) float64 {
+	if context == nil {
+		return 1
+	}
+	name := strings.TrimSpace(provider)
+	if multiplier, ok := context.multipliers[name]; ok {
+		return multiplier
+	}
+	if context.resolveAliases && name != "" {
+		canonical := ResolveProviderAlias(CodexPlatform, name)
+		if multiplier, ok := context.multipliers[canonical]; ok {
+			context.multipliers[name] = multiplier
+			return multiplier
+		}
+	}
+	context.multipliers[name] = 1
+	return 1
+}
+
+// CleanupOldRecords removes request and cost history older than the configured
+// retention window. Capture session metadata is removed only after its session
+// is closed and no request rows remain.
+func (ls *LogService) CleanupOldRecords(daysToKeep int) (int64, error) {
+	if daysToKeep < 1 {
+		return 0, fmt.Errorf("history retention must be at least one day")
+	}
+	db, err := xdb.DB("default")
+	if err != nil {
+		return 0, fmt.Errorf("get database: %w", err)
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -daysToKeep).Format(timeLayout)
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin history cleanup: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	result, err := tx.Exec(
+		`DELETE FROM request_log WHERE platform = ? AND created_at < ?`,
+		CodexPlatform,
+		cutoff,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("delete request history: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM capture_session
+		WHERE (ended_at IS NOT NULL OR interrupted != 0)
+		AND NOT EXISTS (
+			SELECT 1 FROM request_log
+			WHERE request_log.capture_session_id = capture_session.id
+			AND request_log.capture_session_id != 0
+		)`); err != nil {
+		return 0, fmt.Errorf("delete empty capture sessions: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit history cleanup: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("read cleanup result: %w", err)
+	}
+	return rows, nil
 }
 
 func (ls *LogService) ListRequestLogs(platform string, provider string, limit int) ([]ReqeustLog, error) {
+	if platform != "" {
+		if err := requireCodexPlatform(platform); err != nil {
+			return nil, err
+		}
+	}
 	if limit <= 0 {
 		limit = 100
 	}
 	if limit > 1000 {
 		limit = 1000
+	}
+	costs, err := ls.newCostContext()
+	if err != nil {
+		return nil, err
 	}
 	model := xdb.New("request_log")
 	options := []xdb.Option{
@@ -103,14 +203,11 @@ func (ls *LogService) ListRequestLogs(platform string, provider string, limit in
 		// 一页 200 行最坏能带出几百 MB 正文。has_capture 供前端判断可否展开详情。
 		// 谓词须与 capturesession.go 的 captureRowPredicate 覆盖同一批列
 		xdb.Field("id, platform, model, provider, http_code, input_tokens, output_tokens, " +
-			"cache_create_tokens, cache_read_tokens, reasoning_tokens, is_stream, duration_sec, " +
-			"created_at, ephemeral_5m_tokens, ephemeral_1h_tokens, service_tier, " +
+			"cache_read_tokens, reasoning_tokens, is_stream, duration_sec, created_at, service_tier, " +
 			"(request_url != '' OR request_headers != '' OR request_body != '' OR response_headers != '' OR response_body != '' OR body_truncated != 0 OR body_bytes != 0 OR response_truncated != 0 OR response_bytes != 0 OR budget_skipped != 0) AS has_capture"),
+		xdb.WhereEq("platform", CodexPlatform),
 		xdb.OrderByDesc("id"),
 		xdb.Limit(limit),
-	}
-	if platform != "" {
-		options = append(options, xdb.WhereEq("platform", platform))
 	}
 	if provider != "" {
 		options = append(options, xdb.WhereEq("provider", provider))
@@ -122,44 +219,40 @@ func (ls *LogService) ListRequestLogs(platform string, provider string, limit in
 	logs := make([]ReqeustLog, 0, len(records))
 	for _, record := range records {
 		logEntry := ReqeustLog{
-			ID:                record.GetInt64("id"),
-			Platform:          record.GetString("platform"),
-			Model:             record.GetString("model"),
-			Provider:          record.GetString("provider"),
-			HttpCode:          record.GetInt("http_code"),
-			InputTokens:       record.GetInt("input_tokens"),
-			OutputTokens:      record.GetInt("output_tokens"),
-			CacheCreateTokens: record.GetInt("cache_create_tokens"),
-			Ephemeral5mTokens: record.GetInt("ephemeral_5m_tokens"),
-			Ephemeral1hTokens: record.GetInt("ephemeral_1h_tokens"),
-			CacheReadTokens:   record.GetInt("cache_read_tokens"),
-			ReasoningTokens:   record.GetInt("reasoning_tokens"),
-			CreatedAt:         record.GetString("created_at"),
-			IsStream:          record.GetBool("is_stream"),
-			DurationSec:       record.GetFloat64("duration_sec"),
-			ServiceTier:       record.GetString("service_tier"),
-			HasCapture:        record.GetBool("has_capture"),
+			ID:              record.GetInt64("id"),
+			Platform:        record.GetString("platform"),
+			Model:           record.GetString("model"),
+			Provider:        record.GetString("provider"),
+			HttpCode:        record.GetInt("http_code"),
+			InputTokens:     record.GetInt("input_tokens"),
+			OutputTokens:    record.GetInt("output_tokens"),
+			CacheReadTokens: record.GetInt("cache_read_tokens"),
+			ReasoningTokens: record.GetInt("reasoning_tokens"),
+			CreatedAt:       record.GetString("created_at"),
+			IsStream:        record.GetBool("is_stream"),
+			DurationSec:     record.GetFloat64("duration_sec"),
+			ServiceTier:     record.GetString("service_tier"),
+			HasCapture:      record.GetBool("has_capture"),
 		}
-		ls.decorateCost(&logEntry)
+		ls.decorateCost(&logEntry, costs)
 		logs = append(logs, logEntry)
 	}
 	return logs, nil
 }
 
 // RequestLogDetail 单条日志的抓包详情（按需读取，避免列表携带大字段）。
-// 每个大字段仅返回有界预览（capturePreview），完整内容走导出——整段 50MiB
-// 直接塞进 <pre> 会冻死 webview
+// 每个大字段仅返回有界预览（capturePreview），避免大正文阻塞浏览器。
 type RequestLogDetail struct {
-	ID       int64  `json:"id"`
-	Platform string `json:"platform"`
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
-	CreatedAt string `json:"created_at"`
+	ID         int64  `json:"id"`
+	Platform   string `json:"platform"`
+	Provider   string `json:"provider"`
+	Model      string `json:"model"`
+	CreatedAt  string `json:"created_at"`
 	RequestURL string `json:"request_url"`
 	// 请求
 	RequestHeaders     string `json:"request_headers"`
 	RequestBody        string `json:"request_body"`
-	RequestBodyPreview bool   `json:"request_body_preview"` // 正文被预览截断（完整内容请导出）
+	RequestBodyPreview bool   `json:"request_body_preview"` // 正文被预览截断
 	BodyTruncated      bool   `json:"body_truncated"`       // 采集时即超 captureFieldLimit
 	BodyBytes          int    `json:"body_bytes"`
 	// 响应
@@ -178,6 +271,7 @@ func (ls *LogService) GetRequestLogDetail(id int64) (*RequestLogDetail, error) {
 	records, err := model.Selects(
 		xdb.Field("id, platform, provider, model, created_at, request_url, request_headers, request_body, body_truncated, body_bytes, response_headers, response_body, response_truncated, response_bytes, budget_skipped"),
 		xdb.WhereEq("id", id),
+		xdb.WhereEq("platform", CodexPlatform),
 		xdb.Limit(1),
 	)
 	if err != nil {
@@ -211,14 +305,17 @@ func (ls *LogService) GetRequestLogDetail(id int64) (*RequestLogDetail, error) {
 }
 
 func (ls *LogService) ListProviders(platform string) ([]string, error) {
+	if platform != "" {
+		if err := requireCodexPlatform(platform); err != nil {
+			return nil, err
+		}
+	}
 	model := xdb.New("request_log")
 	options := []xdb.Option{
 		xdb.Field("DISTINCT provider as provider"),
 		xdb.WhereNotEq("provider", ""),
+		xdb.WhereEq("platform", CodexPlatform),
 		xdb.OrderByAsc("provider"),
-	}
-	if platform != "" {
-		options = append(options, xdb.WhereEq("platform", platform))
 	}
 	records, err := model.Selects(options...)
 	if err != nil {
@@ -246,20 +343,23 @@ func (ls *LogService) HeatmapStats(days int) ([]HeatmapStat, error) {
 	if totalHours > 1 {
 		rangeStart = rangeStart.Add(-time.Duration(totalHours-1) * time.Hour)
 	}
+	costs, err := ls.newCostContext()
+	if err != nil {
+		return nil, err
+	}
 	model := xdb.New("request_log")
 	// created_at 存的是 UTC 文本,预滤边界须转 UTC,否则东部时区丢失窗口最旧的
 	// 时区偏移小时数、西部时区多取窗口外旧记录
 	options := []xdb.Option{
 		xdb.WhereGe("created_at", rangeStart.UTC().Format(timeLayout)),
+		xdb.WhereEq("platform", CodexPlatform),
 		xdb.Field(
+			"provider",
 			"model",
 			"input_tokens",
 			"output_tokens",
 			"reasoning_tokens",
-			"cache_create_tokens",
 			"cache_read_tokens",
-			"ephemeral_5m_tokens",
-			"ephemeral_1h_tokens",
 			"service_tier",
 			"created_at",
 		),
@@ -294,7 +394,7 @@ func (ls *LogService) HeatmapStats(days int) ([]HeatmapStat, error) {
 		bucket.InputTokens += int64(usage.InputTokens)
 		bucket.OutputTokens += int64(usage.OutputTokens)
 		bucket.ReasoningTokens += int64(usage.ReasoningTokens)
-		cost := ls.calculateCost(record.GetString("model"), usage)
+		cost := ls.calculateCost(costs, record.GetString("provider"), record.GetString("model"), usage)
 		bucket.TotalCost += cost.TotalCost
 	}
 	if len(hourBuckets) == 0 {
@@ -315,10 +415,19 @@ func (ls *LogService) HeatmapStats(days int) ([]HeatmapStat, error) {
 }
 
 func (ls *LogService) StatsSince(platform string) (LogStats, error) {
+	if platform != "" {
+		if err := requireCodexPlatform(platform); err != nil {
+			return LogStats{}, err
+		}
+	}
 	const seriesHours = 24
 
 	stats := LogStats{
 		Series: make([]LogStatsSeries, 0, seriesHours),
+	}
+	costs, err := ls.newCostContext()
+	if err != nil {
+		return stats, err
 	}
 	now := time.Now()
 	model := xdb.New("request_log")
@@ -328,22 +437,18 @@ func (ls *LogService) StatsSince(platform string) (LogStats, error) {
 	summaryStart := seriesStart
 	options := []xdb.Option{
 		xdb.WhereGte("created_at", queryStart.Format(timeLayout)),
+		xdb.WhereEq("platform", CodexPlatform),
 		xdb.Field(
+			"provider",
 			"model",
 			"input_tokens",
 			"output_tokens",
 			"reasoning_tokens",
-			"cache_create_tokens",
 			"cache_read_tokens",
-			"ephemeral_5m_tokens",
-			"ephemeral_1h_tokens",
 			"service_tier",
 			"created_at",
 		),
 		xdb.OrderByAsc("created_at"),
-	}
-	if platform != "" {
-		options = append(options, xdb.WhereEq("platform", platform))
 	}
 	records, err := model.Selects(options...)
 	if err != nil {
@@ -389,13 +494,12 @@ func (ls *LogService) StatsSince(platform string) (LogStats, error) {
 		}
 		bucket := seriesBuckets[bucketIndex]
 		usage := buildSnapshotFromRecord(record)
-		cost := ls.calculateCost(record.GetString("model"), usage)
+		cost := ls.calculateCost(costs, record.GetString("provider"), record.GetString("model"), usage)
 
 		bucket.TotalRequests++
 		bucket.InputTokens += int64(usage.InputTokens)
 		bucket.OutputTokens += int64(usage.OutputTokens)
 		bucket.ReasoningTokens += int64(usage.ReasoningTokens)
-		bucket.CacheCreateTokens += int64(usage.CacheCreateTokens)
 		bucket.CacheReadTokens += int64(usage.CacheReadTokens)
 		bucket.TotalCost += cost.TotalCost
 
@@ -406,11 +510,9 @@ func (ls *LogService) StatsSince(platform string) (LogStats, error) {
 		stats.InputTokens += int64(usage.InputTokens)
 		stats.OutputTokens += int64(usage.OutputTokens)
 		stats.ReasoningTokens += int64(usage.ReasoningTokens)
-		stats.CacheCreateTokens += int64(usage.CacheCreateTokens)
 		stats.CacheReadTokens += int64(usage.CacheReadTokens)
 		stats.CostInput += cost.InputCost
 		stats.CostOutput += cost.OutputCost
-		stats.CostCacheCreate += cost.CacheCreateCost
 		stats.CostCacheRead += cost.CacheReadCost
 		stats.CostTotal += cost.TotalCost
 	}
@@ -430,12 +532,22 @@ func (ls *LogService) StatsSince(platform string) (LogStats, error) {
 }
 
 func (ls *LogService) ProviderDailyStats(platform string) ([]ProviderDailyStat, error) {
+	if platform != "" {
+		if err := requireCodexPlatform(platform); err != nil {
+			return nil, err
+		}
+	}
+	costs, err := ls.newCostContext()
+	if err != nil {
+		return nil, err
+	}
 	start := startOfDay(time.Now())
 	end := start.Add(24 * time.Hour)
 	queryStart := start.Add(-24 * time.Hour)
 	model := xdb.New("request_log")
 	options := []xdb.Option{
 		xdb.WhereGte("created_at", queryStart.Format(timeLayout)),
+		xdb.WhereEq("platform", CodexPlatform),
 		xdb.Field(
 			"provider",
 			"model",
@@ -443,16 +555,10 @@ func (ls *LogService) ProviderDailyStats(platform string) ([]ProviderDailyStat, 
 			"input_tokens",
 			"output_tokens",
 			"reasoning_tokens",
-			"cache_create_tokens",
 			"cache_read_tokens",
-			"ephemeral_5m_tokens",
-			"ephemeral_1h_tokens",
 			"service_tier",
 			"created_at",
 		),
-	}
-	if platform != "" {
-		options = append(options, xdb.WhereEq("platform", platform))
 	}
 	records, err := model.Selects(options...)
 	if err != nil {
@@ -485,7 +591,7 @@ func (ls *LogService) ProviderDailyStats(platform string) ([]ProviderDailyStat, 
 		}
 		httpCode := record.GetInt("http_code")
 		usage := buildSnapshotFromRecord(record)
-		cost := ls.calculateCost(record.GetString("model"), usage)
+		cost := ls.calculateCost(costs, provider, record.GetString("model"), usage)
 		stat.TotalRequests++
 		// 只有 HTTP 200-299 才算成功，其他（包括 0）都算失败
 		if httpCode >= 200 && httpCode < 300 {
@@ -496,7 +602,6 @@ func (ls *LogService) ProviderDailyStats(platform string) ([]ProviderDailyStat, 
 		stat.InputTokens += int64(usage.InputTokens)
 		stat.OutputTokens += int64(usage.OutputTokens)
 		stat.ReasoningTokens += int64(usage.ReasoningTokens)
-		stat.CacheCreateTokens += int64(usage.CacheCreateTokens)
 		stat.CacheReadTokens += int64(usage.CacheReadTokens)
 		stat.CostTotal += cost.TotalCost
 	}
@@ -516,41 +621,50 @@ func (ls *LogService) ProviderDailyStats(platform string) ([]ProviderDailyStat, 
 	return stats, nil
 }
 
-func (ls *LogService) decorateCost(logEntry *ReqeustLog) {
+func (ls *LogService) decorateCost(logEntry *ReqeustLog, costs *costContext) {
 	if ls == nil || ls.pricing == nil || logEntry == nil {
 		return
 	}
 	usage := modelpricing.UsageSnapshot{
-		InputTokens:       logEntry.InputTokens,
-		OutputTokens:      logEntry.OutputTokens,
-		ReasoningTokens:   logEntry.ReasoningTokens,
-		CacheCreateTokens: logEntry.CacheCreateTokens,
-		CacheReadTokens:   logEntry.CacheReadTokens,
-		ServiceTier:       modelpricing.ServiceTier(strings.ToLower(strings.TrimSpace(logEntry.ServiceTier))),
+		InputTokens:     logEntry.InputTokens,
+		OutputTokens:    logEntry.OutputTokens,
+		ReasoningTokens: logEntry.ReasoningTokens,
+		CacheReadTokens: logEntry.CacheReadTokens,
+		ServiceTier:     modelpricing.ServiceTier(strings.ToLower(strings.TrimSpace(logEntry.ServiceTier))),
 	}
-	if logEntry.Ephemeral5mTokens > 0 || logEntry.Ephemeral1hTokens > 0 {
-		usage.CacheCreation = &modelpricing.CacheCreationDetail{
-			Ephemeral5mTokens: logEntry.Ephemeral5mTokens,
-			Ephemeral1hTokens: logEntry.Ephemeral1hTokens,
-		}
-	}
-	cost := ls.pricing.CalculateCost(logEntry.Model, usage)
+	cost := ls.calculateCost(costs, logEntry.Provider, logEntry.Model, usage)
 	logEntry.HasPricing = cost.HasPricing
 	logEntry.InputCost = cost.InputCost
 	logEntry.OutputCost = cost.OutputCost
 	logEntry.ReasoningCost = cost.ReasoningCost
-	logEntry.CacheCreateCost = cost.CacheCreateCost
 	logEntry.CacheReadCost = cost.CacheReadCost
-	logEntry.Ephemeral5mCost = cost.Ephemeral5mCost
-	logEntry.Ephemeral1hCost = cost.Ephemeral1hCost
 	logEntry.TotalCost = cost.TotalCost
 }
 
-func (ls *LogService) calculateCost(model string, usage modelpricing.UsageSnapshot) modelpricing.CostBreakdown {
+func (ls *LogService) calculateCost(
+	costs *costContext,
+	provider string,
+	model string,
+	usage modelpricing.UsageSnapshot,
+) modelpricing.CostBreakdown {
 	if ls == nil || ls.pricing == nil {
 		return modelpricing.CostBreakdown{}
 	}
-	return ls.pricing.CalculateCost(model, usage)
+	cost := ls.pricing.CalculateCost(model, usage)
+	return applyCostMultiplier(cost, costs.multiplierFor(provider))
+}
+
+func applyCostMultiplier(cost modelpricing.CostBreakdown, multiplier float64) modelpricing.CostBreakdown {
+	if multiplier == 0 || multiplier == 1 {
+		return cost
+	}
+	cost.InputCost *= multiplier
+	cost.OutputCost *= multiplier
+	cost.ReasoningCost *= multiplier
+	cost.CacheCreateCost *= multiplier
+	cost.CacheReadCost *= multiplier
+	cost.TotalCost *= multiplier
+	return cost
 }
 
 func parseCreatedAt(record xdb.Record) (time.Time, bool) {
@@ -676,18 +790,16 @@ type HeatmapStat struct {
 }
 
 type LogStats struct {
-	TotalRequests     int64            `json:"total_requests"`
-	InputTokens       int64            `json:"input_tokens"`
-	OutputTokens      int64            `json:"output_tokens"`
-	ReasoningTokens   int64            `json:"reasoning_tokens"`
-	CacheCreateTokens int64            `json:"cache_create_tokens"`
-	CacheReadTokens   int64            `json:"cache_read_tokens"`
-	CostTotal         float64          `json:"cost_total"`
-	CostInput         float64          `json:"cost_input"`
-	CostOutput        float64          `json:"cost_output"`
-	CostCacheCreate   float64          `json:"cost_cache_create"`
-	CostCacheRead     float64          `json:"cost_cache_read"`
-	Series            []LogStatsSeries `json:"series"`
+	TotalRequests   int64            `json:"total_requests"`
+	InputTokens     int64            `json:"input_tokens"`
+	OutputTokens    int64            `json:"output_tokens"`
+	ReasoningTokens int64            `json:"reasoning_tokens"`
+	CacheReadTokens int64            `json:"cache_read_tokens"`
+	CostTotal       float64          `json:"cost_total"`
+	CostInput       float64          `json:"cost_input"`
+	CostOutput      float64          `json:"cost_output"`
+	CostCacheRead   float64          `json:"cost_cache_read"`
+	Series          []LogStatsSeries `json:"series"`
 }
 
 type ProviderDailyStat struct {
@@ -699,18 +811,16 @@ type ProviderDailyStat struct {
 	InputTokens        int64   `json:"input_tokens"`
 	OutputTokens       int64   `json:"output_tokens"`
 	ReasoningTokens    int64   `json:"reasoning_tokens"`
-	CacheCreateTokens  int64   `json:"cache_create_tokens"`
 	CacheReadTokens    int64   `json:"cache_read_tokens"`
 	CostTotal          float64 `json:"cost_total"`
 }
 
 type LogStatsSeries struct {
-	Day               string  `json:"day"`
-	TotalRequests     int64   `json:"total_requests"`
-	InputTokens       int64   `json:"input_tokens"`
-	OutputTokens      int64   `json:"output_tokens"`
-	ReasoningTokens   int64   `json:"reasoning_tokens"`
-	CacheCreateTokens int64   `json:"cache_create_tokens"`
-	CacheReadTokens   int64   `json:"cache_read_tokens"`
-	TotalCost         float64 `json:"total_cost"`
+	Day             string  `json:"day"`
+	TotalRequests   int64   `json:"total_requests"`
+	InputTokens     int64   `json:"input_tokens"`
+	OutputTokens    int64   `json:"output_tokens"`
+	ReasoningTokens int64   `json:"reasoning_tokens"`
+	CacheReadTokens int64   `json:"cache_read_tokens"`
+	TotalCost       float64 `json:"total_cost"`
 }

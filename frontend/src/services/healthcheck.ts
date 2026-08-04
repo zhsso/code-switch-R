@@ -2,7 +2,7 @@
 // 可用性监控服务前端调用层
 // Author: Half open flowers
 
-import { Call } from '@wailsio/runtime'
+import { Call } from '../runtime'
 
 // 健康状态常量
 export const HealthStatus = {

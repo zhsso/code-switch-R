@@ -8,10 +8,6 @@ import { availableLocales } from './locales'
 import type { Locale } from './locales'
 
 initTheme()
-const isMac = navigator.userAgent.includes('Mac')
-if (isMac) {
-  document.documentElement.classList.add('mac')
-}
 
 // 语言选择的本地存储键
 const LOCALE_STORAGE_KEY = 'app-locale'

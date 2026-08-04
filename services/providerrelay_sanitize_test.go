@@ -138,14 +138,13 @@ func TestSanitizeRequestBodyNoMatchFastPath(t *testing.T) {
 	}
 }
 
-// —— sanitizeHeaders / cleanAnthropicBeta ——
+// —— sanitizeHeaders ——
 
-func TestSanitizeHeadersBlockedAndBeta(t *testing.T) {
+func TestSanitizeHeadersBlocked(t *testing.T) {
 	cfg := &SanitizeConfig{BlockedHeaders: slp("x-custom-junk")}
 	headers := map[string]string{
-		"X-Custom-Junk":  "v", // 大小写不敏感命中
-		"Content-Type":   "application/json",
-		"Anthropic-Beta": "prompt-caching-scope-2026-01-05, context-1m-2025-08-07",
+		"X-Custom-Junk": "v", // 大小写不敏感命中
+		"Content-Type":  "application/json",
 	}
 	cleaned := sanitizeHeaders(headers, cfg)
 
@@ -155,38 +154,29 @@ func TestSanitizeHeadersBlockedAndBeta(t *testing.T) {
 	if cleaned["Content-Type"] != "application/json" {
 		t.Fatal("unrelated header must stay")
 	}
-	// beta 值走默认黑名单（cfg.BlockedBetaValues 为 nil）
-	if cleaned["Anthropic-Beta"] != "context-1m-2025-08-07" {
-		t.Fatalf("beta value not cleaned correctly: %q", cleaned["Anthropic-Beta"])
-	}
 }
 
-func TestSanitizeHeadersBetaBecomesEmpty(t *testing.T) {
-	headers := map[string]string{
-		"anthropic-beta": "prompt-caching-scope-2026-01-05, redact-thinking-2026-02-12",
-	}
+func TestSanitizeHeadersPreservesUnblocked(t *testing.T) {
+	headers := map[string]string{"X-Allowed": "value"}
 	cleaned := sanitizeHeaders(headers, nil)
-	if _, ok := cleaned["anthropic-beta"]; ok {
-		t.Fatal("beta header must be dropped entirely when all values are blocked")
+	if cleaned["X-Allowed"] != "value" {
+		t.Fatalf("unblocked header changed: %q", cleaned["X-Allowed"])
 	}
 }
 
 func TestSanitizeHeadersEmptyListMeansKeepAll(t *testing.T) {
-	cfg := &SanitizeConfig{BlockedBetaValues: slp()}
-	headers := map[string]string{"anthropic-beta": "prompt-caching-scope-2026-01-05"}
+	cfg := &SanitizeConfig{BlockedHeaders: slp()}
+	headers := map[string]string{"X-Allowed": "value"}
 	cleaned := sanitizeHeaders(headers, cfg)
-	if cleaned["anthropic-beta"] != "prompt-caching-scope-2026-01-05" {
-		t.Fatal("explicit empty beta blocklist means keep everything")
+	if cleaned["X-Allowed"] != "value" {
+		t.Fatal("explicit empty header blocklist means keep everything")
 	}
 }
 
-func TestCleanAnthropicBetaSpacing(t *testing.T) {
-	blocked := map[string]bool{"b": true}
-	if got := cleanAnthropicBeta(" a , b ,, c ", blocked); got != "a, c" {
-		t.Fatalf("expected %q, got %q", "a, c", got)
-	}
-	if got := cleanAnthropicBeta("b", blocked); got != "" {
-		t.Fatalf("expected empty, got %q", got)
+func TestResolveBlocklistIgnoresEmptyValues(t *testing.T) {
+	blocked := resolveBlocklist([]string{"x-test", "  "}, nil, true)
+	if !blocked["x-test"] || len(blocked) != 1 {
+		t.Fatalf("unexpected blocklist: %v", blocked)
 	}
 }
 
@@ -194,7 +184,7 @@ func TestSanitizeHTTPHeaders(t *testing.T) {
 	cfg := &SanitizeConfig{BlockedHeaders: slp("x-stainless-lang")}
 	h := http.Header{}
 	h.Set("X-Stainless-Lang", "go")
-	h.Set("Anthropic-Beta", "redact-thinking-2026-02-12, keep-me")
+	h.Set("X-Allowed", "value")
 	h.Set("Accept", "application/json")
 
 	sanitizeHTTPHeaders(h, cfg)
@@ -202,35 +192,24 @@ func TestSanitizeHTTPHeaders(t *testing.T) {
 	if h.Get("X-Stainless-Lang") != "" {
 		t.Fatal("blocked header should be deleted")
 	}
-	if h.Get("Anthropic-Beta") != "keep-me" {
-		t.Fatalf("beta not cleaned: %q", h.Get("Anthropic-Beta"))
+	if h.Get("X-Allowed") != "value" {
+		t.Fatalf("unblocked header changed: %q", h.Get("X-Allowed"))
 	}
 	if h.Get("Accept") != "application/json" {
 		t.Fatal("unrelated header must stay")
 	}
 }
 
-// 同名 anthropic-beta 头有多个值时逐个清理，不能只处理第一个、丢弃其余合法值。
-func TestSanitizeHTTPHeadersMultiValueBeta(t *testing.T) {
+func TestSanitizeHTTPHeadersMultiValuePreserved(t *testing.T) {
 	h := http.Header{}
-	h.Add("Anthropic-Beta", "redact-thinking-2026-02-12")
-	h.Add("Anthropic-Beta", "keep-me-1")
-	h.Add("Anthropic-Beta", "prompt-caching-scope-2026-01-05, keep-me-2")
+	h.Add("X-Allowed", "value-1")
+	h.Add("X-Allowed", "value-2")
 
 	sanitizeHTTPHeaders(h, nil)
 
-	vals := h.Values("Anthropic-Beta")
-	if len(vals) != 2 || vals[0] != "keep-me-1" || vals[1] != "keep-me-2" {
-		t.Fatalf("multi-value beta not cleaned per value: %v", vals)
-	}
-
-	// 全部被黑名单吃掉时整个头删除
-	h2 := http.Header{}
-	h2.Add("Anthropic-Beta", "redact-thinking-2026-02-12")
-	h2.Add("Anthropic-Beta", "prompt-caching-scope-2026-01-05")
-	sanitizeHTTPHeaders(h2, nil)
-	if len(h2.Values("Anthropic-Beta")) != 0 {
-		t.Fatalf("fully-blocked multi-value beta should be dropped, got %v", h2.Values("Anthropic-Beta"))
+	vals := h.Values("X-Allowed")
+	if len(vals) != 2 || vals[0] != "value-1" || vals[1] != "value-2" {
+		t.Fatalf("unblocked multi-value header changed: %v", vals)
 	}
 }
 
@@ -241,18 +220,16 @@ func TestForwardRequestSanitizesOutbound(t *testing.T) {
 	_ = setupRenameTestEnv(t)
 
 	type captured struct {
-		body    []byte
-		junk    []string
-		beta    []string
-		apiKey  []string
+		body []byte
+		junk []string
+		auth []string
 	}
 	var got captured
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got.body, _ = io.ReadAll(r.Body)
 		got.junk = r.Header.Values("X-Junk")
-		got.beta = r.Header.Values("Anthropic-Beta")
-		got.apiKey = r.Header.Values("X-Api-Key")
+		got.auth = r.Header.Values("Authorization")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"ok":true}`))
@@ -263,13 +240,12 @@ func TestForwardRequestSanitizesOutbound(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	body := []byte(`{"model":"m","prompt_caching":true,"messages":[]}`)
-	req, err := http.NewRequest("POST", "/v1/messages", bytes.NewReader(body))
+	body := []byte(`{"model":"gpt-5.6","prompt_caching":true,"input":[]}`)
+	req, err := http.NewRequest("POST", "/responses", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("构造请求失败: %v", err)
 	}
 	req.Header.Set("X-Junk", "should-be-removed")
-	req.Header.Set("Anthropic-Beta", "prompt-caching-scope-2026-01-05, real-beta")
 	c.Request = req
 
 	provider := Provider{
@@ -277,12 +253,12 @@ func TestForwardRequestSanitizesOutbound(t *testing.T) {
 		APIURL:                 upstream.URL,
 		APIKey:                 "provider-secret",
 		Enabled:                true,
-		ConnectivityAuthType:   "x-api-key",
+		ConnectivityAuthType:   "bearer",
 		RequestSanitizeEnabled: true,
 		SanitizeConfig:         &SanitizeConfig{BlockedHeaders: slp("x-junk")},
 	}
-	ok, ferr := prs.forwardRequest(c, "claude", provider, "/v1/messages",
-		map[string]string{}, cloneHeaders(req.Header), body, false, "m", 0)
+	ok, ferr := prs.forwardRequest(c, CodexPlatform, provider, "/responses",
+		map[string]string{}, cloneHeaders(req.Header), body, false, "gpt-5.6", 0)
 	if !ok {
 		t.Fatalf("转发应成功,实际失败: %v", ferr)
 	}
@@ -295,19 +271,16 @@ func TestForwardRequestSanitizesOutbound(t *testing.T) {
 	if _, exists := outBody["prompt_caching"]; exists {
 		t.Error("出站 body 应已删除 prompt_caching")
 	}
-	if string(outBody["model"]) != `"m"` {
+	if string(outBody["model"]) != `"gpt-5.6"` {
 		t.Errorf("出站 body 的 model 被改动: %s", outBody["model"])
 	}
 
-	// 请求头：自定义黑名单删 x-junk；beta 值走默认黑名单只留合法值；注入的凭据不受清理影响
+	// 请求头：自定义黑名单删 x-junk；注入的凭据不受清理影响。
 	if len(got.junk) != 0 {
 		t.Errorf("出站不应携带 X-Junk,实际 %v", got.junk)
 	}
-	if len(got.beta) != 1 || got.beta[0] != "real-beta" {
-		t.Errorf("anthropic-beta 应只剩 real-beta,实际 %v", got.beta)
-	}
-	if len(got.apiKey) != 1 || got.apiKey[0] != "provider-secret" {
-		t.Errorf("供应商凭据应完好注入,实际 %v", got.apiKey)
+	if len(got.auth) != 1 || got.auth[0] != "Bearer provider-secret" {
+		t.Errorf("供应商凭据应完好注入,实际 %v", got.auth)
 	}
 }
 
@@ -329,11 +302,11 @@ func TestDuplicateProviderCopiesTLSAndSanitize(t *testing.T) {
 			BlockedHeaders:    slp(),
 		},
 	}
-	if err := ps.SaveProviders("claude", []Provider{source}); err != nil {
+	if err := ps.SaveProviders(CodexPlatform, []Provider{source}); err != nil {
 		t.Fatalf("保存夹具失败: %v", err)
 	}
 
-	cloned, err := ps.DuplicateProvider("claude", source.ID)
+	cloned, err := ps.DuplicateProvider(CodexPlatform, source.ID)
 	if err != nil {
 		t.Fatalf("DuplicateProvider 失败: %v", err)
 	}

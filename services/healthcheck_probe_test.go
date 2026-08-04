@@ -7,6 +7,7 @@ import (
 	"time"
 
 	modelpricing "codeswitch/resources/model-pricing"
+	"github.com/daodao97/xgo/xdb"
 )
 
 // TestDetermineStatusModelRejection 模型拒绝类 400/404 记为 validation_failed(不进拉黑计数)。
@@ -18,7 +19,7 @@ func TestDetermineStatusModelRejection(t *testing.T) {
 		t.Errorf("模型不存在的 400 应为 validation_failed,实际 %s", status)
 	}
 
-	status, _ = hcs.determineStatus(404, 100, []byte(`{"error":"model not found: gemini-3.5-flash"}`))
+	status, _ = hcs.determineStatus(404, 100, []byte(`{"error":"model not found: gpt-5.5"}`))
 	if status != HealthStatusValidationError {
 		t.Errorf("模型不存在的 404 应为 validation_failed,实际 %s", status)
 	}
@@ -34,7 +35,7 @@ func TestDetermineStatusModelRejection(t *testing.T) {
 	}
 }
 
-// TestBuildTestRequestByEndpoint /responses 用 Responses 协议,/messages 用 Anthropic,其余 Chat。
+// TestBuildTestRequestByEndpoint 所有 Codex 探测均使用 Responses 请求体。
 func TestBuildTestRequestByEndpoint(t *testing.T) {
 	hcs := &HealthCheckService{}
 
@@ -46,24 +47,23 @@ func TestBuildTestRequestByEndpoint(t *testing.T) {
 		return payload
 	}
 
-	payload := decode(hcs.buildTestRequest("codex", "gpt-5.6", "/responses"))
-	if payload["input"] != "hi" || payload["max_output_tokens"] == nil || payload["messages"] != nil {
+	payload := decode(hcs.buildTestRequest(CodexPlatform, "gpt-5.6", "/responses"))
+	if payload["input"] != "ping" || payload["stream"] != false || payload["messages"] != nil {
 		t.Errorf("/responses 应使用 Responses 协议体: %v", payload)
 	}
 
-	payload = decode(hcs.buildTestRequest("codex", "gpt-5.6", "/v1/chat/completions"))
-	if payload["messages"] == nil || payload["input"] != nil {
-		t.Errorf("chat 端点应使用 messages 体: %v", payload)
+	payload = decode(hcs.buildTestRequest(CodexPlatform, "gpt-5.6", "/v1/chat/completions"))
+	if payload["input"] != "ping" || payload["messages"] != nil {
+		t.Errorf("端点覆盖不应改变 Responses 请求体: %v", payload)
 	}
 
-	payload = decode(hcs.buildTestRequest("claude", "claude-haiku-4-5-20251001", "/v1/messages"))
-	if payload["max_tokens"] == nil || payload["messages"] == nil {
-		t.Errorf("claude 应使用 Anthropic 体: %v", payload)
+	if body := hcs.buildTestRequest("removed", "gpt-5.6", "/responses"); body != nil {
+		t.Errorf("已删除平台应返回 nil 请求体: %s", body)
 	}
 }
 
-// TestGetEffectiveModelWhitelistIntersection 声明白名单的供应商取候选链上首个其支持的模型。
-func TestGetEffectiveModelWhitelistIntersection(t *testing.T) {
+// TestGetEffectiveModelIsStableAcrossCatalogSync 验证目录同步与白名单不能改变产品探测模型。
+func TestGetEffectiveModelIsStableAcrossCatalogSync(t *testing.T) {
 	pricing, err := modelpricing.NewService()
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
@@ -81,16 +81,16 @@ func TestGetEffectiveModelWhitelistIntersection(t *testing.T) {
 	policy := &DefaultModelPolicy{pricing: pricing, source: catalogs, now: func() time.Time { return fixed }}
 	hcs := &HealthCheckService{policy: policy}
 
-	// 无白名单:直接用动态解析值
+	// 无白名单:固定产品探测值
 	open := &Provider{}
-	if got := hcs.getEffectiveModel(open, "codex"); got != "gpt-5.6" {
-		t.Errorf("无白名单应取动态值 gpt-5.6,实际 %s", got)
+	if got := hcs.getEffectiveModel(open, "codex"); got != "gpt-5.6-sol" {
+		t.Errorf("无白名单应取固定值 gpt-5.6-sol,实际 %s", got)
 	}
 
-	// 白名单只含 gpt-5.5:取交集
+	// 白名单不含固定值时仍保持固定值，由模型拒绝分类避免误拉黑。
 	limited := &Provider{SupportedModels: map[string]bool{"gpt-5.5": true}}
-	if got := hcs.getEffectiveModel(limited, "codex"); got != "gpt-5.5" {
-		t.Errorf("白名单交集应取 gpt-5.5,实际 %s", got)
+	if got := hcs.getEffectiveModel(limited, "codex"); got != "gpt-5.6-sol" {
+		t.Errorf("白名单不应改变固定探测值,实际 %s", got)
 	}
 
 	// 用户配置最高优先
@@ -110,5 +110,62 @@ func TestIsModelRejectionBody(t *testing.T) {
 	}
 	if isModelRejectionBody([]byte(strings.Repeat("x", 10))) {
 		t.Error("无关文本不应命中")
+	}
+}
+
+func TestHealthHistoryIsCodexOnly(t *testing.T) {
+	setupBlacklistFixEnv(t)
+	db, err := xdb.DB("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, platform := range []string{CodexPlatform, "claude"} {
+		if _, err := db.Exec(`INSERT INTO health_check_history
+			(provider_id, provider_name, platform, status, checked_at)
+			VALUES (1, 'mixed', ?, ?, datetime('now', '-10 days'))`, platform, HealthStatusOperational); err != nil {
+			t.Fatalf("写入 %s 历史失败: %v", platform, err)
+		}
+	}
+
+	hcs := NewHealthCheckService(NewProviderService(), nil, nil, nil)
+	history, err := hcs.GetHistory(" CODEX ", "mixed", 10)
+	if err != nil {
+		t.Fatalf("规范化 Codex 查询失败: %v", err)
+	}
+	if len(history.Items) != 1 || history.Platform != CodexPlatform {
+		t.Fatalf("Codex 历史 = %+v, want 1 条且平台为 codex", history)
+	}
+	if _, err := hcs.GetHistory("claude", "mixed", 10); err == nil {
+		t.Fatal("已删除平台的健康历史查询应被拒绝")
+	}
+
+	result := &HealthCheckResult{
+		ProviderID: 1, ProviderName: "mixed", Platform: " CODEX ",
+		Status: HealthStatusOperational, CheckedAt: time.Now(),
+	}
+	if err := hcs.saveResult(result); err != nil {
+		t.Fatalf("保存规范化健康结果失败: %v", err)
+	}
+	var storedPlatform string
+	if err := db.QueryRow(`SELECT platform FROM health_check_history ORDER BY id DESC LIMIT 1`).Scan(&storedPlatform); err != nil {
+		t.Fatal(err)
+	}
+	if storedPlatform != CodexPlatform {
+		t.Fatalf("健康结果平台 = %q, want %q", storedPlatform, CodexPlatform)
+	}
+
+	affected, err := hcs.CleanupOldRecords(1)
+	if err != nil {
+		t.Fatalf("清理历史失败: %v", err)
+	}
+	if affected != 1 {
+		t.Fatalf("清理行数 = %d, want 1 条 Codex 记录", affected)
+	}
+	var removedCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM health_check_history WHERE platform = 'claude'`).Scan(&removedCount); err != nil {
+		t.Fatal(err)
+	}
+	if removedCount != 1 {
+		t.Fatalf("旧平台健康历史被改写或删除,剩余 %d 条", removedCount)
 	}
 }

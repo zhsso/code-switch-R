@@ -74,7 +74,7 @@ func TestHealthCheckHonorsInsecureSkipVerify(t *testing.T) {
 		APIKey: "k",
 		AvailabilityConfig: &AvailabilityConfig{
 			TestModel:    "test-model",
-			TestEndpoint: "/v1/messages",
+			TestEndpoint: "/responses",
 			Timeout:      5000,
 		},
 	}
@@ -83,13 +83,13 @@ func TestHealthCheckHonorsInsecureSkipVerify(t *testing.T) {
 
 	strict := base
 	strict.InsecureSkipVerify = false
-	if got := hcs.checkProvider(ctx, strict, "claude"); got.Status != HealthStatusFailed {
+	if got := hcs.checkProvider(ctx, strict, CodexPlatform); got.Status != HealthStatusFailed {
 		t.Fatalf("strict provider should fail against self-signed upstream, got status=%s (%s)", got.Status, got.ErrorMessage)
 	}
 
 	skip := base
 	skip.InsecureSkipVerify = true
-	if got := hcs.checkProvider(ctx, skip, "claude"); got.Status == HealthStatusFailed {
+	if got := hcs.checkProvider(ctx, skip, CodexPlatform); got.Status == HealthStatusFailed {
 		t.Fatalf("skip-verify provider should not fail on certificate, got status=%s (%s)", got.Status, got.ErrorMessage)
 	}
 }
@@ -99,7 +99,7 @@ func TestHealthCheckHonorsInsecureSkipVerify(t *testing.T) {
 func TestConnectivityHonorsInsecureSkipVerify(t *testing.T) {
 	ts := newSelfSignedServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}]}`))
+		_, _ = w.Write([]byte(`{"output":[{"type":"message"}]}`))
 	})
 
 	cts := NewConnectivityTestService(nil, nil, nil, nil)
@@ -118,13 +118,13 @@ func TestConnectivityHonorsInsecureSkipVerify(t *testing.T) {
 
 	strict := base
 	strict.InsecureSkipVerify = false
-	if got := cts.TestProvider(ctx, strict, "claude"); got.Status != StatusUnavailable || got.SubStatus != SubStatusNetworkError {
+	if got := cts.TestProvider(ctx, strict, CodexPlatform); got.Status != StatusUnavailable || got.SubStatus != SubStatusNetworkError {
 		t.Fatalf("strict provider should be unavailable(network_error), got status=%d sub=%s msg=%s", got.Status, got.SubStatus, got.Message)
 	}
 
 	skip := base
 	skip.InsecureSkipVerify = true
-	if got := cts.TestProvider(ctx, skip, "claude"); got.Status != StatusAvailable {
+	if got := cts.TestProvider(ctx, skip, CodexPlatform); got.Status != StatusAvailable {
 		t.Fatalf("skip-verify provider should be available, got status=%d sub=%s msg=%s", got.Status, got.SubStatus, got.Message)
 	}
 }

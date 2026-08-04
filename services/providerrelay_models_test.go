@@ -9,12 +9,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// newTestRelayService 按当前构造函数签名装配 ProviderRelayService（geminiService 传 nil，addr 留空）。
+// newTestRelayService 按当前构造函数签名装配 ProviderRelayService。
 func newTestRelayService(providerService *ProviderService) *ProviderRelayService {
-	appSettings := NewAppSettingsService(NewAutoStartService())
+	appSettings := NewAppSettingsService()
 	notificationService := NewNotificationService(appSettings)
 	blacklistService := NewBlacklistService(NewSettingsService(), notificationService)
-	return NewProviderRelayService(providerService, nil, blacklistService, notificationService, appSettings, "")
+	return NewProviderRelayService(providerService, blacklistService, notificationService, appSettings, "")
 }
 
 // TestModelsHandler 测试 /v1/models 端点处理器
@@ -46,22 +46,25 @@ func TestModelsHandler(t *testing.T) {
 		if authHeader != "Bearer test-api-key" {
 			t.Errorf("Authorization 头不正确，期望 'Bearer test-api-key'，收到 '%s'", authHeader)
 		}
+		if got := r.Header.Get("X-Goog-Api-Key"); got != "" {
+			t.Errorf("客户端 X-Goog-Api-Key 泄漏到上游: %q", got)
+		}
 
 		// 返回模拟的模型列表
 		response := map[string]interface{}{
 			"object": "list",
 			"data": []map[string]interface{}{
 				{
-					"id":      "claude-sonnet-4",
-					"object":  "model",
-					"created": 1234567890,
-					"owned_by": "anthropic",
+					"id":       "gpt-5.6",
+					"object":   "model",
+					"created":  1234567890,
+					"owned_by": "openai",
 				},
 				{
-					"id":      "claude-opus-4",
-					"object":  "model",
-					"created": 1234567890,
-					"owned_by": "anthropic",
+					"id":       "gpt-5.6-mini",
+					"object":   "model",
+					"created":  1234567890,
+					"owned_by": "openai",
 				},
 			},
 		}
@@ -86,7 +89,7 @@ func TestModelsHandler(t *testing.T) {
 	}
 
 	// 保存 provider 配置
-	err := providerService.SaveProviders("claude", []Provider{testProvider})
+	err := providerService.SaveProviders(CodexPlatform, []Provider{testProvider})
 	if err != nil {
 		t.Fatalf("保存 provider 配置失败: %v", err)
 	}
@@ -100,6 +103,7 @@ func TestModelsHandler(t *testing.T) {
 
 	// 创建测试请求
 	req := httptest.NewRequest("GET", "/v1/models", nil)
+	req.Header.Set("X-Goog-Api-Key", "client-google-key")
 	w := httptest.NewRecorder()
 
 	// 执行请求
@@ -131,8 +135,8 @@ func TestModelsHandler(t *testing.T) {
 	}
 }
 
-// TestCustomModelsHandler 测试自定义 CLI 工具的 /v1/models 端点
-func TestCustomModelsHandler(t *testing.T) {
+// TestModelsHandlerUsesCodexPlatform verifies the only supported platform loads models.
+func TestModelsHandlerUsesCodexPlatform(t *testing.T) {
 	// 设置测试环境
 	gin.SetMode(gin.TestMode)
 
@@ -154,8 +158,8 @@ func TestCustomModelsHandler(t *testing.T) {
 
 		// 验证 Authorization 头
 		authHeader := r.Header.Get("Authorization")
-		if authHeader != "Bearer custom-api-key" {
-			t.Errorf("Authorization 头不正确，期望 'Bearer custom-api-key'，收到 '%s'", authHeader)
+		if authHeader != "Bearer codex-api-key" {
+			t.Errorf("Authorization 头不正确，期望 'Bearer codex-api-key'，收到 '%s'", authHeader)
 		}
 
 		// 返回模拟的模型列表
@@ -163,7 +167,7 @@ func TestCustomModelsHandler(t *testing.T) {
 			"object": "list",
 			"data": []map[string]interface{}{
 				{
-					"id":      "custom-model-1",
+					"id":      "gpt-5.6",
 					"object":  "model",
 					"created": 1234567890,
 				},
@@ -182,17 +186,14 @@ func TestCustomModelsHandler(t *testing.T) {
 	// 创建测试用的 provider（使用模拟服务器的 URL）
 	testProvider := Provider{
 		ID:      1,
-		Name:    "CustomTestProvider",
+		Name:    "CodexTestProvider",
 		APIURL:  upstreamServer.URL,
-		APIKey:  "custom-api-key",
+		APIKey:  "codex-api-key",
 		Enabled: true,
 		Level:   1,
 	}
 
-	// 保存 provider 配置（使用自定义 CLI 工具的 kind）
-	toolId := "mytool"
-	kind := "custom:" + toolId
-	err := providerService.SaveProviders(kind, []Provider{testProvider})
+	err := providerService.SaveProviders(CodexPlatform, []Provider{testProvider})
 	if err != nil {
 		t.Fatalf("保存 provider 配置失败: %v", err)
 	}
@@ -205,7 +206,7 @@ func TestCustomModelsHandler(t *testing.T) {
 	relayService.registerRoutes(router)
 
 	// 创建测试请求
-	req := httptest.NewRequest("GET", "/custom/mytool/v1/models", nil)
+	req := httptest.NewRequest("GET", "/v1/models", nil)
 	w := httptest.NewRecorder()
 
 	// 执行请求

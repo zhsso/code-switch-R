@@ -108,89 +108,6 @@ func TestResponseUsageLatestSnapshotCanReduceUncachedInput(t *testing.T) {
 	}
 }
 
-func TestUsageMetadataSeparatesCachedPromptTokens(t *testing.T) {
-	payload := `{
-		"usageMetadata": {
-			"promptTokenCount": 100,
-			"candidatesTokenCount": 20,
-			"cachedContentTokenCount": 30,
-			"thoughtsTokenCount": 4
-		}
-	}`
-	usage := &ReqeustLog{}
-	hook := ReqeustLogHook(nil, "ge"+"mini", usage)
-
-	hook([]byte(payload))
-
-	if usage.InputTokens != 70 {
-		t.Fatalf("InputTokens=%d, want 70", usage.InputTokens)
-	}
-	if usage.OutputTokens != 20 {
-		t.Fatalf("OutputTokens=%d, want 20", usage.OutputTokens)
-	}
-	if usage.CacheReadTokens != 30 {
-		t.Fatalf("CacheReadTokens=%d, want 30", usage.CacheReadTokens)
-	}
-	if usage.ReasoningTokens != 4 {
-		t.Fatalf("ReasoningTokens=%d, want 4", usage.ReasoningTokens)
-	}
-}
-
-func TestUsageMetadataLatestSnapshotCanReduceUncachedPrompt(t *testing.T) {
-	firstPayload := `{
-		"usageMetadata": {
-			"promptTokenCount": 100,
-			"candidatesTokenCount": 10
-		}
-	}`
-	finalPayload := `{
-		"usageMetadata": {
-			"promptTokenCount": 100,
-			"candidatesTokenCount": 20,
-			"cachedContentTokenCount": 30,
-			"thoughtsTokenCount": 4
-		}
-	}`
-	usage := &ReqeustLog{}
-	hook := ReqeustLogHook(nil, "ge"+"mini", usage)
-
-	hook([]byte(firstPayload))
-	hook([]byte(finalPayload))
-
-	if usage.InputTokens != 70 {
-		t.Fatalf("InputTokens=%d, want 70", usage.InputTokens)
-	}
-	if usage.OutputTokens != 20 {
-		t.Fatalf("OutputTokens=%d, want 20", usage.OutputTokens)
-	}
-	if usage.CacheReadTokens != 30 {
-		t.Fatalf("CacheReadTokens=%d, want 30", usage.CacheReadTokens)
-	}
-	if usage.ReasoningTokens != 4 {
-		t.Fatalf("ReasoningTokens=%d, want 4", usage.ReasoningTokens)
-	}
-}
-
-func TestProtocolConvertedUsageSeparatesCachedPromptTokens(t *testing.T) {
-	converter := NewOpenAIToAnthropicSSEConverter("model-x")
-	usage := &ReqeustLog{}
-	hook := protocolConvertHook(converter, "x", usage)
-
-	hook([]byte(`data: {"choices":[{"delta":{"content":"ok"}}]}`))
-	hook([]byte(`data: {"usage":{"prompt_tokens":100,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":30}}}`))
-	hook([]byte(`data: [DONE]`))
-
-	if usage.InputTokens != 70 {
-		t.Fatalf("InputTokens=%d, want 70", usage.InputTokens)
-	}
-	if usage.OutputTokens != 20 {
-		t.Fatalf("OutputTokens=%d, want 20", usage.OutputTokens)
-	}
-	if usage.CacheReadTokens != 30 {
-		t.Fatalf("CacheReadTokens=%d, want 30", usage.CacheReadTokens)
-	}
-}
-
 // ==================== ReplaceModelInRequestBody 测试 ====================
 
 func TestReplaceModelInRequestBody(t *testing.T) {
@@ -205,17 +122,17 @@ func TestReplaceModelInRequestBody(t *testing.T) {
 		{
 			name: "简单替换",
 			inputJSON: `{
-				"model": "claude-sonnet-4",
+				"model": "gpt-sonnet-4",
 				"messages": [{"role": "user", "content": "Hello"}]
 			}`,
-			newModel:      "anthropic/claude-sonnet-4",
+			newModel:      "gateway/gpt-sonnet-4",
 			expectError:   false,
-			expectedModel: "anthropic/claude-sonnet-4",
+			expectedModel: "gateway/gpt-sonnet-4",
 		},
 		{
 			name: "复杂嵌套JSON",
 			inputJSON: `{
-				"model": "claude-opus-4",
+				"model": "gpt-opus-4",
 				"messages": [
 					{
 						"role": "user",
@@ -235,12 +152,12 @@ func TestReplaceModelInRequestBody(t *testing.T) {
 		{
 			name: "模型名包含特殊字符",
 			inputJSON: `{
-				"model": "claude-sonnet-4",
+				"model": "gpt-sonnet-4",
 				"messages": []
 			}`,
-			newModel:      "anthropic/claude-3.5-sonnet@20241022",
+			newModel:      "gateway/gpt-3.5-sonnet@20241022",
 			expectError:   false,
-			expectedModel: "anthropic/claude-3.5-sonnet@20241022",
+			expectedModel: "gateway/gpt-3.5-sonnet@20241022",
 		},
 
 		// 错误场景
@@ -309,23 +226,25 @@ func TestReplaceModelInRequestBody(t *testing.T) {
 // ==================== 端到端场景测试 ====================
 
 func TestModelMappingEndToEnd(t *testing.T) {
-	// 模拟真实场景：用户请求 claude-sonnet-4，需要映射到 OpenRouter 的格式
+	// 模拟兼容网关对不同 OpenAI 模型族使用不同前缀的场景。
 	provider := Provider{
 		Name: "OpenRouter",
 		SupportedModels: map[string]bool{
-			"anthropic/claude-sonnet-4":   true,
-			"anthropic/claude-opus-4":     true,
-			"openai/gpt-4":                true,
-			"google/gemini-pro":           true,
-			"meta-llama/llama-3.1-405b":   true,
-			"anthropic/claude-3.5-sonnet": true,
-			"anthropic/claude-3.5-haiku":  true,
+			"gateway/gpt-sonnet-4":      true,
+			"gateway/gpt-opus-4":        true,
+			"openai/gpt-4":              true,
+			"openai/o-model-pro":        true,
+			"meta-llama/llama-3.1-405b": true,
+			"gateway/gpt-3.5-sonnet":    true,
+			"gateway/gpt-3.5-haiku":     true,
 		},
 		ModelMapping: map[string]string{
-			"claude-*": "anthropic/claude-*",
-			"gpt-*":    "openai/gpt-*",
-			"gemini-*": "google/gemini-*",
-			"llama-*":  "meta-llama/llama-*",
+			"gpt-sonnet-*": "gateway/gpt-sonnet-*",
+			"gpt-opus-*":   "gateway/gpt-opus-*",
+			"gpt-*-sonnet": "gateway/gpt-*-sonnet",
+			"gpt-*":        "openai/gpt-*",
+			"o-model-*":    "openai/o-model-*",
+			"llama-*":      "meta-llama/llama-*",
 		},
 	}
 
@@ -335,12 +254,12 @@ func TestModelMappingEndToEnd(t *testing.T) {
 		effectiveModel string
 	}{
 		// 通配符映射场景
-		{"claude-sonnet-4", true, "anthropic/claude-sonnet-4"},
-		{"claude-opus-4", true, "anthropic/claude-opus-4"},
-		{"claude-3.5-sonnet", true, "anthropic/claude-3.5-sonnet"},
+		{"gpt-sonnet-4", true, "gateway/gpt-sonnet-4"},
+		{"gpt-opus-4", true, "gateway/gpt-opus-4"},
+		{"gpt-3.5-sonnet", true, "gateway/gpt-3.5-sonnet"},
 		{"gpt-4", true, "openai/gpt-4"},
 		{"gpt-4-turbo", true, "openai/gpt-4-turbo"},
-		{"gemini-pro", true, "google/gemini-pro"},
+		{"o-model-pro", true, "openai/o-model-pro"},
 		{"llama-3.1-405b", true, "meta-llama/llama-3.1-405b"},
 
 		// 不支持的模型
@@ -388,12 +307,12 @@ func TestProviderConfigValidation(t *testing.T) {
 	validProvider := Provider{
 		Name: "ValidProvider",
 		SupportedModels: map[string]bool{
-			"anthropic/claude-sonnet-4": true,
-			"anthropic/claude-opus-4":   true,
+			"gateway/gpt-sonnet-4": true,
+			"gateway/gpt-opus-4":   true,
 		},
 		ModelMapping: map[string]string{
-			"claude-sonnet-4": "anthropic/claude-sonnet-4",
-			"claude-opus-4":   "anthropic/claude-opus-4",
+			"gpt-sonnet-4": "gateway/gpt-sonnet-4",
+			"gpt-opus-4":   "gateway/gpt-opus-4",
 		},
 	}
 
@@ -422,12 +341,12 @@ func TestProviderConfigValidation(t *testing.T) {
 	wildcardProvider := Provider{
 		Name: "WildcardProvider",
 		SupportedModels: map[string]bool{
-			"anthropic/claude-*": true,
-			"openai/gpt-*":       true,
+			"gateway/gpt-*": true,
+			"openai/gpt-*":  true,
 		},
 		ModelMapping: map[string]string{
-			"claude-*": "anthropic/claude-*",
-			"gpt-*":    "openai/gpt-*",
+			"gpt-sonnet-*": "gateway/gpt-sonnet-*",
+			"gpt-*":        "openai/gpt-*",
 		},
 	}
 
@@ -442,40 +361,40 @@ func TestProviderConfigValidation(t *testing.T) {
 func BenchmarkIsModelSupported(b *testing.B) {
 	provider := Provider{
 		SupportedModels: map[string]bool{
-			"claude-sonnet-4": true,
-			"claude-opus-4":   true,
-			"gpt-4":           true,
-			"gpt-4-turbo":     true,
+			"gpt-sonnet-4": true,
+			"gpt-opus-4":   true,
+			"gpt-4":        true,
+			"gpt-4-turbo":  true,
 		},
 		ModelMapping: map[string]string{
-			"claude-*": "anthropic/claude-*",
-			"gpt-*":    "openai/gpt-*",
+			"gpt-sonnet-*": "gateway/gpt-sonnet-*",
+			"gpt-*":        "openai/gpt-*",
 		},
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = provider.IsModelSupported("claude-sonnet-4")
+		_ = provider.IsModelSupported("gpt-sonnet-4")
 	}
 }
 
 func BenchmarkGetEffectiveModel(b *testing.B) {
 	provider := Provider{
 		ModelMapping: map[string]string{
-			"claude-*": "anthropic/claude-*",
-			"gpt-*":    "openai/gpt-*",
+			"gpt-sonnet-*": "gateway/gpt-sonnet-*",
+			"gpt-*":        "openai/gpt-*",
 		},
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = provider.GetEffectiveModel("claude-sonnet-4")
+		_ = provider.GetEffectiveModel("gpt-sonnet-4")
 	}
 }
 
 func BenchmarkReplaceModelInRequestBody(b *testing.B) {
 	bodyBytes := []byte(`{
-		"model": "claude-sonnet-4",
+		"model": "gpt-sonnet-4",
 		"messages": [{"role": "user", "content": "Hello"}],
 		"temperature": 0.7,
 		"max_tokens": 1000
@@ -483,6 +402,6 @@ func BenchmarkReplaceModelInRequestBody(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = ReplaceModelInRequestBody(bodyBytes, "anthropic/claude-sonnet-4")
+		_, _ = ReplaceModelInRequestBody(bodyBytes, "gateway/gpt-sonnet-4")
 	}
 }

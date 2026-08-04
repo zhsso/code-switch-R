@@ -19,8 +19,6 @@ import (
 	"time"
 
 	modelpricing "codeswitch/resources/model-pricing"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // ModelSyncService 从 llm-metadata(basellm.github.io,镜像 llm-metadata.pages.dev)
@@ -59,11 +57,20 @@ var modelSyncBaseURLs = []string{
 	"https://llm-metadata.pages.dev",
 }
 
+var modelSyncProviderIDs = append([]string(nil), modelpricing.RemoteProviderIDs...)
+
+func isModelSyncProvider(providerID string) bool {
+	for _, allowed := range modelSyncProviderIDs {
+		if providerID == allowed {
+			return true
+		}
+	}
+	return false
+}
+
 // providerCanaryPatterns 每厂商必须存在的标志性模型族,防止拿错/污染数据。
 var providerCanaryPatterns = map[string]*regexp.Regexp{
-	"anthropic":  regexp.MustCompile(`^claude-`),
 	"openai":     regexp.MustCompile(`^gpt-\d`),
-	"google":     regexp.MustCompile(`^gemini-`),
 	"deepseek":   regexp.MustCompile(`^deepseek-`),
 	"alibaba":    regexp.MustCompile(`^(qwen|qvq|qwq)`),
 	"moonshotai": regexp.MustCompile(`^(kimi-|moonshot-)`),
@@ -72,9 +79,7 @@ var providerCanaryPatterns = map[string]*regexp.Regexp{
 
 // providerFamilyGuards 解析器依赖的家族:上一份有效目录存在而新批次整族消失时隔离。
 var providerFamilyGuards = map[string][]*regexp.Regexp{
-	"anthropic": {regexp.MustCompile(`haiku`)},
-	"openai":    {regexp.MustCompile(`^gpt-\d+(\.\d+)*$`)},
-	"google":    {regexp.MustCompile(`-pro(-preview)?$`), regexp.MustCompile(`-flash(-preview)?$`)},
+	"openai": {regexp.MustCompile(`^gpt-\d+(\.\d+)*$`)},
 }
 
 type providerSyncState struct {
@@ -128,7 +133,7 @@ type ModelSyncService struct {
 	appSettings *AppSettingsService
 	policy      *DefaultModelPolicy
 	pricing     *modelpricing.Service
-	app         *application.App
+	emitter     EventEmitter
 
 	baseURLs   []string
 	httpClient *http.Client
@@ -162,6 +167,13 @@ func NewModelSyncService(appSettings *AppSettingsService, policy *DefaultModelPo
 		log.Printf("[ModelSync] 定价服务初始化失败: %v", pricingErr)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	seedCatalogs := modelpricing.EmbeddedSeedCatalogs()
+	seed := make(map[string]*modelpricing.RemoteCatalog, len(modelSyncProviderIDs))
+	for _, providerID := range modelSyncProviderIDs {
+		if catalog := seedCatalogs[providerID]; catalog != nil {
+			seed[providerID] = catalog
+		}
+	}
 	s := &ModelSyncService{
 		appSettings: appSettings,
 		policy:      policy,
@@ -172,7 +184,7 @@ func NewModelSyncService(appSettings *AppSettingsService, policy *DefaultModelPo
 		state:       newModelSyncState(),
 		catalogs:    make(map[string]*modelpricing.RemoteCatalog),
 		sources:     make(map[string]string),
-		seed:        modelpricing.EmbeddedSeedCatalogs(),
+		seed:        seed,
 		rootCtx:     ctx,
 		cancel:      cancel,
 	}
@@ -185,14 +197,13 @@ func NewModelSyncService(appSettings *AppSettingsService, policy *DefaultModelPo
 	return s
 }
 
-// SetApp 注入 Wails App 引用,用于向前端广播同步事件。
-// 注册为 Wails 服务后该方法可被前端 RPC 调用，传 nil 会让同步完成事件广播失效，忽略之。
-func (s *ModelSyncService) SetApp(app *application.App) {
-	if app == nil {
+// SetEventEmitter injects the WebUI event transport.
+func (s *ModelSyncService) SetEventEmitter(emitter EventEmitter) {
+	if emitter == nil {
 		return
 	}
 	s.mu.Lock()
-	s.app = app
+	s.emitter = emitter
 	s.mu.Unlock()
 }
 
@@ -248,7 +259,7 @@ func (s *ModelSyncService) Stop() {
 
 // SyncNow 手动全量同步(无视到期时间);已有批次在跑时返回当前状态不重入。
 func (s *ModelSyncService) SyncNow() ModelSyncStatus {
-	return s.runSync(modelpricing.RemoteProviderIDs)
+	return s.runSync(modelSyncProviderIDs)
 }
 
 // GetSyncStatus 返回当前同步状态。
@@ -305,7 +316,7 @@ func (s *ModelSyncService) RestoreBuiltinPricing() (ModelSyncStatus, error) {
 	}
 
 	s.mu.Lock()
-	for _, id := range modelpricing.RemoteProviderIDs {
+	for _, id := range modelSyncProviderIDs {
 		_ = os.Remove(filepath.Join(s.dir, id+".json"))
 	}
 	_ = os.Remove(filepath.Join(s.dir, modelSyncStateFile))
@@ -343,8 +354,8 @@ func (s *ModelSyncService) maybeAutoSync() {
 	}
 	now := time.Now()
 	s.mu.Lock()
-	due := make([]string, 0, len(modelpricing.RemoteProviderIDs))
-	for _, id := range modelpricing.RemoteProviderIDs {
+	due := make([]string, 0, len(modelSyncProviderIDs))
+	for _, id := range modelSyncProviderIDs {
 		st := s.state.Providers[id]
 		if st == nil || st.NextDue.IsZero() || !st.NextDue.After(now) {
 			due = append(due, id)
@@ -375,6 +386,10 @@ func (s *ModelSyncService) runSync(targets []string) ModelSyncStatus {
 
 // runSyncBatch 执行一个同步批次;已有批次/已停止/恢复中时直接返回不重入。
 func (s *ModelSyncService) runSyncBatch(targets []string) {
+	targets = modelSyncTargets(targets)
+	if len(targets) == 0 {
+		return
+	}
 	s.mu.Lock()
 	if s.running || s.stopped || s.restoring {
 		s.mu.Unlock()
@@ -546,6 +561,9 @@ func (s *ModelSyncService) doFetch(ctx context.Context, url, etag string) ([]byt
 
 // validateBatch 解析并执行批次级校验:canary、高水位缩量、已知模型价格跳变、家族回归。
 func (s *ModelSyncService) validateBatch(providerID string, body []byte, prev *providerSyncState, prevCatalog *modelpricing.RemoteCatalog) (*modelpricing.RemoteCatalog, error) {
+	if !isModelSyncProvider(providerID) {
+		return nil, fmt.Errorf("不支持的模型元数据供应商: %s", providerID)
+	}
 	catalog, err := modelpricing.ParseRemoteCatalog(providerID, body)
 	if err != nil {
 		return nil, err
@@ -764,10 +782,10 @@ func (s *ModelSyncService) rebuildPricing() {
 
 func (s *ModelSyncService) emitUpdated() {
 	s.mu.Lock()
-	app := s.app
+	emitter := s.emitter
 	s.mu.Unlock()
-	if app != nil {
-		app.Event.Emit("model-sync:updated", nil)
+	if emitter != nil {
+		emitter.Emit("model-sync:updated", nil)
 	}
 }
 
@@ -780,7 +798,7 @@ func (s *ModelSyncService) coreStatusLocked() ModelSyncStatus {
 		Generation:  s.state.Generation,
 		LastSuccess: s.state.LastSuccess,
 	}
-	for _, id := range modelpricing.RemoteProviderIDs {
+	for _, id := range modelSyncProviderIDs {
 		entry := ModelSyncProviderStatus{Provider: id, Source: s.sources[id]}
 		if entry.Source == "" {
 			entry.Source = "seed"
@@ -828,13 +846,18 @@ func (s *ModelSyncService) loadState() {
 	if state.Providers == nil {
 		state.Providers = make(map[string]*providerSyncState)
 	}
+	for id := range state.Providers {
+		if !isModelSyncProvider(id) {
+			delete(state.Providers, id)
+		}
+	}
 	s.state = &state
 }
 
 // loadLocalCatalogs 逐厂商载入本地缓存:哈希与状态一致且可解析才生效,
 // 否则清除条件请求缓存(下轮强制无条件拉取,含文件被删的情况)并回退内置种子。
 func (s *ModelSyncService) loadLocalCatalogs() {
-	for _, id := range modelpricing.RemoteProviderIDs {
+	for _, id := range modelSyncProviderIDs {
 		st := s.state.Providers[id]
 		path := filepath.Join(s.dir, id+".json")
 
@@ -877,4 +900,20 @@ func (s *ModelSyncService) loadLocalCatalogs() {
 			}
 		}
 	}
+}
+
+func modelSyncTargets(targets []string) []string {
+	result := make([]string, 0, len(targets))
+	seen := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		if !isModelSyncProvider(target) {
+			continue
+		}
+		if _, exists := seen[target]; exists {
+			continue
+		}
+		seen[target] = struct{}{}
+		result = append(result, target)
+	}
+	return result
 }

@@ -1,8 +1,12 @@
+export type ProviderCompatibilityMode = '' | 'deepseek-codex'
+
 export type AutomationCard = {
   id: number
   name: string
   apiUrl: string
   apiKey: string
+  apiKeyConfigured?: boolean
+  apiKeyChanged?: boolean
   officialSite: string
   icon: string
   tint: string
@@ -20,9 +24,8 @@ export type AutomationCard = {
   fallbackApiUrls?: string[]
   // 最大并发请求数（0=不限，仅代理转发，单进程内）
   maxConcurrency?: number
-  // CLI 配置：存储供应商关联的 CLI 可编辑配置
-  cliConfig?: Record<string, any>
-
+  // 费用统计倍率（缺失时按 1）
+  costMultiplier?: number
   // === 可用性监控配置（新） ===
   // 可用性监控开关：是否启用后台健康检查
   availabilityMonitorEnabled?: boolean
@@ -43,8 +46,10 @@ export type AutomationCard = {
   sanitizeConfig?: {
     blockedBodyFields?: string[]
     blockedHeaders?: string[]
-    blockedBetaValues?: string[]
   }
+
+  // 特定兼容 API 的隔离请求转换；空值保持标准 Codex 请求。
+  compatibilityMode?: ProviderCompatibilityMode
 
   // === 旧连通性字段（已废弃，仅用于兼容旧数据） ===
   /** @deprecated 已迁移到 availabilityMonitorEnabled */
@@ -55,59 +60,9 @@ export type AutomationCard = {
   connectivityTestEndpoint?: string
   /** @deprecated 已迁移到可用性配置中的认证方式 */
   connectivityAuthType?: string
-  // 上游协议类型（anthropic / openai）
-  upstreamProtocol?: string
-  // Gemini 后端稳定 ID（仅 gemini 卡片携带；重排/更新按 ID 定位，名称仅作兜底）
-  geminiId?: string
 }
 
-export const automationCardGroups: Record<'claude' | 'codex', AutomationCard[]> = {
-  claude: [
-    {
-      id: 100,
-      name: '0011',
-      apiUrl: 'https://0011.ai',
-      apiKey: '',
-      officialSite: 'https://0011.ai',
-      icon: 'aicoding',
-      tint: 'rgba(10, 132, 255, 0.14)',
-      accent: '#0aff5cff',
-      enabled: false,
-    },
-    {
-      id: 101,
-      name: 'AICoding.sh',
-      apiUrl: 'https://api.aicoding.sh',
-      apiKey: '',
-      officialSite: 'https://aicoding.sh',
-      icon: 'aicoding',
-      tint: 'rgba(10, 132, 255, 0.14)',
-      accent: '#0a84ff',
-      enabled: false,
-    },
-    {
-      id: 102,
-      name: 'Kimi',
-      apiUrl: 'https://api.moonshot.cn/anthropic',
-      apiKey: '',
-      officialSite: 'https://kimi.moonshot.cn',
-      icon: 'kimi',
-      tint: 'rgba(16, 185, 129, 0.16)',
-      accent: '#10b981',
-      enabled: false,
-    },
-    {
-      id: 103,
-      name: 'Deepseek',
-      apiUrl: 'https://api.deepseek.com/anthropic',
-      apiKey: '',
-      officialSite: 'https://www.deepseek.com',
-      icon: 'deepseek',
-      tint: 'rgba(251, 146, 60, 0.18)',
-      accent: '#f97316',
-      enabled: false,
-    },
-  ],
+export const automationCardGroups: Record<'codex', AutomationCard[]> = {
   codex: [
     {
       id: 201,
@@ -127,5 +82,6 @@ export function createAutomationCards(data: AutomationCard[] = []): AutomationCa
   return data.map((item) => ({
     ...item,
     officialSite: item.officialSite ?? '',
+    costMultiplier: item.costMultiplier && item.costMultiplier > 0 ? item.costMultiplier : 1,
   }))
 }

@@ -29,7 +29,7 @@ func TestLoadProviders_MigrationDoesNotClobberConcurrentSave(t *testing.T) {
 	}
 	done := make(chan loadResult, 1)
 	go func() {
-		providers, err := ps.LoadProviders("claude")
+		providers, err := ps.LoadProviders(CodexPlatform)
 		done <- loadResult{providers, err}
 	}()
 
@@ -37,7 +37,7 @@ func TestLoadProviders_MigrationDoesNotClobberConcurrentSave(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// 模拟并发保存：旧字段已清除、新增供应商 B（绕过服务直接写文件，避免与持有的锁死锁）
-	path, err := providerFilePath("claude")
+	path, err := providerFilePath(CodexPlatform)
 	if err != nil {
 		t.Fatalf("获取路径失败: %v", err)
 	}

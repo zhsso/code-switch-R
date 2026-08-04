@@ -74,11 +74,6 @@
           <template v-else>
             <div class="session-detail__toolbar">
               <span class="session-detail__title">{{ sessionTitle(selected) }}</span>
-              <div class="session-detail__actions">
-                <button class="secondary-btn" :disabled="exporting" @click="openExport">
-                  {{ exporting ? t('components.capture.exporting') : t('components.capture.export') }}
-                </button>
-              </div>
             </div>
             <p class="session-detail__hint">{{ t('components.capture.sensitiveHint') }}</p>
             <div class="session-table-wrapper">
@@ -138,35 +133,15 @@
         :data="detailModal.data"
         @close="closeDetail"
       />
-
-      <!-- 导出：按数据类别勾选 -->
-      <BaseModal :open="exportModal.open" :title="t('components.capture.exportTitle')" @close="exportModal.open = false">
-        <div class="export-modal">
-          <p class="export-modal__warning">⚠ {{ t('components.capture.sensitiveHint') }}</p>
-          <label class="export-check"><input type="checkbox" v-model="exportModal.opts.url" /> {{ t('components.logs.captureDetail.url') }}</label>
-          <label class="export-check"><input type="checkbox" v-model="exportModal.opts.request_headers" /> {{ t('components.logs.captureDetail.reqHeaders') }}</label>
-          <label class="export-check"><input type="checkbox" v-model="exportModal.opts.request_body" /> {{ t('components.logs.captureDetail.reqBody') }}</label>
-          <label class="export-check"><input type="checkbox" v-model="exportModal.opts.response_headers" /> {{ t('components.logs.captureDetail.respHeaders') }}</label>
-          <label class="export-check"><input type="checkbox" v-model="exportModal.opts.response_body" /> {{ t('components.logs.captureDetail.respBody') }}</label>
-          <div class="export-modal__actions">
-            <button class="secondary-btn" @click="exportModal.open = false">{{ t('common.cancel') }}</button>
-            <button class="primary-btn" :disabled="!anyExportCategory || exporting" @click="confirmExport">
-              {{ exporting ? t('components.capture.exporting') : t('components.capture.export') }}
-            </button>
-          </div>
-        </div>
-      </BaseModal>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Call } from '@wailsio/runtime'
+import { Call } from '../../runtime'
 import CaptureDetailModal from '../common/CaptureDetailModal.vue'
-import BaseModal from '../common/BaseModal.vue'
-import { createPoller } from '../../composables/usePoller'
 import { fetchRequestLogDetail, type RequestLogDetail } from '../../services/logs'
 
 interface CaptureSession {
@@ -203,28 +178,19 @@ const SIZE_WARN_THRESHOLD = 200 * 1024 * 1024 // 200MB
 const recording = ref(false)
 const toggling = ref(false)
 const clearing = ref(false)
-const exporting = ref(false)
 const sessions = ref<CaptureSession[]>([])
 const selected = ref<CaptureSession | null>(null)
 const rows = ref<CaptureRow[]>([])
 const loadingRows = ref(false)
 const mayHaveMore = ref(false)
 const PAGE = 200
-// 增量列表在内存中的行数上限：录制中长时间停留会无限头插，超限截尾防止页面越用越重
-const MAX_ROWS = 500
 // rowsEpoch：每次切换会话/重置递增；异步 RPC 返回时若纪元已变则丢弃结果，
 // 防止把上一个会话的行渲染到当前会话（内容可能敏感，不能张冠李戴）
 let rowsEpoch = 0
-// sessionsEpoch：清空/删除/开关录制前递增，作废在途的会话列表轮询响应，
-// 防止操作前发出的 3 秒轮询晚到回填旧列表
-let sessionsEpoch = 0
 
-// 页面是否处于激活状态（keep-alive 下切走后停止一切轮询）
-let pageActive = false
-// 是否已激活过：首次激活紧随首载，无需再刷一遍
-let activatedOnce = false
-// 首载 Promise：keep-alive 下首次进入 mounted 与 activated 均触发，共享首载避免双启动
-let initialLoad: Promise<void> | null = null
+let sessionTimer: number | null = null
+let liveTimer: number | null = null
+let sizeTimer: number | null = null
 
 const sessionKey = (s: CaptureSession) => (s.legacy ? 'legacy' : s.id)
 const isSelected = (s: CaptureSession) =>
@@ -272,9 +238,6 @@ const loadRecordingState = async () => {
 
 const toggleRecording = async () => {
   toggling.value = true
-  // 开关录制会新建/结束会话：先作废在途的会话轮询响应，防止旧列表晚到回填
-  sessionsEpoch++
-  sessionPoller.bump()
   try {
     await Call.ByName(svc + 'SetRequestCapture', recording.value)
   } catch (error) {
@@ -283,17 +246,13 @@ const toggleRecording = async () => {
   } finally {
     await loadRecordingState()
     await refreshSessions()
-    await refreshTotalBytes()
-    syncSizePoller()
     toggling.value = false
   }
 }
 
 const refreshSessions = async () => {
-  const epoch = sessionsEpoch
   try {
     const list = (await Call.ByName(svc + 'ListCaptureSessions')) as CaptureSession[] | null
-    if (epoch !== sessionsEpoch) return // 期间发生清空/删除/开关录制，丢弃过期列表
     sessions.value = list ?? []
     // 维持选中项引用最新数据；被删掉则回退到第一个
     if (selected.value) {
@@ -374,11 +333,6 @@ const pollLive = async () => {
     if (epoch !== rowsEpoch) return
     if (fresh.length > 0) {
       rows.value.unshift(...fresh.reverse())
-      if (rows.value.length > MAX_ROWS) {
-        // 截尾控内存；被截掉的旧行仍可通过"加载更多"按游标取回
-        rows.value.splice(MAX_ROWS)
-        mayHaveMore.value = true
-      }
     }
   } catch (error) {
     console.error('增量拉取失败:', error)
@@ -387,20 +341,13 @@ const pollLive = async () => {
   }
 }
 
-// 会话列表轮询（3s）：页面激活期间常驻
-const sessionPoller = createPoller(refreshSessions, 3000)
-// 录制中会话的增量轮询（2s）：仅"页面激活且选中会话在录制"时运行
-const livePoller = createPoller(pollLive, 2000)
-let livePollerRunning = false
-
 const syncLiveTimer = () => {
-  const needLive = pageActive && !!selected.value?.active
-  if (needLive && !livePollerRunning) {
-    livePoller.start()
-    livePollerRunning = true
-  } else if (!needLive && livePollerRunning) {
-    livePoller.stop()
-    livePollerRunning = false
+  const needLive = !!selected.value?.active
+  if (needLive && liveTimer === null) {
+    liveTimer = window.setInterval(pollLive, 2000)
+  } else if (!needLive && liveTimer !== null) {
+    clearInterval(liveTimer)
+    liveTimer = null
   }
 }
 
@@ -412,9 +359,6 @@ const selectSession = (s: CaptureSession) => {
 
 const deleteSession = async (s: CaptureSession) => {
   if (!confirm(t('components.capture.deleteConfirm', { name: sessionTitle(s) }))) return
-  // 先作废在途的会话轮询响应，防止删除前发出的轮询晚到回填旧列表
-  sessionsEpoch++
-  sessionPoller.bump()
   try {
     await Call.ByName(svc + 'DeleteCaptureSession', s.id)
     await refreshSessions()
@@ -429,9 +373,6 @@ const deleteSession = async (s: CaptureSession) => {
 const clearAll = async () => {
   if (!confirm(t('components.capture.clearConfirm'))) return
   clearing.value = true
-  // 先作废在途的会话轮询响应，防止清空前发出的轮询晚到回填旧列表
-  sessionsEpoch++
-  sessionPoller.bump()
   try {
     const affected = (await Call.ByName(svc + 'ClearCapturedRequests')) as number
     alert(t('components.capture.clearDone', { count: affected }))
@@ -448,49 +389,6 @@ const clearAll = async () => {
   }
 }
 
-// 导出：先选数据类别再导
-const exportModal = reactive({
-  open: false,
-  opts: {
-    url: true,
-    request_headers: true,
-    request_body: true,
-    response_headers: true,
-    response_body: true,
-  },
-})
-
-const openExport = () => {
-  if (!selected.value) return
-  exportModal.open = true
-}
-
-const anyExportCategory = computed(() =>
-  exportModal.opts.url || exportModal.opts.request_headers || exportModal.opts.request_body ||
-  exportModal.opts.response_headers || exportModal.opts.response_body,
-)
-
-const confirmExport = async () => {
-  if (!selected.value || !anyExportCategory.value) return
-  exporting.value = true
-  try {
-    const result = (await Call.ByName(svc + 'ExportCaptureSessionWithDialog', selected.value.id, exportModal.opts)) as {
-      path: string
-      count: number
-      canceled: boolean
-    }
-    exportModal.open = false
-    if (!result.canceled) {
-      alert(t('components.capture.exportDone', { count: result.count, path: result.path }))
-    }
-  } catch (error) {
-    console.error('导出失败:', error)
-    alert(t('components.capture.exportFailed') + (error as Error).message)
-  } finally {
-    exporting.value = false
-  }
-}
-
 // 抓包总量与 200MB 提醒：单独低频拉取，不塞进 3 秒会话轮询的热路径
 const totalBytes = ref(0)
 const overThreshold = computed(() => totalBytes.value >= SIZE_WARN_THRESHOLD)
@@ -500,22 +398,6 @@ const refreshTotalBytes = async () => {
     totalBytes.value = (await Call.ByName(svc + 'GetCaptureTotalBytes')) as number
   } catch (error) {
     console.error('读取抓包总量失败:', error)
-  }
-}
-
-// 录制进行中抓包体积才会增长：仅"页面激活且正在录制"时低频（30s）轮询总量；
-// 其余时机（激活、开关录制、清空、删除会话）按需刷新一次，不再盲轮询
-const sizePoller = createPoller(refreshTotalBytes, 30000)
-let sizePollerRunning = false
-
-const syncSizePoller = () => {
-  const needSize = pageActive && recording.value
-  if (needSize && !sizePollerRunning) {
-    sizePoller.start()
-    sizePollerRunning = true
-  } else if (!needSize && sizePollerRunning) {
-    sizePoller.stop()
-    sizePollerRunning = false
   }
 }
 
@@ -553,43 +435,18 @@ const closeDetail = () => {
   detailModal.error = ''
 }
 
-onMounted(() => {
-  initialLoad = (async () => {
-    await loadRecordingState()
-    await refreshSessions()
-    await refreshTotalBytes()
-  })()
-})
-
-onActivated(async () => {
-  pageActive = true
-  await initialLoad
-  if (!pageActive) return
-  // 重新进入页面：会话列表与抓包总量各刷一次（首次激活由首载覆盖，跳过）
-  if (activatedOnce) {
-    void refreshSessions()
-    void refreshTotalBytes()
-  }
-  activatedOnce = true
-  sessionPoller.start()
-  syncLiveTimer()
-  syncSizePoller()
-})
-
-onDeactivated(() => {
-  pageActive = false
-  sessionPoller.stop()
-  syncLiveTimer()
-  syncSizePoller()
+onMounted(async () => {
+  await loadRecordingState()
+  await refreshSessions()
+  await refreshTotalBytes()
+  sessionTimer = window.setInterval(refreshSessions, 3000)
+  sizeTimer = window.setInterval(refreshTotalBytes, 10000)
 })
 
 onUnmounted(() => {
-  pageActive = false
-  sessionPoller.stop()
-  livePoller.stop()
-  livePollerRunning = false
-  sizePoller.stop()
-  sizePollerRunning = false
+  if (sessionTimer !== null) clearInterval(sessionTimer)
+  if (liveTimer !== null) clearInterval(liveTimer)
+  if (sizeTimer !== null) clearInterval(sizeTimer)
 })
 </script>
 
@@ -892,34 +749,4 @@ html.dark .size-banner {
   cursor: help;
 }
 
-.export-modal {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 320px;
-}
-
-.export-modal__warning {
-  margin: 0 0 4px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
-  font-size: 0.8rem;
-}
-
-.export-check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.9rem;
-  cursor: pointer;
-}
-
-.export-modal__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 8px;
-}
 </style>

@@ -1,4 +1,4 @@
-import { Call } from '@wailsio/runtime'
+import { Call } from '../runtime'
 
 // 黑名单状态接口
 export interface BlacklistStatus {
@@ -27,20 +27,19 @@ const BLACKLIST_SERVICE = 'codeswitch/services.BlacklistService'
 const SETTINGS_SERVICE = 'codeswitch/services.SettingsService'
 
 /**
- * 获取指定平台的黑名单状态列表
- * @param platform 'claude' | 'codex'
+ * 获取 Codex 黑名单状态列表
  */
-export const getBlacklistStatus = async (platform: string): Promise<BlacklistStatus[]> => {
-  return Call.ByName(`${BLACKLIST_SERVICE}.GetBlacklistStatus`, platform)
+export const getBlacklistStatus = async (): Promise<BlacklistStatus[]> => {
+  return Call.ByName(`${BLACKLIST_SERVICE}.GetBlacklistStatus`, 'codex')
 }
 
 /**
  * 手动解除拉黑
- * @param platform 'claude' | 'codex'
+ * @param providerName provider 名称
  * @param providerName provider 名称
  */
-export const manualUnblock = async (platform: string, providerName: string): Promise<void> => {
-  return Call.ByName(`${BLACKLIST_SERVICE}.ManualUnblock`, platform, providerName)
+export const manualUnblock = async (providerName: string): Promise<void> => {
+  return Call.ByName(`${BLACKLIST_SERVICE}.ManualUnblock`, 'codex', providerName)
 }
 
 /**
@@ -53,7 +52,7 @@ export const getBlacklistSettings = async (): Promise<BlacklistSettings> => {
 /**
  * 更新黑名单配置
  * @param threshold 失败次数阈值（1-10）
- * @param duration 拉黑时长（15/30/60 分钟）
+ * @param duration 固定拉黑时长（1-10080 分钟）
  */
 export const updateBlacklistSettings = async (threshold: number, duration: number): Promise<void> => {
   return Call.ByName(`${SETTINGS_SERVICE}.UpdateBlacklistSettings`, threshold, duration)

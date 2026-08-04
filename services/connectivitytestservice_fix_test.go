@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// setupConnectivityTestHome 把家目录隔离到临时目录并写入一份 claude 供应商配置。
+// setupConnectivityTestHome 把家目录隔离到临时目录并写入一份 Codex 供应商配置。
 func setupConnectivityTestHome(t *testing.T, providers []Provider) {
 	t.Helper()
 
@@ -31,7 +31,7 @@ func setupConnectivityTestHome(t *testing.T, providers []Provider) {
 	if err != nil {
 		t.Fatalf("序列化 fixture 失败: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "claude-code.json"), data, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "codex.json"), data, 0o644); err != nil {
 		t.Fatalf("写 fixture 失败: %v", err)
 	}
 }
@@ -41,7 +41,7 @@ func setupConnectivityTestHome(t *testing.T, providers []Provider) {
 func TestConnectivityTestAll_FiltersByAvailabilityMonitor(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"hi"}]}`))
+		_, _ = w.Write([]byte(`{"output":[{"type":"message"}]}`))
 	}))
 	defer server.Close()
 
@@ -51,7 +51,7 @@ func TestConnectivityTestAll_FiltersByAvailabilityMonitor(t *testing.T) {
 	})
 
 	cts := NewConnectivityTestService(NewProviderService(), nil, nil, nil)
-	results := cts.TestAll("claude")
+	results := cts.TestAll(CodexPlatform)
 
 	if len(results) != 1 {
 		t.Fatalf("应只测试启用可用性监控的 1 个供应商，实际测试了 %d 个", len(results))

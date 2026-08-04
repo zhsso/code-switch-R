@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,8 +26,9 @@ type AvailabilityConfig struct {
 type SanitizeConfig struct {
 	BlockedBodyFields *[]string `json:"blockedBodyFields,omitempty"` // 要移除的请求体顶层字段
 	BlockedHeaders    *[]string `json:"blockedHeaders,omitempty"`    // 要移除的请求头（小写）
-	BlockedBetaValues *[]string `json:"blockedBetaValues,omitempty"` // anthropic-beta 中要移除的值
 }
+
+const CompatibilityModeDeepSeekCodex = "deepseek-codex"
 
 // cloneStringListPtr 深拷贝三态列表指针：nil 保持 nil，非 nil 复制底层数组。
 func cloneStringListPtr(p *[]string) *[]string {
@@ -50,13 +51,13 @@ type Provider struct {
 	Enabled bool   `json:"enabled"`
 
 	// API 端点路径（可选）- 覆盖平台默认端点
-	// 如：GLM 模型需要使用 /v1/chat/completions 而非 /v1/messages
-	// 留空则使用平台默认（claude: /v1/messages, codex: /responses）
+	// 如：兼容网关可能需要使用 /v1/chat/completions 而非 /responses。
+	// 留空则使用 Codex 默认端点 /responses。
 	APIEndpoint string `json:"apiEndpoint,omitempty"`
 
 	// 备用 API 地址（可选，最多 4 个）- 同一供应商的多入口容灾
 	// 主地址（APIURL）失败且属可切换错误时，同一请求内按序改试备用地址；
-	// 全部失败才算该供应商一次失败。仅 claude/codex/custom 转发路径生效
+	// 全部失败才算该供应商一次失败。
 	FallbackAPIURLs []string `json:"fallbackApiUrls,omitempty"`
 
 	// 最大并发请求数（0=不限）- 仅约束代理转发的推理请求，
@@ -68,12 +69,15 @@ type Provider struct {
 	SupportedModels map[string]bool `json:"supportedModels,omitempty"`
 
 	// 模型映射 - 外部模型名 -> Provider 内部模型名
-	// 支持精确匹配和通配符（如 "claude-*" -> "anthropic/claude-*"）
+	// 支持精确匹配和通配符（如 "gpt-*" -> "gateway/gpt-*"）。
 	ModelMapping map[string]string `json:"modelMapping,omitempty"`
 
 	// 优先级分组 - 数字越小优先级越高（1-10，默认 1）
 	// 使用 omitempty 确保零值不序列化，向后兼容
 	Level int `json:"level,omitempty"`
+
+	// 费用倍率 - 仅影响 WebUI 的费用统计，0 表示旧配置的默认倍率 1。
+	CostMultiplier float64 `json:"costMultiplier,omitempty"`
 
 	// ========== 可用性监控字段（新增 v0.5.0） ==========
 
@@ -91,14 +95,8 @@ type Provider struct {
 	AvailabilityConfig *AvailabilityConfig `json:"availabilityConfig,omitempty"`
 
 	// 认证方式 - bearer / x-api-key / 自定义 Header 名
-	// 空值时使用平台默认（claude: x-api-key, codex: bearer）
+	// 空值时使用 Codex 默认的 bearer 认证。
 	ConnectivityAuthType string `json:"connectivityAuthType,omitempty"`
-
-	// 上游协议类型 - anthropic / openai_chat / auto
-	// anthropic: 上游使用 Anthropic Messages API（默认）
-	// openai_chat: 上游使用 OpenAI Chat Completions API，自动转换请求/响应格式
-	// auto: 根据 APIEndpoint 自动检测（包含 /chat/completions 则为 openai_chat）
-	UpstreamProtocol string `json:"upstreamProtocol,omitempty"`
 
 	// 跳过上游 TLS 证书验证 - 仅对该供应商生效（自签名证书/企业代理场景）
 	// 默认 false；开启后该供应商的转发与健康/连通性探测都不再校验证书，存在中间人风险
@@ -108,6 +106,9 @@ type Provider struct {
 	// 解决 LiteLLM 等中转服务的 "Extra inputs are not permitted" 兼容性问题
 	RequestSanitizeEnabled bool            `json:"requestSanitizeEnabled,omitempty"`
 	SanitizeConfig         *SanitizeConfig `json:"sanitizeConfig,omitempty"`
+
+	// 请求兼容模式 - 对特定兼容 API 做隔离的请求规范化；空值保持原行为。
+	CompatibilityMode string `json:"compatibilityMode,omitempty"`
 
 	// ========== 旧字段（已废弃，仅用于读取迁移） ==========
 	// 这些字段在保存时不再写入，但读取时会自动迁移到新字段
@@ -141,15 +142,6 @@ func (ps *ProviderService) configGeneration() int64 {
 	return ps.configGen.Load()
 }
 
-var safeCustomToolIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
-
-func validateCustomToolID(toolID string) error {
-	if !safeCustomToolIDPattern.MatchString(toolID) {
-		return fmt.Errorf("invalid custom tool id: %s", toolID)
-	}
-	return nil
-}
-
 func NewProviderService() *ProviderService {
 	return &ProviderService{}
 }
@@ -158,6 +150,9 @@ func (ps *ProviderService) Start() error { return nil }
 func (ps *ProviderService) Stop() error  { return nil }
 
 func providerFilePath(kind string) (string, error) {
+	if err := requireCodexPlatform(kind); err != nil {
+		return "", err
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -166,29 +161,7 @@ func providerFilePath(kind string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	var filename string
-	switch strings.ToLower(kind) {
-	case "claude", "claude-code", "claude_code":
-		filename = "claude-code.json"
-	case "codex":
-		filename = "codex.json"
-	default:
-		// 支持自定义 CLI 工具的供应商存储：custom:{tool-id}
-		if strings.HasPrefix(kind, "custom:") {
-			toolId := strings.TrimPrefix(kind, "custom:")
-			if err := validateCustomToolID(toolId); err != nil {
-				return "", err
-			}
-			// 存储在 providers 子目录下
-			providersDir := filepath.Join(dir, "providers")
-			if err := os.MkdirAll(providersDir, 0o755); err != nil {
-				return "", err
-			}
-			return filepath.Join(providersDir, toolId+".json"), nil
-		}
-		return "", fmt.Errorf("unknown provider type: %s", kind)
-	}
-	return filepath.Join(dir, filename), nil
+	return filepath.Join(dir, CodexPlatform+".json"), nil
 }
 
 func (ps *ProviderService) SaveProviders(kind string, providers []Provider) error {
@@ -265,7 +238,7 @@ func (ps *ProviderService) saveProvidersLocked(kind string, providers []Provider
 		nameByID[p.ID] = p.Name
 	}
 
-	// 解析 platform(alias 校验需要)。失败时跳过 alias 校验(比如 gemini/unknown kind)
+	// 解析 platform（alias 校验需要）。
 	aliasPlatform, aliasErr := resolvePlatform(kind)
 	// 规则:名字不得占用其他 provider 的 48h 活动 alias
 	// 防止 "A→B 后新建同名 A" 被 alias resolver 静默归并到 B 的历史里。
@@ -546,10 +519,11 @@ func (ps *ProviderService) DuplicateProvider(kind string, sourceID int64) (*Prov
 		Accent:               source.Accent,
 		Enabled:              false, // 默认禁用，避免与源供应商冲突
 		Level:                source.Level,
+		CostMultiplier:       source.CostMultiplier,
 		APIEndpoint:          source.APIEndpoint,          // 复制端点配置
-		UpstreamProtocol:     source.UpstreamProtocol,     // 复制上游协议配置
 		ConnectivityAuthType: source.ConnectivityAuthType, // 复制认证方式
 		InsecureSkipVerify:   source.InsecureSkipVerify,   // 复制 TLS 跳验开关
+		CompatibilityMode:    source.CompatibilityMode,    // 复制请求兼容模式
 		// 请求清理配置
 		RequestSanitizeEnabled: source.RequestSanitizeEnabled,
 		// 可用性监控配置
@@ -562,7 +536,6 @@ func (ps *ProviderService) DuplicateProvider(kind string, sourceID int64) (*Prov
 		cloned.SanitizeConfig = &SanitizeConfig{
 			BlockedBodyFields: cloneStringListPtr(source.SanitizeConfig.BlockedBodyFields),
 			BlockedHeaders:    cloneStringListPtr(source.SanitizeConfig.BlockedHeaders),
-			BlockedBetaValues: cloneStringListPtr(source.SanitizeConfig.BlockedBetaValues),
 		}
 	}
 
@@ -620,7 +593,7 @@ func modelInWhitelist(supported map[string]bool, modelName string) bool {
 }
 
 // modelSupportedBy 判断白名单/映射组合是否支持指定模型。
-// Provider（claude/codex）与 GeminiProvider 共用这一份逻辑。
+// Provider 的白名单与映射共用这一份逻辑。
 func modelSupportedBy(supported map[string]bool, mapping map[string]string, modelName string) bool {
 	// 向后兼容：如果未配置白名单和映射，假设支持所有模型
 	if len(supported) == 0 && len(mapping) == 0 {
@@ -716,56 +689,8 @@ func (p *Provider) GetEffectiveEndpoint(defaultEndpoint string) string {
 	return ep
 }
 
-// UpstreamProtocolType 上游协议类型
-type UpstreamProtocolType string
-
-const (
-	// UpstreamProtocolAnthropic Anthropic Messages API（默认）
-	UpstreamProtocolAnthropic UpstreamProtocolType = "anthropic"
-	// UpstreamProtocolOpenAIChat OpenAI Chat Completions API
-	UpstreamProtocolOpenAIChat UpstreamProtocolType = "openai_chat"
-	// UpstreamProtocolAuto 自动检测
-	UpstreamProtocolAuto UpstreamProtocolType = "auto"
-)
-
-// GetUpstreamProtocol 获取上游协议类型
-// 空值或无效值默认返回 anthropic
-func (p *Provider) GetUpstreamProtocol() UpstreamProtocolType {
-	protocol := strings.TrimSpace(strings.ToLower(p.UpstreamProtocol))
-	switch protocol {
-	case "openai_chat", "openai-chat", "openai":
-		return UpstreamProtocolOpenAIChat
-	case "auto":
-		return UpstreamProtocolAuto
-	default:
-		return UpstreamProtocolAnthropic
-	}
-}
-
-// DetectUpstreamProtocol 根据端点自动检测上游协议
-// 用于 auto 模式的启发式判断
-func DetectUpstreamProtocol(endpoint string) UpstreamProtocolType {
-	ep := strings.ToLower(endpoint)
-	// 检测 OpenAI Chat Completions 端点
-	if strings.Contains(ep, "/chat/completions") {
-		return UpstreamProtocolOpenAIChat
-	}
-	// 默认 Anthropic
-	return UpstreamProtocolAnthropic
-}
-
-// ResolveUpstreamProtocol 解析最终的上游协议
-// 如果是 auto 模式，根据端点自动检测
-func (p *Provider) ResolveUpstreamProtocol(effectiveEndpoint string) UpstreamProtocolType {
-	protocol := p.GetUpstreamProtocol()
-	if protocol == UpstreamProtocolAuto {
-		return DetectUpstreamProtocol(effectiveEndpoint)
-	}
-	return protocol
-}
-
 // validateModelConfig 校验白名单/映射组合，返回错误列表（空表示通过）。
-// Provider 与 GeminiProvider 的 ValidateConfiguration 共用。
+// Provider.ValidateConfiguration 使用这份校验。
 func validateModelConfig(supported map[string]bool, mapping map[string]string) []string {
 	errors := make([]string, 0)
 
@@ -784,7 +709,7 @@ func validateModelConfig(supported map[string]bool, mapping map[string]string) [
 		}
 
 		// 通配符映射暂不静态验证（需要具体请求才能展开；
-		// Gemini 转发路径会对展开后的 effective model 再做白名单校验）
+		// 转发路径会对展开后的 effective model 再做白名单校验）
 		if strings.Contains(internalModel, "*") {
 			continue
 		}
@@ -808,15 +733,48 @@ func validateModelConfig(supported map[string]bool, mapping map[string]string) [
 func (p *Provider) ValidateConfiguration() []string {
 	errors := validateModelConfig(p.SupportedModels, p.ModelMapping)
 	errors = append(errors, validateFallbackURLs(p.FallbackAPIURLs)...)
+	if err := validateCompatibilityMode(p.CompatibilityMode); err != nil {
+		errors = append(errors, err.Error())
+	}
 	if p.MaxConcurrency < 0 {
 		errors = append(errors, "最大并发数不能为负（0 表示不限）")
+	}
+	if err := validateCostMultiplier(p.CostMultiplier); err != nil {
+		errors = append(errors, err.Error())
 	}
 	p.configErrors = errors
 	return errors
 }
 
+func validateCompatibilityMode(mode string) error {
+	switch mode {
+	case "", CompatibilityModeDeepSeekCodex:
+		return nil
+	default:
+		return fmt.Errorf("未知请求兼容模式：%q", mode)
+	}
+}
+
+func validateCostMultiplier(multiplier float64) error {
+	if multiplier == 0 {
+		return nil
+	}
+	if math.IsNaN(multiplier) || math.IsInf(multiplier, 0) || multiplier < 0.01 || multiplier > 100 {
+		return fmt.Errorf("费用倍率必须在 0.01-100 之间")
+	}
+	return nil
+}
+
+// EffectiveCostMultiplier preserves old Provider files that predate the field.
+func (p Provider) EffectiveCostMultiplier() float64 {
+	if p.CostMultiplier == 0 {
+		return 1
+	}
+	return p.CostMultiplier
+}
+
 // matchWildcard 通配符匹配函数
-// 支持 * 通配符，如 "claude-*" 匹配 "claude-sonnet-4"
+// 支持 * 通配符，如 "gpt-*" 匹配 "gpt-5.6"
 func matchWildcard(pattern, text string) bool {
 	// 如果没有通配符，使用精确匹配
 	if !strings.Contains(pattern, "*") {
@@ -829,7 +787,7 @@ func matchWildcard(pattern, text string) bool {
 		// 前缀 + * 或 * + 后缀
 		prefix, suffix := parts[0], parts[1]
 		// * 匹配 0 个及以上字符：text 长度不足以同时容纳前后缀时不可能命中。
-		// 漏掉该检查时 "gemini-*-pro" 会错误匹配 "gemini-pro"（前后缀在 text
+		// 漏掉该检查时 "gpt-*-pro" 会错误匹配 "gpt-pro"（前后缀在 text
 		// 中重叠），随后 applyWildcardMapping 的切片会越界 panic
 		if len(text) < len(prefix)+len(suffix) {
 			return false
@@ -843,9 +801,9 @@ func matchWildcard(pattern, text string) bool {
 
 // applyWildcardMapping 应用通配符映射
 // 将 pattern 中的 * 匹配部分替换到 replacement 的 * 位置
-// 示例: pattern="claude-*", replacement="anthropic/claude-*", input="claude-sonnet-4"
+// 示例: pattern="gpt-*", replacement="gateway/gpt-*", input="gpt-5.6"
 //
-//	输出: "anthropic/claude-sonnet-4"
+//	输出: "gateway/gpt-5.6"
 func applyWildcardMapping(pattern, replacement, input string) string {
 	// 如果 pattern 或 replacement 没有通配符，直接返回 replacement
 	if !strings.Contains(pattern, "*") || !strings.Contains(replacement, "*") {

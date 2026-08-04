@@ -11,27 +11,12 @@ import (
 	modelpricing "codeswitch/resources/model-pricing"
 )
 
-// 默认模型策略:从已同步的厂商目录动态解析各平台"最新可用"模型,
-// 数据不可用或解析不出时退回静态兜底常量。
-//
-// 频道规则:版本号(数字分段比较)优先,同版本内 stable 优先于 preview,
-// 再按 release_date、带日期变体、字典序决胜;探测模型额外要求发布满 30 天
-// (给第三方中转留适配期),产品默认模型只要求稳定频道语义与 tool_call 能力。
-
-// 静态兜底常量。探测值刻意保守(稳定窗内),默认值取数据源当前最新。
+// 默认模型策略从 OpenAI 目录解析 Codex 最新可用模型。
+// 健康探测模型固定，不允许模型目录同步悄悄改变运行行为。
 const (
-	FallbackClaudeProbeModel = "claude-haiku-4-5-20251001"
-	// FallbackClaudeDefaultModel 产品默认(Sonnet 家族),供 opencode 预设等
-	// "写进外部工具配置"的场景;探测仍走 Haiku
-	FallbackClaudeDefaultModel = "claude-sonnet-4-5"
-	FallbackCodexDefaultModel  = "gpt-5.6"
-	FallbackCodexProbeModel    = "gpt-5.5"
-	FallbackGeminiDefaultModel = "gemini-3.1-pro-preview"
-	FallbackGeminiProbeModel   = "gemini-3.5-flash"
+	FallbackCodexDefaultModel = "gpt-5.6"
+	FallbackCodexProbeModel   = "gpt-5.6-sol"
 )
-
-// probeStabilityWindow 探测模型的最小发布年龄。
-const probeStabilityWindow = 30 * 24 * time.Hour
 
 // resolverMaxFutureSkew release_date 允许的最大未来偏移(UTC),超过视为脏数据不入选。
 const resolverMaxFutureSkew = 3 * 24 * time.Hour
@@ -43,11 +28,8 @@ type CatalogSource interface {
 
 // DefaultModels 各平台当前解析结果,供前端与配置写入方使用。
 type DefaultModels struct {
-	ClaudeProbe   string `json:"claudeProbe"`
-	CodexDefault  string `json:"codexDefault"`
-	CodexProbe    string `json:"codexProbe"`
-	GeminiDefault string `json:"geminiDefault"`
-	GeminiProbe   string `json:"geminiProbe"`
+	CodexDefault string `json:"codexDefault"`
+	CodexProbe   string `json:"codexProbe"`
 }
 
 // DefaultModelPolicy 解析入口。并发安全:source 替换与读取加锁,解析本身无状态。
@@ -111,76 +93,29 @@ func (p *DefaultModelPolicy) CodexDefaultModel() string {
 	}
 }
 
-// GeminiDefaultModel 写入 Gemini 配置的默认模型(pro 家族)。
-func (p *DefaultModelPolicy) GeminiDefaultModel() string {
-	if c, ok := p.selectModel("google", geminiProPattern, selectOpts{requireToolCall: true}); ok {
-		return c.id
-	}
-	return FallbackGeminiDefaultModel
-}
-
-// ClaudeDefaultModel 产品默认 Claude 模型(稳定 Sonnet 家族,要求 tool_call)。
-// 与 ProbeModel("claude") 的语义区别:探测选低成本 Haiku,这里选面向实际
-// 编码/对话体验的默认型号,供 opencode 预设等写入外部工具配置的场景使用。
-func (p *DefaultModelPolicy) ClaudeDefaultModel() string {
-	if c, ok := p.selectModel("anthropic", claudeSonnetPattern, selectOpts{requireToolCall: true}); ok {
-		return c.id
-	}
-	return FallbackClaudeDefaultModel
-}
-
-// ProbeModel 各平台健康/连通性探测的默认模型(30 天稳定窗)。
+// ProbeModel 返回 Codex 健康与连通性探测模型。
 func (p *DefaultModelPolicy) ProbeModel(platform string) string {
-	switch strings.ToLower(platform) {
-	case "claude":
-		if c, ok := p.selectModel("anthropic", claudeHaikuPattern, selectOpts{stabilityWindow: probeStabilityWindow, preferDated: true}); ok {
-			return c.id
-		}
-		return FallbackClaudeProbeModel
-	case "codex":
-		if c, ok := p.selectModel("openai", codexMainlinePattern, selectOpts{stabilityWindow: probeStabilityWindow}); ok {
-			return c.id
-		}
-		return FallbackCodexProbeModel
-	case "gemini":
-		if c, ok := p.selectModel("google", geminiFlashPattern, selectOpts{stabilityWindow: probeStabilityWindow}); ok {
-			return c.id
-		}
-		return FallbackGeminiProbeModel
-	default:
+	if requireCodexPlatform(platform) != nil {
 		return ""
 	}
+	// Probes must remain predictable across pricing/catalog synchronization.
+	// A provider can still override this through AvailabilityConfig.TestModel.
+	return FallbackCodexProbeModel
 }
 
-// ProbeCandidates 探测候选链(去重):动态解析值 → 静态兜底。
-// 供白名单交集选择:声明了 supportedModels 的供应商取链上首个其支持的模型。
+// ProbeCandidates 返回固定 Codex 探测模型。
 func (p *DefaultModelPolicy) ProbeCandidates(platform string) []string {
-	var fallback string
-	switch strings.ToLower(platform) {
-	case "claude":
-		fallback = FallbackClaudeProbeModel
-	case "codex":
-		fallback = FallbackCodexProbeModel
-	case "gemini":
-		fallback = FallbackGeminiProbeModel
-	default:
+	if requireCodexPlatform(platform) != nil {
 		return nil
 	}
-	dynamic := p.ProbeModel(platform)
-	if dynamic == "" || dynamic == fallback {
-		return []string{fallback}
-	}
-	return []string{dynamic, fallback}
+	return []string{FallbackCodexProbeModel}
 }
 
 // DefaultModels 汇总当前解析结果。
 func (p *DefaultModelPolicy) DefaultModels() DefaultModels {
 	return DefaultModels{
-		ClaudeProbe:   p.ProbeModel("claude"),
-		CodexDefault:  p.CodexDefaultModel(),
-		CodexProbe:    p.ProbeModel("codex"),
-		GeminiDefault: p.GeminiDefaultModel(),
-		GeminiProbe:   p.ProbeModel("gemini"),
+		CodexDefault: p.CodexDefaultModel(),
+		CodexProbe:   p.ProbeModel(CodexPlatform),
 	}
 }
 
@@ -190,14 +125,8 @@ func (p *DefaultModelPolicy) DefaultModels() DefaultModels {
 type familyPattern func(id string) (version []int, dated string, preview bool, ok bool)
 
 var (
-	codexMainlineRe      = regexp.MustCompile(`^gpt-(\d+(?:\.\d+)*)$`)
-	codexLineRe          = regexp.MustCompile(`^gpt-(\d+(?:\.\d+)*)-codex$`)
-	geminiProRe          = regexp.MustCompile(`^gemini-(\d+(?:\.\d+)*)-pro(-preview)?$`)
-	geminiFlashRe        = regexp.MustCompile(`^gemini-(\d+(?:\.\d+)*)-flash(-preview)?$`)
-	claudeHaikuNewRe     = regexp.MustCompile(`^claude-haiku-(\d+(?:-\d+)*?)(?:-(\d{8}))?$`)
-	claudeHaikuLegacyRe  = regexp.MustCompile(`^claude-(\d+(?:-\d+)*?)-haiku(?:-(\d{8}))?$`)
-	claudeSonnetNewRe    = regexp.MustCompile(`^claude-sonnet-(\d+(?:-\d+)*?)(?:-(\d{8}))?$`)
-	claudeSonnetLegacyRe = regexp.MustCompile(`^claude-(\d+(?:-\d+)*?)-sonnet(?:-(\d{8}))?$`)
+	codexMainlineRe = regexp.MustCompile(`^gpt-(\d+(?:\.\d+)*)$`)
+	codexLineRe     = regexp.MustCompile(`^gpt-(\d+(?:\.\d+)*)-codex$`)
 )
 
 func codexMainlinePattern(id string) ([]int, string, bool, bool) {
@@ -214,64 +143,6 @@ func codexLinePattern(id string) ([]int, string, bool, bool) {
 		return nil, "", false, false
 	}
 	return parseVersionSegments(m[1]), "", false, true
-}
-
-func geminiProPattern(id string) ([]int, string, bool, bool) {
-	m := geminiProRe.FindStringSubmatch(id)
-	if m == nil {
-		return nil, "", false, false
-	}
-	return parseVersionSegments(m[1]), "", m[2] != "", true
-}
-
-func geminiFlashPattern(id string) ([]int, string, bool, bool) {
-	m := geminiFlashRe.FindStringSubmatch(id)
-	if m == nil {
-		return nil, "", false, false
-	}
-	return parseVersionSegments(m[1]), "", m[2] != "", true
-}
-
-func claudeHaikuPattern(id string) ([]int, string, bool, bool) {
-	if m := claudeHaikuNewRe.FindStringSubmatch(id); m != nil {
-		if version := saneClaudeVersion(parseVersionSegments(m[1])); version != nil {
-			return version, m[2], false, true
-		}
-	}
-	if m := claudeHaikuLegacyRe.FindStringSubmatch(id); m != nil {
-		if version := saneClaudeVersion(parseVersionSegments(m[1])); version != nil {
-			return version, m[2], false, true
-		}
-	}
-	return nil, "", false, false
-}
-
-func claudeSonnetPattern(id string) ([]int, string, bool, bool) {
-	if m := claudeSonnetNewRe.FindStringSubmatch(id); m != nil {
-		if version := saneClaudeVersion(parseVersionSegments(m[1])); version != nil {
-			return version, m[2], false, true
-		}
-	}
-	if m := claudeSonnetLegacyRe.FindStringSubmatch(id); m != nil {
-		if version := saneClaudeVersion(parseVersionSegments(m[1])); version != nil {
-			return version, m[2], false, true
-		}
-	}
-	return nil, "", false, false
-}
-
-// saneClaudeVersion 拒绝把疑似日期/异常数字吸收进版本段的解析结果
-// (惰性正则在非 8 位数字尾缀时可能回溯出 [4,5,2025] 这类伪版本)。
-func saneClaudeVersion(version []int) []int {
-	if len(version) == 0 || len(version) > 3 {
-		return nil
-	}
-	for _, seg := range version {
-		if seg >= 1000 {
-			return nil
-		}
-	}
-	return version
 }
 
 // parseVersionSegments 把 "5.10"/"4-5" 拆成数字段。

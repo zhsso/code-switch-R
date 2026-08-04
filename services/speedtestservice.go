@@ -31,12 +31,12 @@ func NewSpeedTestService() *SpeedTestService {
 	return &SpeedTestService{}
 }
 
-// Start Wails生命周期方法
+// Start initializes the service lifecycle.
 func (s *SpeedTestService) Start() error {
 	return nil
 }
 
-// Stop Wails生命周期方法
+// Stop terminates the service lifecycle.
 func (s *SpeedTestService) Stop() error {
 	return nil
 }

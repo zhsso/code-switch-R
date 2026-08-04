@@ -58,13 +58,13 @@ func TestRecordFailure_BlacklistClearsStaleRecoveryTime(t *testing.T) {
 		INSERT INTO provider_blacklist
 			(platform, provider_name, failure_count, last_failure_at, blacklist_level,
 			 last_recovered_at, last_degrade_hour, last_failure_window_start, auto_recovered)
-		VALUES ('claude', 'p46', 2, ?, 3, ?, 2, ?, 1)
+		VALUES ('codex', 'p46', 2, ?, 3, ?, 2, ?, 1)
 	`, now.Add(-10*time.Minute), now.Add(-7*time.Hour), now.Add(-10*time.Minute)); err != nil {
 		t.Fatalf("seed 失败: %v", err)
 	}
 
 	bs := NewBlacklistService(NewSettingsService(), nil)
-	if err := bs.RecordFailure("claude", "p46"); err != nil {
+	if err := bs.RecordFailure("codex", "p46"); err != nil {
 		t.Fatalf("RecordFailure 失败: %v", err)
 	}
 
@@ -73,7 +73,7 @@ func TestRecordFailure_BlacklistClearsStaleRecoveryTime(t *testing.T) {
 	var lastRecoveredValid int
 	if err := db.QueryRow(`
 		SELECT blacklist_level, last_degrade_hour, last_recovered_at IS NOT NULL
-		FROM provider_blacklist WHERE platform='claude' AND provider_name='p46'
+		FROM provider_blacklist WHERE platform='codex' AND provider_name='p46'
 	`).Scan(&level, &degradeHour, &lastRecoveredValid); err != nil {
 		t.Fatalf("查询失败: %v", err)
 	}
@@ -90,18 +90,18 @@ func TestRecordFailure_BlacklistClearsStaleRecoveryTime(t *testing.T) {
 	// 模拟拉黑到期但自动恢复尚未扫描：首个成功不应触发宽恕清零
 	if _, err := db.Exec(`
 		UPDATE provider_blacklist SET blacklisted_until = ?
-		WHERE platform='claude' AND provider_name='p46'
+		WHERE platform='codex' AND provider_name='p46'
 	`, now.Add(-1*time.Minute)); err != nil {
 		t.Fatalf("模拟到期失败: %v", err)
 	}
 
-	if err := bs.RecordSuccess("claude", "p46"); err != nil {
+	if err := bs.RecordSuccess("codex", "p46"); err != nil {
 		t.Fatalf("RecordSuccess 失败: %v", err)
 	}
 
 	if err := db.QueryRow(`
 		SELECT blacklist_level FROM provider_blacklist
-		WHERE platform='claude' AND provider_name='p46'
+		WHERE platform='codex' AND provider_name='p46'
 	`).Scan(&level); err != nil {
 		t.Fatalf("查询失败: %v", err)
 	}
@@ -142,20 +142,20 @@ func TestRecordSuccess_UsesConfiguredDegradeInterval(t *testing.T) {
 				INSERT INTO provider_blacklist
 					(platform, provider_name, failure_count, last_failure_at, blacklist_level,
 					 last_recovered_at, last_degrade_hour, auto_recovered)
-				VALUES ('claude', 'p88', 0, ?, ?, ?, 0, 1)
+				VALUES ('codex', 'p88', 0, ?, ?, ?, 0, 1)
 			`, now.Add(-2*time.Hour), tc.startLevel, now.Add(-tc.recoveredAgo)); err != nil {
 				t.Fatalf("seed 失败: %v", err)
 			}
 
 			bs := NewBlacklistService(ss, nil)
-			if err := bs.RecordSuccess("claude", "p88"); err != nil {
+			if err := bs.RecordSuccess("codex", "p88"); err != nil {
 				t.Fatalf("RecordSuccess 失败: %v", err)
 			}
 
 			var level int
 			if err := db.QueryRow(`
 				SELECT blacklist_level FROM provider_blacklist
-				WHERE platform='claude' AND provider_name='p88'
+				WHERE platform='codex' AND provider_name='p88'
 			`).Scan(&level); err != nil {
 				t.Fatalf("查询失败: %v", err)
 			}
@@ -179,13 +179,13 @@ func TestRecordFailureFixedMode_ResetsFailureCountOnBlacklist(t *testing.T) {
 	if _, err := db.Exec(`
 		INSERT INTO provider_blacklist
 			(platform, provider_name, failure_count, last_failure_at)
-		VALUES ('claude', 'p91', 2, ?)
+		VALUES ('codex', 'p91', 2, ?)
 	`, now.Add(-10*time.Minute)); err != nil {
 		t.Fatalf("seed 失败: %v", err)
 	}
 
 	bs := NewBlacklistService(NewSettingsService(), nil)
-	if err := bs.RecordFailure("claude", "p91"); err != nil {
+	if err := bs.RecordFailure("codex", "p91"); err != nil {
 		t.Fatalf("RecordFailure 失败: %v", err)
 	}
 
@@ -193,7 +193,7 @@ func TestRecordFailureFixedMode_ResetsFailureCountOnBlacklist(t *testing.T) {
 	var untilValid int
 	if err := db.QueryRow(`
 		SELECT failure_count, blacklisted_until IS NOT NULL
-		FROM provider_blacklist WHERE platform='claude' AND provider_name='p91'
+		FROM provider_blacklist WHERE platform='codex' AND provider_name='p91'
 	`).Scan(&failureCount, &untilValid); err != nil {
 		t.Fatalf("查询失败: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestRecordFailure_ThresholdOneBlacklistsOnFirstFailure(t *testing.T) {
 			}
 
 			bs := NewBlacklistService(NewSettingsService(), nil)
-			if err := bs.RecordFailure("claude", "p92"); err != nil {
+			if err := bs.RecordFailure("codex", "p92"); err != nil {
 				t.Fatalf("RecordFailure 失败: %v", err)
 			}
 
@@ -235,7 +235,7 @@ func TestRecordFailure_ThresholdOneBlacklistsOnFirstFailure(t *testing.T) {
 			var until sql.NullTime
 			if err := db.QueryRow(`
 				SELECT blacklist_level, failure_count, blacklisted_until
-				FROM provider_blacklist WHERE platform='claude' AND provider_name='p92'
+				FROM provider_blacklist WHERE platform='codex' AND provider_name='p92'
 			`).Scan(&level, &failureCount, &until); err != nil {
 				t.Fatalf("首次失败应已插入拉黑记录: %v", err)
 			}
@@ -297,7 +297,7 @@ func TestNotifyProviderSwitch_ThrottleUpdatesTimestampSynchronously(t *testing.T
 	ns.NotifyProviderSwitch(SwitchNotification{
 		FromProvider: "a",
 		ToProvider:   "b",
-		Platform:     "claude",
+		Platform:     "codex",
 	})
 
 	// 返回后立即读取：时间戳应已同步更新，使突发的后续调用立刻被节流
@@ -313,7 +313,7 @@ func TestNotifyProviderSwitch_ThrottleUpdatesTimestampSynchronously(t *testing.T
 	ns.NotifyProviderSwitch(SwitchNotification{
 		FromProvider: "b",
 		ToProvider:   "c",
-		Platform:     "claude",
+		Platform:     "codex",
 	})
 	ns.mu.RLock()
 	after := ns.lastNotifyTime

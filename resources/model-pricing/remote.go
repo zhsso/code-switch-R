@@ -26,15 +26,13 @@ const (
 
 // RemoteProviderIDs 同步的厂商固定 allowlist,与 key 前缀规则一一对应。
 var RemoteProviderIDs = []string{
-	"anthropic", "openai", "google", "deepseek", "alibaba", "moonshotai", "zhipuai",
+	"openai", "deepseek", "alibaba", "moonshotai", "zhipuai",
 }
 
 // remoteKeyPrefixes 把厂商目录里的裸模型 id 映射为价格表既有的 key 约定
 // (与 familyRules、overlay aliases 对齐)。
 var remoteKeyPrefixes = map[string]string{
-	"anthropic":  "",
 	"openai":     "",
-	"google":     "",
 	"deepseek":   "",
 	"alibaba":    "dashscope/",
 	"moonshotai": "moonshot/",
