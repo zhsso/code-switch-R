@@ -38,12 +38,21 @@ func main() {
 	providerService := services.NewProviderService()
 	providerRPC := newProviderRPCService(providerService)
 	settingsService := services.NewSettingsService()
-	appSettings := services.NewAppSettingsService()
+	appSettings, err := services.NewAppSettingsService()
+	if err != nil {
+		shutdownDatabaseQueues()
+		log.Fatalf("initialize application settings: %v", err)
+	}
 	events := newEventHub()
 	notificationService := services.NewNotificationService(appSettings)
 	notificationService.SetEventEmitter(events)
 	defaultModelPolicy := services.NewDefaultModelPolicy()
-	modelSyncService := services.NewModelSyncService(appSettings, defaultModelPolicy)
+	modelSyncService, err := services.NewModelSyncService(appSettings, defaultModelPolicy)
+	if err != nil {
+		notificationService.Stop()
+		shutdownDatabaseQueues()
+		log.Fatalf("initialize model sync: %v", err)
+	}
 	modelSyncService.SetEventEmitter(events)
 	blacklistService := services.NewBlacklistService(settingsService, notificationService)
 	providerRelay := services.NewProviderRelayService(
@@ -122,6 +131,7 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer shutdownCancel()
+	notificationService.Stop()
 	if err := webServer.Stop(shutdownCtx); err != nil {
 		log.Printf("stop WebUI: %v", err)
 	}
@@ -137,9 +147,6 @@ func main() {
 	}
 	<-backgroundDone
 
-	// Let interrupted streaming handlers enqueue their final usage record before
-	// closing the batched write queues.
-	time.Sleep(500 * time.Millisecond)
 	shutdownDatabaseQueues()
 }
 

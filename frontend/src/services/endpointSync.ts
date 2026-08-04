@@ -47,9 +47,9 @@ export async function fetchAllProviderEndpoints(): Promise<SyncedEndpoint[]> {
   const endpoints: SyncedEndpoint[] = []
 
   try {
-    const codexProviders = await LoadProviders('codex')
-    if (Array.isArray(codexProviders)) {
-      codexProviders.forEach((p: any) => {
+    const snapshot = await LoadProviders('codex')
+    if (Array.isArray(snapshot.providers)) {
+      snapshot.providers.forEach((p: any) => {
         if (p.apiUrl && p.apiUrl.trim()) {
           const baseUrl = extractBaseUrl(p.apiUrl)
           if (baseUrl) {

@@ -11,7 +11,10 @@ import (
 
 // newTestRelayService 按当前构造函数签名装配 ProviderRelayService。
 func newTestRelayService(providerService *ProviderService) *ProviderRelayService {
-	appSettings := NewAppSettingsService()
+	appSettings, err := NewAppSettingsService()
+	if err != nil {
+		panic(err)
+	}
 	notificationService := NewNotificationService(appSettings)
 	blacklistService := NewBlacklistService(NewSettingsService(), notificationService)
 	return NewProviderRelayService(providerService, blacklistService, notificationService, appSettings, "")

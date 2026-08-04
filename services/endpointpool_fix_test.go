@@ -37,6 +37,24 @@ func TestEndpointPool(t *testing.T) {
 	}
 }
 
+func TestEndpointPoolPreservesCaseSensitiveURLIdentity(t *testing.T) {
+	p := &Provider{
+		APIURL: "HTTPS://API.Example.com/v1/ChatCompletions?Mode=Fast",
+		FallbackAPIURLs: []string{
+			"https://api.example.com/v1/chatcompletions?Mode=Fast",
+			"https://api.example.com/v1/ChatCompletions?mode=Fast",
+		},
+	}
+
+	pool := p.EndpointPool()
+	if len(pool) != 3 {
+		t.Fatalf("case-sensitive paths and queries must remain distinct: %v", pool)
+	}
+	if got := normalizeURL(p.APIURL); got != "https://api.example.com/v1/ChatCompletions?Mode=Fast" {
+		t.Fatalf("normalized URL = %q", got)
+	}
+}
+
 func TestValidateFallbackURLs(t *testing.T) {
 	if errs := validateFallbackURLs([]string{"https://a.com", "http://b.com"}); len(errs) != 0 {
 		t.Errorf("合法备用地址不应报错: %v", errs)

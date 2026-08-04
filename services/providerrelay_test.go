@@ -19,8 +19,8 @@ func TestResponseUsageSnapshotIsNotAccumulated(t *testing.T) {
 			}
 		}
 	}`
-	usage := &ReqeustLog{}
-	hook := ReqeustLogHook(nil, "co"+"dex", usage)
+	usage := &RequestLog{}
+	hook := RequestLogHook(nil, "co"+"dex", usage)
 
 	hook([]byte(payload))
 	hook([]byte(payload))
@@ -53,8 +53,8 @@ func TestResponseUsageSeparatesCachedInputTokens(t *testing.T) {
 			}
 		}
 	}`
-	usage := &ReqeustLog{}
-	hook := ReqeustLogHook(nil, "co"+"dex", usage)
+	usage := &RequestLog{}
+	hook := RequestLogHook(nil, "co"+"dex", usage)
 
 	hook([]byte(payload))
 
@@ -87,8 +87,8 @@ func TestResponseUsageLatestSnapshotCanReduceUncachedInput(t *testing.T) {
 			}
 		}
 	}`
-	usage := &ReqeustLog{}
-	hook := ReqeustLogHook(nil, "co"+"dex", usage)
+	usage := &RequestLog{}
+	hook := RequestLogHook(nil, "co"+"dex", usage)
 
 	hook([]byte(firstPayload))
 	hook([]byte(finalPayload))

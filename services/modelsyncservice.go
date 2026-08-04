@@ -157,10 +157,10 @@ type ModelSyncService struct {
 }
 
 // NewModelSyncService 创建服务:载入本地缓存(哈希校验,失败回种子)并完成首次定价重建。
-func NewModelSyncService(appSettings *AppSettingsService, policy *DefaultModelPolicy) *ModelSyncService {
-	home, err := os.UserHomeDir()
+func NewModelSyncService(appSettings *AppSettingsService, policy *DefaultModelPolicy) (*ModelSyncService, error) {
+	configDir, err := getUserConfigDir()
 	if err != nil {
-		home = "."
+		return nil, fmt.Errorf("resolve model sync directory: %w", err)
 	}
 	pricing, pricingErr := modelpricing.DefaultService()
 	if pricingErr != nil {
@@ -180,7 +180,7 @@ func NewModelSyncService(appSettings *AppSettingsService, policy *DefaultModelPo
 		pricing:     pricing,
 		baseURLs:    append([]string(nil), modelSyncBaseURLs...),
 		httpClient:  &http.Client{Timeout: 0}, // 超时由 per-request context 控制
-		dir:         filepath.Join(home, appSettingsDir, modelSyncDirName),
+		dir:         filepath.Join(configDir, modelSyncDirName),
 		state:       newModelSyncState(),
 		catalogs:    make(map[string]*modelpricing.RemoteCatalog),
 		sources:     make(map[string]string),
@@ -194,7 +194,7 @@ func NewModelSyncService(appSettings *AppSettingsService, policy *DefaultModelPo
 	if policy != nil {
 		policy.SetSource(s)
 	}
-	return s
+	return s, nil
 }
 
 // SetEventEmitter injects the WebUI event transport.

@@ -1035,6 +1035,7 @@ type ProviderTab = 'codex'
 const activeTab = 'codex' as const
 
 const cards = ref(createAutomationCards(automationCardGroups.codex))
+let providerGeneration = 0
 const draggingId = ref<number | null>(null)
 
 // 空对象转 undefined，避免写入无意义的空配置。
@@ -1082,7 +1083,8 @@ const serializeProviders = (providers: AutomationCard[]) =>
 
 const persistProvidersNow = async (): Promise<{ ok: boolean; error?: string }> => {
   try {
-    await SaveProviders('codex', serializeProviders(cards.value))
+    const nextGeneration = await SaveProviders('codex', providerGeneration, serializeProviders(cards.value))
+    providerGeneration = Math.max(providerGeneration, nextGeneration)
     return { ok: true }
   } catch (error) {
     console.error('Failed to save providers', error)
@@ -1122,17 +1124,19 @@ const loadProvidersFromDisk = async () => {
 
 const loadProvidersFromDiskOnce = async () => {
   try {
-      const saved = await LoadProviders('codex')
-      if (Array.isArray(saved)) {
-        replaceProviders(saved as AutomationCard[])
-        sortProvidersByLevel(cards.value)
-      } else {
-        await persistProviders()
-      }
+    const snapshot = await LoadProviders<AutomationCard>('codex')
+    if (snapshot.generation < providerGeneration) return
+    providerGeneration = snapshot.generation
+    if (Array.isArray(snapshot.providers)) {
+      replaceProviders(snapshot.providers)
+      sortProvidersByLevel(cards.value)
+    } else {
+      await persistProviders()
+    }
   } catch (error) {
-      console.error('Failed to load providers', error)
-      // 加载供应商失败时提示用户
-      showToast(t('components.main.errors.loadProvidersFailed', { tab: 'codex' }), 'error')
+    console.error('Failed to load providers', error)
+    // 加载供应商失败时提示用户
+    showToast(t('components.main.errors.loadProvidersFailed', { tab: 'codex' }), 'error')
   }
 }
 
@@ -1477,6 +1481,15 @@ const handleProviderBlacklisted = (event: { data: { platform: string; providerNa
   switchToTabAndHighlight(platform, providerName)
 }
 
+const handleServerEventsResync = () => {
+  void Promise.allSettled([
+    loadProviderStats(activeTab),
+    loadBlacklistStatus(activeTab),
+    loadAvailabilityResults(),
+    loadLastUsedProviders(),
+  ])
+}
+
 // 判断供应商是否是最后使用的
 // @author sm
 const isLastUsedProvider = (providerName: string): boolean => {
@@ -1495,6 +1508,7 @@ const scrollToCard = (el: HTMLElement | null) => {
 // 事件取消订阅函数
 let unsubscribeSwitched: (() => void) | undefined
 let unsubscribeBlacklisted: (() => void) | undefined
+let unsubscribeResync: (() => void) | undefined
 
 onMounted(async () => {
   void initHeatmap()
@@ -1553,6 +1567,7 @@ onMounted(async () => {
   // 监听供应商切换和拉黑事件
   unsubscribeSwitched = Events.On('provider:switched', handleProviderSwitched)
   unsubscribeBlacklisted = Events.On('provider:blacklisted', handleProviderBlacklisted)
+  unsubscribeResync = Events.On('system:resync', handleServerEventsResync)
 })
 
 onUnmounted(() => {
@@ -1585,6 +1600,9 @@ onUnmounted(() => {
   }
   if (unsubscribeBlacklisted) {
     unsubscribeBlacklisted()
+  }
+  if (unsubscribeResync) {
+    unsubscribeResync()
   }
 })
 
@@ -2020,7 +2038,8 @@ const submitModal = async (): Promise<boolean> => {
   if (editingCard.value) {
     if (name && name !== editingCard.value.name) {
       try {
-        await RenameProvider(modalState.tabId, editingCard.value.id, name)
+        const nextGeneration = await RenameProvider(modalState.tabId, editingCard.value.id, name)
+        providerGeneration = Math.max(providerGeneration, nextGeneration)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         showToast(msg || 'Rename failed', 'error')
@@ -2236,7 +2255,8 @@ const queueDragPersist = (tabId: ProviderTab) => {
   const payload = JSON.parse(JSON.stringify(serializeProviders(cards.value)))
 
   const job = async () => {
-    await SaveProviders(targetKey, payload)
+    const nextGeneration = await SaveProviders(targetKey, providerGeneration, payload)
+    providerGeneration = Math.max(providerGeneration, nextGeneration)
   }
 
   dragPersistChain = dragPersistChain.then(job).catch(async (error) => {
@@ -2244,10 +2264,12 @@ const queueDragPersist = (tabId: ProviderTab) => {
     showToast(t('components.main.form.saveFailed') + ': ' + extractErrorMessage(error), 'error')
     if (dragPersistRevisions.get(targetKey) !== revision) return
     try {
-      const saved = await LoadProviders(targetKey)
+      const snapshot = await LoadProviders<AutomationCard>(targetKey)
       if (dragPersistRevisions.get(targetKey) !== revision) return
-      if (Array.isArray(saved)) {
-        cards.value = createAutomationCards(saved as AutomationCard[])
+      if (snapshot.generation < providerGeneration) return
+      providerGeneration = snapshot.generation
+      if (Array.isArray(snapshot.providers)) {
+        cards.value = createAutomationCards(snapshot.providers)
         sortProvidersByLevel(cards.value)
       }
     } catch (reloadError) {

@@ -40,7 +40,7 @@ func escapeSQLiteURIPath(path string) string {
 // 4. 确保表结构存在
 // 5. 预热连接池
 func InitDatabase() error {
-	home, err := os.UserHomeDir()
+	configDir, err := getUserConfigDir()
 	if err != nil {
 		return fmt.Errorf("获取用户目录失败: %w", err)
 	}
@@ -48,7 +48,6 @@ func InitDatabase() error {
 	// 1. 确保配置目录存在（SQLite 不会自动创建父目录）。
 	// 0700：抓包全量模式会把明文 API Key 与完整请求/响应写进 app.db，
 	// 目录与库文件都收敛为仅属主可读写。
-	configDir := filepath.Join(home, ".code-switch")
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		return fmt.Errorf("创建配置目录失败: %w", err)
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,6 +25,10 @@ func migrateVolumeData() (volumeMigrationResult, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return volumeMigrationResult{}, fmt.Errorf("resolve data home: %w", err)
+	}
+	home = filepath.Clean(home)
+	if home == "" || home == "." || !filepath.IsAbs(home) {
+		return volumeMigrationResult{}, fmt.Errorf("resolve data home: invalid path %q", home)
 	}
 	return migrateVolumeDataAt(home)
 }
@@ -304,12 +309,14 @@ func openMigrationDB(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-func copyFile(source, target string, mode os.FileMode) error {
+func copyFile(source, target string, mode os.FileMode) (resultErr error) {
 	in, err := os.Open(source)
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() {
+		resultErr = errors.Join(resultErr, in.Close())
+	}()
 	out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
 	if err != nil {
 		return err
@@ -317,13 +324,7 @@ func copyFile(source, target string, mode os.FileMode) error {
 	_, copyErr := io.Copy(out, in)
 	syncErr := out.Sync()
 	closeErr := out.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	if syncErr != nil {
-		return syncErr
-	}
-	return closeErr
+	return errors.Join(copyErr, syncErr, closeErr)
 }
 
 func migrateLegacyConfigFiles(sourceDir, targetDir string) error {

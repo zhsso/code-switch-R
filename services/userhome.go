@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 )
 
+const userConfigDirName = ".code-switch"
+
 // getUserHomeDir 获取并校验用户家目录
 // 确保返回值非空、绝对路径，避免相对路径导致写入到工作目录等安全问题
 func getUserHomeDir() (string, error) {
@@ -23,4 +25,12 @@ func getUserHomeDir() (string, error) {
 	}
 
 	return home, nil
+}
+
+func getUserConfigDir() (string, error) {
+	home, err := getUserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, userConfigDirName), nil
 }

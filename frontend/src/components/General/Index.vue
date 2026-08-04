@@ -159,13 +159,20 @@ async function cleanHistory() {
 }
 
 let stopSyncEvent: (() => void) | undefined
+let stopResyncEvent: (() => void) | undefined
 onMounted(async () => {
   await load()
   stopSyncEvent = Events.On('model-sync:updated', async () => {
     modelSync.value = await GetSyncStatus()
   })
+  stopResyncEvent = Events.On('system:resync', async () => {
+    modelSync.value = await GetSyncStatus()
+  })
 })
-onUnmounted(() => stopSyncEvent?.())
+onUnmounted(() => {
+  stopSyncEvent?.()
+  stopResyncEvent?.()
+})
 </script>
 
 <template>

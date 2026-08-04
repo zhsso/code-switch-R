@@ -19,6 +19,11 @@ type providerRPCView struct {
 	APIKeyChanged    bool   `json:"apiKeyChanged,omitempty"`
 }
 
+type providerRPCSnapshot struct {
+	Providers  []providerRPCView `json:"providers"`
+	Generation int64             `json:"generation"`
+}
+
 type providerRPCService struct {
 	providers *services.ProviderService
 }
@@ -27,20 +32,19 @@ func newProviderRPCService(providers *services.ProviderService) *providerRPCServ
 	return &providerRPCService{providers: providers}
 }
 
-func (service *providerRPCService) LoadProviders(kind string) ([]providerRPCView, error) {
-	providers, err := service.providers.LoadProviders(kind)
+func (service *providerRPCService) LoadProviders(kind string) (providerRPCSnapshot, error) {
+	providers, generation, err := service.providers.LoadProvidersWithGen(kind)
 	if err != nil {
-		return nil, err
+		return providerRPCSnapshot{}, err
 	}
-	return maskProviders(providers), nil
+	return providerRPCSnapshot{Providers: maskProviders(providers), Generation: generation}, nil
 }
 
-func (service *providerRPCService) SaveProviders(kind string, views []providerRPCView) error {
-	current, err := service.providers.LoadProviders(kind)
-	if err != nil {
-		return err
-	}
-	return service.providers.SaveProviders(kind, mergeProviderViews(current, views))
+func (service *providerRPCService) SaveProviders(kind string, generation int64, views []providerRPCView) (int64, error) {
+	_, nextGeneration, err := service.providers.UpdateProviders(kind, generation, func(current []services.Provider) ([]services.Provider, error) {
+		return mergeProviderViews(current, views), nil
+	})
+	return nextGeneration, err
 }
 
 func mergeProviderViews(current []services.Provider, views []providerRPCView) []services.Provider {
@@ -88,8 +92,8 @@ func (service *providerRPCService) DuplicateProvider(kind string, sourceID int64
 	return &view, nil
 }
 
-func (service *providerRPCService) RenameProvider(kind string, id int64, name string) error {
-	return service.providers.RenameProvider(kind, id, name)
+func (service *providerRPCService) RenameProvider(kind string, id int64, name string) (int64, error) {
+	return service.providers.RenameProviderWithGeneration(kind, id, name)
 }
 
 func maskProviders(providers []services.Provider) []providerRPCView {
@@ -143,6 +147,12 @@ func restoreMaskedURL(incoming, existing string) string {
 	}
 	incomingQuery := incomingURL.Query()
 	existingQuery := existingURL.Query()
+	if incomingURL.User == nil && existingURL.User != nil {
+		incomingURL.User = existingURL.User
+	}
+	if incomingURL.Fragment == "" && existingURL.Fragment != "" {
+		incomingURL.Fragment = existingURL.Fragment
+	}
 	for key, values := range incomingQuery {
 		oldValues := existingQuery[key]
 		for index, value := range values {

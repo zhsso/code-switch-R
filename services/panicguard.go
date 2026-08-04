@@ -56,12 +56,11 @@ func appendCrashLog(label string, r any, stack []byte) {
 	crashLogMu.Lock()
 	defer crashLogMu.Unlock()
 
-	home, err := os.UserHomeDir()
+	dir, err := getUserConfigDir()
 	if err != nil {
 		return
 	}
-	dir := filepath.Join(home, appSettingsDir)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return
 	}
 	path := filepath.Join(dir, "crash.log")

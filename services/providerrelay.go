@@ -57,6 +57,9 @@ type ProviderRelayService struct {
 	appSettings         *AppSettingsService // 应用设置服务（用于获取轮询开关状态）
 	server              *http.Server
 	serverMu            sync.Mutex // 保护 server：Start/Stop 均可从前端 RPC 触发
+	requestMu           sync.Mutex
+	acceptingRequests   bool
+	requestWG           sync.WaitGroup
 	addr                string
 	// boundAddrs 本次启动实际绑定成功的地址。监听地址在启动时就已冻结，
 	// 之后改设置不会重绑，所以任何"这个地址能不能连"的判断都必须以它为准，
@@ -389,6 +392,7 @@ func NewProviderRelayService(providerService *ProviderService, blacklistService 
 		blacklistService:    blacklistService,
 		notificationService: notificationService,
 		appSettings:         appSettings,
+		acceptingRequests:   true,
 		addr:                addr,
 		lastUsed: map[string]*LastUsedProvider{
 			CodexPlatform: nil,
@@ -547,6 +551,9 @@ func (prs *ProviderRelayService) Start() error {
 	prs.serverMu.Lock()
 	prs.server = server
 	prs.serverMu.Unlock()
+	prs.requestMu.Lock()
+	prs.acceptingRequests = true
+	prs.requestMu.Unlock()
 
 	fmt.Printf("provider relay server listening on %s\n", listener.Addr().String())
 	go func() {
@@ -594,7 +601,7 @@ func buildCaptureURL(targetURL string, query map[string]string) string {
 // captureErrorResponse 已并入 extractUpstreamError（读错误体时一并入抓包缓冲），
 // 此处不再单独提供。
 
-type ReqeustLog struct {
+type RequestLog struct {
 	ID              int64   `json:"id"`
 	Platform        string  `json:"platform"`
 	Model           string  `json:"model"`
@@ -632,7 +639,7 @@ type ReqeustLog struct {
 }
 
 // finalizeCaptureResponse 把响应缓冲收敛进 requestLog 的响应字段（落库前调用一次）
-func finalizeCaptureResponse(requestLog *ReqeustLog) {
+func finalizeCaptureResponse(requestLog *RequestLog) {
 	cb := requestLog.respBuf
 	if cb == nil {
 		return
@@ -649,7 +656,7 @@ func finalizeCaptureResponse(requestLog *ReqeustLog) {
 // 采集快照化后合法捕获行必有非零会话 id，携带内容却无会话的行只能是
 // 竞态残迹，一并置空（否则会混进 0 号旧数据桶）。
 // 调用方需持有 captureWriteMu 读锁（墓碑 map 由该锁保护）
-func (prs *ProviderRelayService) stripStaleCapture(requestLog *ReqeustLog) {
+func (prs *ProviderRelayService) stripStaleCapture(requestLog *RequestLog) {
 	_, deleted := prs.captureDeletedSessions[requestLog.CaptureSessionID]
 	orphan := requestLog.CaptureSessionID == 0 && requestLogHasCapture(requestLog)
 	if requestLog.captureGen != prs.captureClearGen.Load() || deleted || orphan {
@@ -680,7 +687,7 @@ const requestLogInsertSQL = `
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
-func requestLogInsertArgs(requestLog *ReqeustLog) []interface{} {
+func requestLogInsertArgs(requestLog *RequestLog) []interface{} {
 	return []interface{}{
 		requestLog.Platform, requestLog.Model, requestLog.Provider, requestLog.HttpCode,
 		requestLog.InputTokens, requestLog.OutputTokens, requestLog.CacheReadTokens,
@@ -697,7 +704,7 @@ func requestLogInsertArgs(requestLog *ReqeustLog) []interface{} {
 
 // requestLogHasCapture 判断该行是否携带抓包 payload。会话标记行（session_id!=0）
 // 也走同步栅栏写，避免与清除/删除竞态
-func requestLogHasCapture(requestLog *ReqeustLog) bool {
+func requestLogHasCapture(requestLog *RequestLog) bool {
 	return requestLog.CaptureSessionID != 0 ||
 		requestLog.RequestURL != "" || requestLog.RequestHeaders != "" || requestLog.RequestBody != "" ||
 		requestLog.ResponseHeaders != "" || requestLog.ResponseBody != "" ||
@@ -710,7 +717,7 @@ func requestLogHasCapture(requestLog *ReqeustLog) bool {
 // （批量队列的 ExecBatchCtx 超时后任务仍会执行，"返回"不等于"已提交"，
 // 不能作为栅栏边界）；普通行保持批量队列路径，不受清除语义约束。
 // 抓包是低频调试态，直写不构成写入热点
-func (prs *ProviderRelayService) writeRequestLog(requestLog *ReqeustLog) error {
+func (prs *ProviderRelayService) writeRequestLog(requestLog *RequestLog) error {
 	if requestLogHasCapture(requestLog) {
 		db, err := xdb.DB("default")
 		if err != nil {
@@ -778,6 +785,10 @@ func (prs *ProviderRelayService) validateConfig() []string {
 }
 
 func (prs *ProviderRelayService) Stop() error {
+	prs.requestMu.Lock()
+	prs.acceptingRequests = false
+	prs.requestMu.Unlock()
+
 	prs.serverMu.Lock()
 	server := prs.server
 	prs.server = nil
@@ -788,7 +799,7 @@ func (prs *ProviderRelayService) Stop() error {
 	if server == nil {
 		// 代理本就未运行；若录制开关还开着（异常路径），同样封存会话
 		prs.closeActiveCaptureSession()
-		return nil
+		return prs.waitForActiveRequests(5 * time.Second)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -801,9 +812,39 @@ func (prs *ProviderRelayService) Stop() error {
 			fmt.Printf("[WARN] 强制关闭代理失败: %v\n", closeErr)
 		}
 	}
+	drainErr := prs.waitForActiveRequests(5 * time.Second)
 	// 代理停了就不再有新流量，正常封存录制中的会话（区别于崩溃后的"已中断"）
 	prs.closeActiveCaptureSession()
-	return err
+	return errors.Join(err, drainErr)
+}
+
+func (prs *ProviderRelayService) waitForActiveRequests(timeout time.Duration) error {
+	done := make(chan struct{})
+	go func() {
+		prs.requestWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("timed out waiting %v for active relay requests", timeout)
+	}
+}
+
+func (prs *ProviderRelayService) trackRequest(handler gin.HandlerFunc) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		prs.requestMu.Lock()
+		if !prs.acceptingRequests {
+			prs.requestMu.Unlock()
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "provider relay is shutting down"})
+			return
+		}
+		prs.requestWG.Add(1)
+		prs.requestMu.Unlock()
+		defer prs.requestWG.Done()
+		handler(c)
+	}
 }
 
 func (prs *ProviderRelayService) Addr() string {
@@ -811,8 +852,8 @@ func (prs *ProviderRelayService) Addr() string {
 }
 
 func (prs *ProviderRelayService) registerRoutes(router gin.IRouter) {
-	router.POST("/responses", prs.proxyHandler(CodexPlatform, "/responses"))
-	router.GET("/v1/models", prs.modelsHandler(CodexPlatform))
+	router.POST("/responses", prs.trackRequest(prs.proxyHandler(CodexPlatform, "/responses")))
+	router.GET("/v1/models", prs.trackRequest(prs.modelsHandler(CodexPlatform)))
 }
 
 func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.HandlerFunc {
@@ -1467,7 +1508,7 @@ func (prs *ProviderRelayService) forwardRequest(
 	}
 	defer prs.concurrency.Release(kind, concurrencyProviderKey)
 
-	requestLog := &ReqeustLog{
+	requestLog := &RequestLog{
 		Platform: kind,
 		Provider: provider.Name,
 		Model:    model,
@@ -1577,7 +1618,7 @@ func (prs *ProviderRelayService) forwardToAddress(
 	headers map[string]string,
 	bodyBytes []byte,
 	isStream bool,
-	requestLog *ReqeustLog,
+	requestLog *RequestLog,
 	singleAddress bool,
 ) (bool, error) {
 	// 绑定客户端 context：客户端取消（用户 Ctrl-C / CLI 超时断开）时立即释放上游连接，
@@ -1703,7 +1744,7 @@ func (prs *ProviderRelayService) relayResponseToClient(
 	provider Provider,
 	resp *xrequest.Response,
 	isStream bool,
-	requestLog *ReqeustLog,
+	requestLog *RequestLog,
 ) (bool, error) {
 	// 抓包：在字节流层 tee 上游响应体（成功路径单协程读取，无竞态）。
 	// xrequest 的逐行 hook 会剥行尾、跳空行，无法还原原始 SSE，必须在此包裹
@@ -1712,7 +1753,7 @@ func (prs *ProviderRelayService) relayResponseToClient(
 	}
 	var copyErr error
 	var written int64
-	written, copyErr = resp.ToHttpResponseWriter(c.Writer, ReqeustLogHook(c, kind, requestLog))
+	written, copyErr = resp.ToHttpResponseWriter(c.Writer, RequestLogHook(c, kind, requestLog))
 	if copyErr == nil {
 		if truncErr := checkNonStreamTruncated(resp, written); truncErr != nil {
 			copyErr = truncErr
@@ -1737,8 +1778,8 @@ func (prs *ProviderRelayService) relayResponseToClient(
 	return false, fmt.Errorf("%w: %v", errUpstreamStreamAborted, copyErr)
 }
 
-// ReqeustLogHook parses OpenAI Responses usage from streaming and non-streaming payloads.
-func ReqeustLogHook(_ *gin.Context, kind string, usage *ReqeustLog) func(data []byte) (bool, []byte) {
+// RequestLogHook parses OpenAI Responses usage from streaming and non-streaming payloads.
+func RequestLogHook(_ *gin.Context, kind string, usage *RequestLog) func(data []byte) (bool, []byte) {
 	return func(data []byte) (bool, []byte) {
 		if kind == CodexPlatform {
 			parseEventPayload(strings.TrimSpace(string(data)), CodexParseTokenUsageFromResponse, usage)
@@ -1747,7 +1788,7 @@ func ReqeustLogHook(_ *gin.Context, kind string, usage *ReqeustLog) func(data []
 	}
 }
 
-func parseEventPayload(payload string, parser func(string, *ReqeustLog), usage *ReqeustLog) {
+func parseEventPayload(payload string, parser func(string, *RequestLog), usage *RequestLog) {
 	hasData := false
 	for _, line := range strings.Split(payload, "\n") {
 		line = strings.TrimSpace(line)
@@ -1762,7 +1803,7 @@ func parseEventPayload(payload string, parser func(string, *ReqeustLog), usage *
 }
 
 // CodexParseTokenUsageFromResponse parses OpenAI Responses usage snapshots.
-func CodexParseTokenUsageFromResponse(data string, usage *ReqeustLog) {
+func CodexParseTokenUsageFromResponse(data string, usage *RequestLog) {
 	if usage == nil {
 		return
 	}
@@ -1796,7 +1837,7 @@ func CodexParseTokenUsageFromResponse(data string, usage *ReqeustLog) {
 
 // extractUpstreamError reads and closes an upstream error response while also
 // feeding the optional capture buffer.
-func extractUpstreamError(resp *xrequest.Response, requestLog *ReqeustLog) string {
+func extractUpstreamError(resp *xrequest.Response, requestLog *RequestLog) string {
 	if resp == nil {
 		return ""
 	}

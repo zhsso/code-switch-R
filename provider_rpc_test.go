@@ -72,3 +72,22 @@ func TestMergeProviderViewsPreservesOrReplacesCredentialExplicitly(t *testing.T)
 		t.Fatalf("explicitly cleared credential = %q", cleared[0].APIKey)
 	}
 }
+
+func TestRestoreMaskedURLPreservesUserInfoWhenURLIsEdited(t *testing.T) {
+	existing := "https://user:secret@example.test/old?token=secret#private"
+	incoming := "https://example.test/new?token=redacted"
+
+	got := restoreMaskedURL(incoming, existing)
+	if got != "https://user:secret@example.test/new?token=secret#private" {
+		t.Fatalf("restored URL = %q", got)
+	}
+}
+
+func TestRestoreMaskedURLKeepsExplicitReplacementUserInfo(t *testing.T) {
+	existing := "https://old:secret@example.test/old"
+	incoming := "https://new:replacement@example.test/new"
+
+	if got := restoreMaskedURL(incoming, existing); got != incoming {
+		t.Fatalf("explicit userinfo replacement = %q, want %q", got, incoming)
+	}
+}

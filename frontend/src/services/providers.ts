@@ -2,12 +2,20 @@ import { Call } from '../runtime'
 
 const SERVICE = 'codeswitch/services.ProviderService'
 
-export const LoadProviders = async <T = any>(kind: string): Promise<T[]> => {
-  return (await Call.ByName<T[]>(`${SERVICE}.LoadProviders`, kind)) ?? []
+export type ProviderSnapshot<T = any> = {
+  providers: T[]
+  generation: number
 }
 
-export const SaveProviders = async (kind: string, providers: unknown[]): Promise<void> => {
-  await Call.ByName(`${SERVICE}.SaveProviders`, kind, providers)
+export const LoadProviders = async <T = any>(kind: string): Promise<ProviderSnapshot<T>> => {
+  return (await Call.ByName<ProviderSnapshot<T>>(`${SERVICE}.LoadProviders`, kind)) ?? {
+    providers: [],
+    generation: 0,
+  }
+}
+
+export const SaveProviders = async (kind: string, generation: number, providers: unknown[]): Promise<number> => {
+  return Call.ByName<number>(`${SERVICE}.SaveProviders`, kind, generation, providers)
 }
 
 export const RevealProviderAPIKey = async (kind: string, id: number): Promise<string> => {
@@ -18,6 +26,6 @@ export const DuplicateProvider = async <T = any>(kind: string, sourceID: number)
   return Call.ByName<T>(`${SERVICE}.DuplicateProvider`, kind, sourceID)
 }
 
-export const RenameProvider = async (kind: string, id: number, name: string): Promise<void> => {
-  await Call.ByName(`${SERVICE}.RenameProvider`, kind, id, name)
+export const RenameProvider = async (kind: string, id: number, name: string): Promise<number> => {
+  return Call.ByName<number>(`${SERVICE}.RenameProvider`, kind, id, name)
 }

@@ -11,11 +11,80 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/daodao97/xgo/xrequest"
 	"github.com/gin-gonic/gin"
 	_ "modernc.org/sqlite"
 )
+
+func TestProviderRelayStopWaitsForTrackedRequest(t *testing.T) {
+	relay := NewProviderRelayService(nil, nil, nil, nil, "127.0.0.1:0")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	requestDone := make(chan struct{})
+
+	handler := relay.trackRequest(func(c *gin.Context) {
+		close(entered)
+		<-release
+		c.Status(http.StatusNoContent)
+	})
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	go func() {
+		defer close(requestDone)
+		handler(ctx)
+	}()
+	<-entered
+
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- relay.Stop()
+	}()
+	select {
+	case err := <-stopDone:
+		t.Fatalf("Stop returned before the active request completed: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-requestDone:
+	case <-time.After(time.Second):
+		t.Fatal("tracked request did not complete")
+	}
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("Stop returned an error after request drain: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not return after the active request completed")
+	}
+}
+
+func TestProviderRelayRejectsTrackedRequestAfterStop(t *testing.T) {
+	relay := NewProviderRelayService(nil, nil, nil, nil, "127.0.0.1:0")
+	if err := relay.Stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	handler := relay.trackRequest(func(c *gin.Context) {
+		called = true
+		c.Status(http.StatusNoContent)
+	})
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	handler(ctx)
+
+	if called {
+		t.Fatal("relay invoked a handler after request admission was closed")
+	}
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+}
 
 // TestSanitizeUpstreamHeadersDropsClientCredentials 客户端自带的认证头必须在转发前清掉,
 // 否则用户本机的真实 API Key 会随请求发给链路上每一个第三方供应商。
@@ -188,7 +257,7 @@ func TestCodexUsageFromNonStreamingResponse(t *testing.T) {
 		"input_tokens_details":{"cached_tokens":400},
 		"output_tokens_details":{"reasoning_tokens":120}}}`
 
-	usage := &ReqeustLog{}
+	usage := &RequestLog{}
 	CodexParseTokenUsageFromResponse(body, usage)
 
 	if usage.InputTokens != 600 {
@@ -216,7 +285,7 @@ func TestCodexUsageStreamingStillParsed(t *testing.T) {
 		"input_tokens":50,"output_tokens":20,
 		"output_tokens_details":{"reasoning_tokens":8}}}}`
 
-	usage := &ReqeustLog{}
+	usage := &RequestLog{}
 	CodexParseTokenUsageFromResponse(body, usage)
 
 	if usage.InputTokens != 50 || usage.OutputTokens != 12 || usage.ReasoningTokens != 8 {

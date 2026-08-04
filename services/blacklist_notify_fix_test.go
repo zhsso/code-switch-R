@@ -2,12 +2,55 @@ package services
 
 import (
 	"database/sql"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/daodao97/xgo/xdb"
 	_ "modernc.org/sqlite"
 )
+
+type recordingEventEmitter struct {
+	mu       sync.Mutex
+	events   []string
+	payloads []any
+}
+
+func (e *recordingEventEmitter) Emit(name string, value any) {
+	e.mu.Lock()
+	e.events = append(e.events, name)
+	e.payloads = append(e.payloads, value)
+	e.mu.Unlock()
+}
+
+func (e *recordingEventEmitter) lastSwitchTarget() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for index := len(e.events) - 1; index >= 0; index-- {
+		if e.events[index] != "provider:switched" {
+			continue
+		}
+		payload, _ := e.payloads[index].(map[string]any)
+		target, _ := payload["toProvider"].(string)
+		return target
+	}
+	return ""
+}
+
+func (e *recordingEventEmitter) count(name string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	count := 0
+	for _, event := range e.events {
+		if event == name {
+			count++
+		}
+	}
+	return count
+}
 
 // setupBlacklistFixEnv 复用 rename 测试的隔离环境（HOME/USERPROFILE 重定向 + 独立 app.db），
 // 并额外初始化 GlobalDBQueue 与 app_settings 表，供拉黑读改写路径使用。
@@ -291,6 +334,7 @@ func TestValidateBlacklistLevelConfig_RetryWaitSeconds(t *testing.T) {
 // 持锁写入（而非异步 goroutine 中），否则突发降级的连续调用会全部绕过节流形成通知风暴。
 func TestNotifyProviderSwitch_ThrottleUpdatesTimestampSynchronously(t *testing.T) {
 	ns := &NotificationService{minInterval: 3 * time.Second}
+	t.Cleanup(ns.Stop)
 	// appSettings 为 nil → 通知视为开启；上次通知在很久之前，本次调用应通过节流
 	ns.lastNotifyTime = time.Now().Add(-time.Hour)
 
@@ -301,9 +345,9 @@ func TestNotifyProviderSwitch_ThrottleUpdatesTimestampSynchronously(t *testing.T
 	})
 
 	// 返回后立即读取：时间戳应已同步更新，使突发的后续调用立刻被节流
-	ns.mu.RLock()
+	ns.mu.Lock()
 	updated := ns.lastNotifyTime
-	ns.mu.RUnlock()
+	ns.mu.Unlock()
 	if time.Since(updated) > time.Minute {
 		t.Fatal("lastNotifyTime 应在 NotifyProviderSwitch 返回前同步更新,否则突发调用会绕过节流")
 	}
@@ -315,10 +359,74 @@ func TestNotifyProviderSwitch_ThrottleUpdatesTimestampSynchronously(t *testing.T
 		ToProvider:   "c",
 		Platform:     "codex",
 	})
-	ns.mu.RLock()
+	ns.mu.Lock()
 	after := ns.lastNotifyTime
-	ns.mu.RUnlock()
+	ns.mu.Unlock()
 	if !after.Equal(before) {
 		t.Fatal("最小间隔内的第二次调用应被节流,不应更新 lastNotifyTime")
+	}
+}
+
+func TestNotifyProviderSwitch_CoalescesLatestTrailingEvent(t *testing.T) {
+	emitter := &recordingEventEmitter{}
+	ns := &NotificationService{minInterval: 25 * time.Millisecond}
+	ns.SetEventEmitter(emitter)
+	t.Cleanup(ns.Stop)
+
+	ns.NotifyProviderSwitch(SwitchNotification{FromProvider: "a", ToProvider: "b", Platform: "codex"})
+	ns.NotifyProviderSwitch(SwitchNotification{FromProvider: "b", ToProvider: "c", Platform: "codex"})
+	ns.NotifyProviderSwitch(SwitchNotification{FromProvider: "c", ToProvider: "d", Platform: "codex"})
+
+	deadline := time.After(time.Second)
+	for emitter.count("provider:switched") < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("expected leading and trailing switch events, got %d", emitter.count("provider:switched"))
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if got := emitter.count("provider:switched"); got != 2 {
+		t.Fatalf("coalesced event count = %d, want 2", got)
+	}
+	if got := emitter.lastSwitchTarget(); got != "d" {
+		t.Fatalf("trailing switch target = %q, want latest target %q", got, "d")
+	}
+}
+
+func TestSaveBlacklistLevelConfigConcurrentWritesRemainValid(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+
+	service := &SettingsService{}
+	start := make(chan struct{})
+	errors := make(chan error, 16)
+	var wg sync.WaitGroup
+	for index := 0; index < 16; index++ {
+		wg.Add(1)
+		go func(value int) {
+			defer wg.Done()
+			<-start
+			config := DefaultBlacklistLevelConfig()
+			config.FailureThreshold = value%10 + 1
+			errors <- service.SaveBlacklistLevelConfig(config)
+		}(index)
+	}
+	close(start)
+	wg.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("concurrent save failed: %v", err)
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join(tmpHome, ".code-switch", "blacklist-config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config BlacklistLevelConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("saved config is invalid JSON: %v", err)
 	}
 }

@@ -23,9 +23,20 @@ const aliasTTL = 48 * time.Hour
 //   - 48h 内 alias 表未占用该 newName
 //   - 该 provider_id 在 48h 内未 rename 过(禁止链式)
 func (ps *ProviderService) RenameProvider(kind string, id int64, newName string) error {
+	_, err := ps.RenameProviderWithGeneration(kind, id, newName)
+	return err
+}
+
+func (ps *ProviderService) RenameProviderWithGeneration(kind string, id int64, newName string) (int64, error) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
+	if err := ps.renameProviderLocked(kind, id, newName); err != nil {
+		return ps.configGen.Load(), err
+	}
+	return ps.configGen.Add(1), nil
+}
 
+func (ps *ProviderService) renameProviderLocked(kind string, id int64, newName string) error {
 	newName = strings.TrimSpace(newName)
 	if newName == "" {
 		return fmt.Errorf("新名字不能为空")
@@ -97,12 +108,12 @@ func (ps *ProviderService) RenameProvider(kind string, id int64, newName string)
 	}
 
 	// 1) 先原子替换文件
-	if err := atomicWriteFile(path, newBytes, 0o644); err != nil {
+	if err := atomicWriteFile(path, newBytes, 0o600); err != nil {
 		return fmt.Errorf("写入配置文件失败: %w", err)
 	}
 	// 后续任一 DB 步骤失败都需要把 JSON 还原到 rename 前;回滚本身失败要合并到返回错误,避免 split-brain 被静默。
 	rollbackFile := func(primary error) error {
-		if rbErr := atomicWriteFile(path, originalBytes, 0o644); rbErr != nil {
+		if rbErr := atomicWriteFile(path, originalBytes, 0o600); rbErr != nil {
 			log.Printf("[RenameProvider] CRITICAL 回滚配置文件失败 path=%s primary=%v rollback=%v", path, primary, rbErr)
 			return fmt.Errorf("%w; 配置文件回滚失败: %v", primary, rbErr)
 		}

@@ -92,10 +92,11 @@ func (s *SpeedTestService) testSingleEndpoint(client *http.Client, rawURL string
 		}
 	}
 
-	// 热身请求（用于建立连接）：必须读完并关闭 Body，
-	// 连接才会归还连接池供测量请求复用，否则第二次测量仍包含完整握手且短时泄漏 socket
-	if warmResp, warmErr := s.makeRequest(client, parsedURL.String()); warmErr == nil {
-		_, _ = io.Copy(io.Discard, io.LimitReader(warmResp.Body, 64<<10))
+	// HEAD establishes DNS/TCP/TLS and an HTTP connection without downloading an
+	// arbitrary response body. Closing its empty body returns the connection to
+	// the pool for the measured GET.
+	if warmResp, warmErr := s.makeRequestWithMethod(client, http.MethodHead, parsedURL.String()); warmErr == nil {
+		_, _ = io.Copy(io.Discard, warmResp.Body)
 		_ = warmResp.Body.Close()
 	}
 
@@ -126,7 +127,11 @@ func (s *SpeedTestService) testSingleEndpoint(client *http.Client, rawURL string
 
 // makeRequest 发送 HTTP GET 请求
 func (s *SpeedTestService) makeRequest(client *http.Client, urlStr string) (*http.Response, error) {
-	req, err := http.NewRequest("GET", urlStr, nil)
+	return s.makeRequestWithMethod(client, http.MethodGet, urlStr)
+}
+
+func (s *SpeedTestService) makeRequestWithMethod(client *http.Client, method, urlStr string) (*http.Response, error) {
+	req, err := http.NewRequest(method, urlStr, nil)
 	if err != nil {
 		return nil, err
 	}

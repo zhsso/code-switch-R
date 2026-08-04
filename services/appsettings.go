@@ -9,7 +9,6 @@ import (
 )
 
 const (
-	appSettingsDir  = ".code-switch"
 	appSettingsFile = "app.json"
 
 	defaultHistoryRetentionDays = 30
@@ -34,12 +33,12 @@ type AppSettingsService struct {
 	mu   sync.Mutex
 }
 
-func NewAppSettingsService() *AppSettingsService {
-	home, err := os.UserHomeDir()
+func NewAppSettingsService() (*AppSettingsService, error) {
+	dir, err := getUserConfigDir()
 	if err != nil {
-		home = "."
+		return nil, fmt.Errorf("resolve application settings directory: %w", err)
 	}
-	return &AppSettingsService{path: filepath.Join(home, appSettingsDir, appSettingsFile)}
+	return &AppSettingsService{path: filepath.Join(dir, appSettingsFile)}, nil
 }
 
 func (as *AppSettingsService) defaultSettings() AppSettings {

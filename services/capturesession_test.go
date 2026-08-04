@@ -7,7 +7,10 @@ import (
 // newCaptureTestRelay 构造仅用于会话测试的 relay（不启动 HTTP 服务）
 func newCaptureTestRelay(t *testing.T) *ProviderRelayService {
 	t.Helper()
-	appSettings := NewAppSettingsService()
+	appSettings, err := NewAppSettingsService()
+	if err != nil {
+		t.Fatal(err)
+	}
 	notificationService := NewNotificationService(appSettings)
 	blacklistService := NewBlacklistService(NewSettingsService(), notificationService)
 	return NewProviderRelayService(NewProviderService(),
@@ -59,7 +62,7 @@ func TestCaptureSessionTaggingAndDelete(t *testing.T) {
 	}
 
 	// 模拟一条带抓包内容的落库
-	requestLog := &ReqeustLog{
+	requestLog := &RequestLog{
 		Platform: "codex", Provider: "p", Model: "m",
 		RequestHeaders: `{"a":"b"}`, RequestBody: `{"x":1}`, BodyBytes: 7,
 		CaptureSessionID: first, captureGen: relay.captureClearGen.Load(),
@@ -111,7 +114,7 @@ func TestCaptureSessionTaggingAndDelete(t *testing.T) {
 	}
 
 	// 墓碑：属于已删除会话的在途行落库时自我置空
-	late := &ReqeustLog{
+	late := &RequestLog{
 		Platform: "codex", Provider: "p", Model: "m",
 		RequestHeaders: `{"late":"1"}`, RequestBody: `{"late":1}`, BodyBytes: 9,
 		CaptureSessionID: first, captureGen: relay.captureClearGen.Load(),

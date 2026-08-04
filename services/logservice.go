@@ -181,7 +181,7 @@ func (ls *LogService) CleanupOldRecords(daysToKeep int) (int64, error) {
 	return rows, nil
 }
 
-func (ls *LogService) ListRequestLogs(platform string, provider string, limit int) ([]ReqeustLog, error) {
+func (ls *LogService) ListRequestLogs(platform string, provider string, limit int) ([]RequestLog, error) {
 	if platform != "" {
 		if err := requireCodexPlatform(platform); err != nil {
 			return nil, err
@@ -216,9 +216,9 @@ func (ls *LogService) ListRequestLogs(platform string, provider string, limit in
 	if err != nil {
 		return nil, err
 	}
-	logs := make([]ReqeustLog, 0, len(records))
+	logs := make([]RequestLog, 0, len(records))
 	for _, record := range records {
-		logEntry := ReqeustLog{
+		logEntry := RequestLog{
 			ID:              record.GetInt64("id"),
 			Platform:        record.GetString("platform"),
 			Model:           record.GetString("model"),
@@ -621,7 +621,7 @@ func (ls *LogService) ProviderDailyStats(platform string) ([]ProviderDailyStat, 
 	return stats, nil
 }
 
-func (ls *LogService) decorateCost(logEntry *ReqeustLog, costs *costContext) {
+func (ls *LogService) decorateCost(logEntry *RequestLog, costs *costContext) {
 	if ls == nil || ls.pricing == nil || logEntry == nil {
 		return
 	}

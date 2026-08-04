@@ -32,3 +32,11 @@ func assertHomeIsolated(t *testing.T, tmpHome string) {
 			"继续执行会覆盖真实用户配置,请同时设置 HOME 与 USERPROFILE", home, tmpHome)
 	}
 }
+
+func TestGetUserHomeDirRejectsRelativePath(t *testing.T) {
+	t.Setenv("HOME", ".")
+	t.Setenv("USERPROFILE", ".")
+	if _, err := getUserHomeDir(); err == nil {
+		t.Fatal("relative home directory must be rejected")
+	}
+}

@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -11,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 )
+
+var ErrProviderConfigConflict = errors.New("provider configuration changed")
 
 // AvailabilityConfig 可用性监控高级配置
 // 在可用性页面的"高级配置"弹窗中设置，可选
@@ -153,12 +156,11 @@ func providerFilePath(kind string) (string, error) {
 	if err := requireCodexPlatform(kind); err != nil {
 		return "", err
 	}
-	home, err := os.UserHomeDir()
+	dir, err := getUserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".code-switch")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, CodexPlatform+".json"), nil
@@ -168,6 +170,41 @@ func (ps *ProviderService) SaveProviders(kind string, providers []Provider) erro
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	return ps.saveProvidersLocked(kind, providers)
+}
+
+// UpdateProviders applies a WebUI snapshot while holding the same lock used by
+// every other provider mutation. The generation check prevents a stale browser
+// from silently overwriting changes made by another request or background job.
+func (ps *ProviderService) UpdateProviders(
+	kind string,
+	expectedGeneration int64,
+	update func([]Provider) ([]Provider, error),
+) ([]Provider, int64, error) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	providers, err := ps.loadProvidersNoLock(kind)
+	if err != nil {
+		return nil, ps.configGen.Load(), err
+	}
+	currentGeneration := ps.configGen.Load()
+	if currentGeneration != expectedGeneration {
+		return nil, currentGeneration, fmt.Errorf(
+			"%w: expected generation %d, current generation %d",
+			ErrProviderConfigConflict,
+			expectedGeneration,
+			currentGeneration,
+		)
+	}
+
+	updated, err := update(providers)
+	if err != nil {
+		return nil, currentGeneration, err
+	}
+	if err := ps.saveProvidersLocked(kind, updated); err != nil {
+		return nil, currentGeneration, err
+	}
+	return updated, ps.configGen.Load(), nil
 }
 
 // mutateProviders 在锁内完成"加载→修改→保存"的整段读改写。
@@ -281,11 +318,7 @@ func (ps *ProviderService) saveProvidersLocked(kind string, providers []Provider
 		return err
 	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := atomicWriteFile(path, data, 0o600); err != nil {
 		return err
 	}
 	// 配置代数递增：并发限流按代数接受容量热更新

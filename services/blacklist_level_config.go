@@ -9,15 +9,9 @@ import (
 
 // GetBlacklistLevelConfigPath 获取等级拉黑配置文件路径
 func GetBlacklistLevelConfigPath() (string, error) {
-	home, err := os.UserHomeDir()
+	configDir, err := getUserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("获取用户目录失败: %w", err)
-	}
-
-	configDir := filepath.Join(home, ".code-switch")
-	// 确保目录存在
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return "", fmt.Errorf("创建配置目录失败: %w", err)
 	}
 
 	return filepath.Join(configDir, "blacklist-config.json"), nil
@@ -83,14 +77,8 @@ func (ss *SettingsService) SaveBlacklistLevelConfig(config *BlacklistLevelConfig
 		return fmt.Errorf("序列化配置失败: %w", err)
 	}
 
-	// 原子写入：先写临时文件，再重命名
-	tmpPath := configPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("写入临时配置文件失败: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, configPath); err != nil {
-		return fmt.Errorf("重命名配置文件失败: %w", err)
+	if err := atomicWriteFile(configPath, data, 0o600); err != nil {
+		return fmt.Errorf("原子写入配置文件失败: %w", err)
 	}
 
 	return nil

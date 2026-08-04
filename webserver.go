@@ -17,6 +17,7 @@ import (
 type webServer struct {
 	addr   string
 	server *http.Server
+	events *eventHub
 }
 
 func newWebServer(
@@ -59,7 +60,8 @@ func newWebServer(
 	})
 
 	return &webServer{
-		addr: addr,
+		addr:   addr,
+		events: events,
 		server: &http.Server{
 			Addr:              addr,
 			Handler:           handler,
@@ -83,6 +85,9 @@ func (s *webServer) Start() error {
 }
 
 func (s *webServer) Stop(ctx context.Context) error {
+	if s.events != nil {
+		s.events.Close()
+	}
 	return s.server.Shutdown(ctx)
 }
 
