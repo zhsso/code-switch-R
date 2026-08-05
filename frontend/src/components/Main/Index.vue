@@ -1356,6 +1356,9 @@ const getDailyLimitStatus = (providerId: number): DailyCostLimitStatus | null =>
 const dailyLimitPercent = (status: DailyCostLimitStatus): number =>
   clamp(Number(status.usagePercent) || 0, 0, 100)
 
+const dailyLimitAvailablePercent = (status: DailyCostLimitStatus): number =>
+  clamp(100 - dailyLimitPercent(status), 0, 100)
+
 const formatDailyMicros = (micros: number): string => {
   const amount = (Number(micros) || 0) / 1_000_000
   return new Intl.NumberFormat(locale.value || 'en', {
@@ -1372,7 +1375,7 @@ const dailyLimitStatusLabel = (status: DailyCostLimitStatus): string => {
     if (status.blockReason === 'quota_and_manual') return t('components.main.dailyLimit.quotaAndManualBlocked')
     return t('components.main.dailyLimit.quotaBlocked')
   }
-  return t('components.main.dailyLimit.available', { percent: Math.round(status.usagePercent) })
+  return t('components.main.dailyLimit.available', { percent: Math.round(dailyLimitAvailablePercent(status)) })
 }
 
 // 手动解禁并重置（完全重置）
