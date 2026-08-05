@@ -11,6 +11,7 @@ import (
 
 const (
 	modelCapacityMessage   = "selected model is at capacity"
+	modelOverloadedCode    = "server_overloaded"
 	modelCapacityProbeSize = 64 << 10
 )
 
@@ -24,13 +25,43 @@ func containsModelCapacityMessage(data []byte) bool {
 			strings.Contains(text, "different model"))
 }
 
+func containsModelCapacitySignal(data []byte) bool {
+	return containsModelCapacityMessage(data) ||
+		strings.Contains(strings.ToLower(string(data)), modelOverloadedCode)
+}
+
+func isModelOverloadedCode(value string) bool {
+	return strings.EqualFold(strings.Trim(strings.TrimSpace(value), `"'`), modelOverloadedCode)
+}
+
+func hasStructuredModelOverloadedCode(data []byte) bool {
+	for _, path := range []string{
+		"code",
+		"error",
+		"error.code",
+		"response.error",
+		"response.error.code",
+		"codex_error_info",
+	} {
+		value := gjson.GetBytes(data, path)
+		if value.Exists() && value.Type == gjson.String && isModelOverloadedCode(value.String()) {
+			return true
+		}
+	}
+	return false
+}
+
 func isModelCapacityErrorEnvelope(data []byte) bool {
-	if !containsModelCapacityMessage(data) {
+	if !containsModelCapacitySignal(data) {
 		return false
 	}
 	if !gjson.ValidBytes(data) {
 		return strings.EqualFold(strings.TrimSpace(string(data)),
-			"Selected model is at capacity. Please try a different model.")
+			"Selected model is at capacity. Please try a different model.") ||
+			isModelOverloadedCode(string(data))
+	}
+	if hasStructuredModelOverloadedCode(data) {
+		return true
 	}
 
 	typeName := strings.ToLower(gjson.GetBytes(data, "type").String())
@@ -45,7 +76,7 @@ func isModelCapacityErrorEnvelope(data []byte) bool {
 		containsModelCapacityMessage([]byte(gjson.GetBytes(data, "message").String()))
 }
 
-func isModelCapacitySSEEvent(event []byte) bool {
+func parseSSEEvent(event []byte) (string, []byte) {
 	normalized := strings.ReplaceAll(string(event), "\r\n", "\n")
 	var eventName string
 	dataLines := make([]string, 0, 1)
@@ -57,16 +88,34 @@ func isModelCapacitySSEEvent(event []byte) bool {
 			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		}
 	}
+	return strings.ToLower(eventName), []byte(strings.Join(dataLines, "\n"))
+}
 
-	data := []byte(strings.Join(dataLines, "\n"))
-	if !containsModelCapacityMessage(data) {
+func isModelCapacitySSEEvent(event []byte) bool {
+	eventName, data := parseSSEEvent(event)
+	if !containsModelCapacitySignal(data) {
 		return false
 	}
-	eventName = strings.ToLower(eventName)
 	if eventName == "error" || strings.Contains(eventName, "failed") {
 		return true
 	}
 	return isModelCapacityErrorEnvelope(data)
+}
+
+func isBufferedSSEPrelude(event []byte) bool {
+	eventName, data := parseSSEEvent(event)
+	if eventName == "" && len(bytes.TrimSpace(data)) == 0 {
+		return true
+	}
+	if eventName == "" && gjson.ValidBytes(data) {
+		eventName = strings.ToLower(gjson.GetBytes(data, "type").String())
+	}
+	switch eventName {
+	case "response.queued", "response.created", "response.in_progress":
+		return true
+	default:
+		return false
+	}
 }
 
 func cutSSEEvent(data []byte) (event, rest []byte, ok bool) {
@@ -84,9 +133,10 @@ func cutSSEEvent(data []byte) (event, rest []byte, ok bool) {
 	return data[:index], data[index+delimiterLength:], true
 }
 
-// modelCapacityProbeWriter delays only the first complete SSE event. This is
-// the last point where the relay can switch upstreams without mixing two
-// response streams. Later capacity events are forwarded but still reported as
+// modelCapacityProbeWriter delays lifecycle-only SSE events until the first
+// substantive event. This keeps the response switchable when an upstream sends
+// response.created/in_progress before immediately failing with no output.
+// Capacity errors after substantive output are forwarded but still reported as
 // failures so the provider is not incorrectly marked healthy.
 type modelCapacityProbeWriter struct {
 	dst              http.ResponseWriter
@@ -127,7 +177,7 @@ func (w *modelCapacityProbeWriter) Write(data []byte) (int, error) {
 		if !w.committed {
 			_, _ = w.pending.Write(data)
 		}
-		completedEvent, capacity := w.inspectSSE(data)
+		capacity, shouldCommit := w.inspectSSE(data)
 		if capacity {
 			w.capacityDetected = true
 			if !w.committed {
@@ -137,7 +187,7 @@ func (w *modelCapacityProbeWriter) Write(data []byte) (int, error) {
 		if w.committed {
 			return w.dst.Write(data)
 		}
-		if completedEvent || w.pending.Len() >= modelCapacityProbeSize {
+		if shouldCommit || w.pending.Len() >= modelCapacityProbeSize {
 			if err := w.commit(); err != nil {
 				return 0, err
 			}
@@ -183,7 +233,7 @@ func (w *modelCapacityProbeWriter) Finish() error {
 	return nil
 }
 
-func (w *modelCapacityProbeWriter) inspectSSE(data []byte) (completedEvent, capacity bool) {
+func (w *modelCapacityProbeWriter) inspectSSE(data []byte) (capacity, shouldCommit bool) {
 	w.ssePending = append(w.ssePending, data...)
 	for {
 		event, rest, ok := cutSSEEvent(w.ssePending)
@@ -191,11 +241,13 @@ func (w *modelCapacityProbeWriter) inspectSSE(data []byte) (completedEvent, capa
 			if len(w.ssePending) > modelCapacityProbeSize {
 				w.ssePending = append([]byte(nil), w.ssePending[len(w.ssePending)-modelCapacityProbeSize:]...)
 			}
-			return completedEvent, capacity
+			return capacity, shouldCommit
 		}
-		completedEvent = true
 		if isModelCapacitySSEEvent(event) {
 			capacity = true
+		}
+		if !isBufferedSSEPrelude(event) {
+			shouldCommit = true
 		}
 		w.ssePending = append(w.ssePending[:0], rest...)
 	}

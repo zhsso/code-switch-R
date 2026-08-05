@@ -1670,7 +1670,7 @@ func (prs *ProviderRelayService) forwardToAddress(
 		if resp != nil {
 			if upstreamBody := extractUpstreamError(resp, requestLog); upstreamBody != "" {
 				detail := fmt.Sprintf("upstream status %d: %s", resp.StatusCode(), upstreamBody)
-				if containsModelCapacityMessage([]byte(upstreamBody)) {
+				if containsModelCapacitySignal([]byte(upstreamBody)) {
 					return false, newUpstreamModelCapacityError(resp, resp.StatusCode(), detail)
 				}
 				return false, newUpstreamStatusError(resp, resp.StatusCode(), detail)
@@ -1701,7 +1701,7 @@ func (prs *ProviderRelayService) forwardToAddress(
 		if errMsg == "" {
 			errMsg = fmt.Sprintf("upstream status %d", status)
 		}
-		if containsModelCapacityMessage([]byte(errMsg)) || containsModelCapacityMessage([]byte(bodyPreview)) {
+		if containsModelCapacitySignal([]byte(errMsg)) || containsModelCapacitySignal([]byte(bodyPreview)) {
 			return false, newUpstreamModelCapacityError(resp, status,
 				fmt.Sprintf("upstream status %d: %s", status, errMsg))
 		}
@@ -1727,7 +1727,7 @@ func (prs *ProviderRelayService) forwardToAddress(
 	if upstreamBody != "" {
 		detail = fmt.Sprintf("upstream status %d: %s", status, upstreamBody)
 	}
-	if containsModelCapacityMessage([]byte(upstreamBody)) {
+	if containsModelCapacitySignal([]byte(upstreamBody)) {
 		return false, newUpstreamModelCapacityError(resp, status, detail)
 	}
 	// 请求内容本身被拒绝：换供应商也一样，不计入供应商失败次数
