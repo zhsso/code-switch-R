@@ -80,6 +80,9 @@ func addressSwitchableError(err error) bool {
 		errors.Is(err, errUpstreamClientError) {
 		return false
 	}
+	if errors.Is(err, errUpstreamModelCapacity) {
+		return true
+	}
 	var statusErr *upstreamStatusError
 	if errors.As(err, &statusErr) {
 		switch {

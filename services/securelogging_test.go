@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -30,5 +31,9 @@ func TestSafeRelayErrorDoesNotExposeUpstreamBody(t *testing.T) {
 	}
 	if got := safeRelayError(errors.New("request to https://host/?api_key=secret failed")); strings.Contains(got, "secret") {
 		t.Fatalf("generic relay error leaked details: %q", got)
+	}
+	capacityErr := fmt.Errorf("%w: %s", errUpstreamModelCapacity, body)
+	if got := safeRelayError(capacityErr); got != "upstream model at capacity" {
+		t.Fatalf("capacity error was not normalized: %q", got)
 	}
 }

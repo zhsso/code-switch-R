@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -133,6 +134,8 @@ func TestAddressSwitchableError(t *testing.T) {
 		{"客户端取消", errClientAbort, false},
 		{"响应已提交断流", errUpstreamStreamAborted, false},
 		{"请求内容被拒", errUpstreamClientError, false},
+		{"模型容量不足", fmt.Errorf("%w: unavailable", errUpstreamModelCapacity), true},
+		{"已提交后模型容量不足", fmt.Errorf("%w: %w", errUpstreamStreamAborted, errUpstreamModelCapacity), false},
 		{"401 凭据类", &upstreamStatusError{status: 401, detail: "x"}, false},
 		{"404", &upstreamStatusError{status: 404, detail: "x"}, false},
 		{"408 超时", &upstreamStatusError{status: 408, detail: "x"}, true},

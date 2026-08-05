@@ -1129,6 +1129,10 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 							if err := prs.blacklistService.RecordFailure(kind, provider.Name); err != nil {
 								fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
 							}
+							if errors.Is(err, errUpstreamModelCapacity) {
+								fmt.Printf("[INFO] Provider %s 模型容量不足，立即切换到下一个 Provider\n", provider.Name)
+								break
+							}
 
 							// 检查是否刚被拉黑
 							if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
@@ -1665,8 +1669,11 @@ func (prs *ProviderRelayService) forwardToAddress(
 		// 尝试从响应体提取供应商原始错误信息
 		if resp != nil {
 			if upstreamBody := extractUpstreamError(resp, requestLog); upstreamBody != "" {
-				return false, newUpstreamStatusError(resp, resp.StatusCode(),
-					fmt.Sprintf("upstream status %d: %s", resp.StatusCode(), upstreamBody))
+				detail := fmt.Sprintf("upstream status %d: %s", resp.StatusCode(), upstreamBody)
+				if containsModelCapacityMessage([]byte(upstreamBody)) {
+					return false, newUpstreamModelCapacityError(resp, resp.StatusCode(), detail)
+				}
+				return false, newUpstreamStatusError(resp, resp.StatusCode(), detail)
 			}
 		}
 		return false, err
@@ -1694,6 +1701,10 @@ func (prs *ProviderRelayService) forwardToAddress(
 		if errMsg == "" {
 			errMsg = fmt.Sprintf("upstream status %d", status)
 		}
+		if containsModelCapacityMessage([]byte(errMsg)) || containsModelCapacityMessage([]byte(bodyPreview)) {
+			return false, newUpstreamModelCapacityError(resp, status,
+				fmt.Sprintf("upstream status %d: %s", status, errMsg))
+		}
 		if isClientSideUpstreamStatus(status) {
 			return false, fmt.Errorf("%w: upstream status %d: %s", errUpstreamClientError, status, errMsg)
 		}
@@ -1716,6 +1727,9 @@ func (prs *ProviderRelayService) forwardToAddress(
 	if upstreamBody != "" {
 		detail = fmt.Sprintf("upstream status %d: %s", status, upstreamBody)
 	}
+	if containsModelCapacityMessage([]byte(upstreamBody)) {
+		return false, newUpstreamModelCapacityError(resp, status, detail)
+	}
 	// 请求内容本身被拒绝：换供应商也一样，不计入供应商失败次数
 	if isClientSideUpstreamStatus(status) {
 		return false, fmt.Errorf("%w: %s", errUpstreamClientError, detail)
@@ -1731,6 +1745,10 @@ func newUpstreamStatusError(resp *xrequest.Response, status int, detail string) 
 		e.retryAfter = parseRetryAfter(resp.RawResponse.Header.Get("Retry-After"), time.Now())
 	}
 	return e
+}
+
+func newUpstreamModelCapacityError(resp *xrequest.Response, status int, detail string) error {
+	return fmt.Errorf("%w: %w", errUpstreamModelCapacity, newUpstreamStatusError(resp, status, detail))
 }
 
 // relayResponseToClient 把上游 2xx 响应转发给客户端并区分三种收尾情况：
@@ -1751,9 +1769,15 @@ func (prs *ProviderRelayService) relayResponseToClient(
 	if requestLog.respBuf != nil && resp.RawResponse != nil && resp.RawResponse.Body != nil {
 		resp.RawResponse.Body = newCaptureTeeReader(resp.RawResponse.Body, requestLog.respBuf)
 	}
+	responseIsSSE := resp.RawResponse != nil &&
+		strings.Contains(strings.ToLower(resp.RawResponse.Header.Get("Content-Type")), "text/event-stream")
+	probeWriter := newModelCapacityProbeWriter(c.Writer, responseIsSSE)
 	var copyErr error
 	var written int64
-	written, copyErr = resp.ToHttpResponseWriter(c.Writer, RequestLogHook(c, kind, requestLog))
+	written, copyErr = resp.ToHttpResponseWriter(probeWriter, RequestLogHook(c, kind, requestLog))
+	if finishErr := probeWriter.Finish(); copyErr == nil {
+		copyErr = finishErr
+	}
 	if copyErr == nil {
 		if truncErr := checkNonStreamTruncated(resp, written); truncErr != nil {
 			copyErr = truncErr
@@ -1767,6 +1791,15 @@ func (prs *ProviderRelayService) relayResponseToClient(
 	if c.Request.Context().Err() != nil || errors.Is(copyErr, context.Canceled) {
 		fmt.Printf("[INFO] Provider %s 转发过程中客户端断开，不计入供应商失败\n", provider.Name)
 		return false, fmt.Errorf("%w: %v", errClientAbort, copyErr)
+	}
+	if errors.Is(copyErr, errUpstreamModelCapacity) {
+		capacityErr := newUpstreamModelCapacityError(resp, resp.StatusCode(), "upstream model at capacity")
+		if !c.Writer.Written() {
+			fmt.Printf("[WARN] Provider %s 模型容量不足，响应尚未提交，可安全降级\n", provider.Name)
+			return false, capacityErr
+		}
+		fmt.Printf("[WARN] Provider %s 在流式响应开始后报告模型容量不足，无法拼接其它 Provider 响应\n", provider.Name)
+		return false, fmt.Errorf("%w: %w", errUpstreamStreamAborted, capacityErr)
 	}
 
 	if !c.Writer.Written() {

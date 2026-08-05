@@ -91,6 +91,9 @@ func safeRelayError(err error) string {
 	if err == nil {
 		return "unknown error"
 	}
+	if errors.Is(err, errUpstreamModelCapacity) {
+		return "upstream model at capacity"
+	}
 	var statusError *upstreamStatusError
 	if errors.As(err, &statusError) {
 		return fmt.Sprintf("upstream HTTP %d", statusError.status)
