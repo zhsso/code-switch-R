@@ -14,10 +14,27 @@ import (
 type BlacklistService struct {
 	settingsService     *SettingsService
 	notificationService *NotificationService
+	observerMu          sync.RWMutex
+	blacklistObserver   func(platform string, providerName string)
 	// mu 串行化"读计数→判断→写回"的整段读改写:
 	// 计数的 SELECT 与 UPDATE 之间无事务,并发失败会互相吞掉计数,
 	// 导致达到拉黑阈值的时机被推迟甚至错过
 	mu sync.Mutex
+}
+
+func (bs *BlacklistService) SetBlacklistObserver(observer func(platform string, providerName string)) {
+	bs.observerMu.Lock()
+	bs.blacklistObserver = observer
+	bs.observerMu.Unlock()
+}
+
+func (bs *BlacklistService) notifyBlacklisted(platform string, providerName string) {
+	bs.observerMu.RLock()
+	observer := bs.blacklistObserver
+	bs.observerMu.RUnlock()
+	if observer != nil {
+		observer(platform, providerName)
+	}
 }
 
 // BlacklistStatus 黑名单状态（用于前端展示）
@@ -258,6 +275,7 @@ func (bs *BlacklistService) RecordFailure(platform string, providerName string) 
 			log.Printf("⛔ Provider %s/%s 已拉黑（L0 → L%d，%d 分钟），过期时间: %s",
 				platform, providerName, newLevel, duration, blacklistedUntil.Format("15:04:05"))
 
+			bs.notifyBlacklisted(platform, providerName)
 			// 发送拉黑通知
 			if bs.notificationService != nil {
 				bs.notificationService.NotifyProviderBlacklisted(platform, providerName, newLevel, duration)
@@ -360,6 +378,7 @@ func (bs *BlacklistService) RecordFailure(platform string, providerName string) 
 		log.Printf("⛔ Provider %s/%s 已拉黑（L%d → L%d，%d 分钟），过期时间: %s",
 			platform, providerName, blacklistLevel, newLevel, duration, blacklistedUntil.Format("15:04:05"))
 
+		bs.notifyBlacklisted(platform, providerName)
 		// 发送拉黑通知
 		if bs.notificationService != nil {
 			bs.notificationService.NotifyProviderBlacklisted(platform, providerName, newLevel, duration)
@@ -428,6 +447,7 @@ func (bs *BlacklistService) recordFailureFixedMode(platform string, providerName
 			log.Printf("⛔ Provider %s/%s 已拉黑 %d 分钟（固定模式，失败 1 次），过期时间: %s",
 				platform, providerName, fallbackDuration, blacklistedUntil.Format("15:04:05"))
 
+			bs.notifyBlacklisted(platform, providerName)
 			// 发送拉黑通知（固定模式无等级，level 传 0）
 			if bs.notificationService != nil {
 				bs.notificationService.NotifyProviderBlacklisted(platform, providerName, 0, fallbackDuration)
@@ -485,6 +505,7 @@ func (bs *BlacklistService) recordFailureFixedMode(platform string, providerName
 		log.Printf("⛔ Provider %s/%s 已拉黑 %d 分钟（固定模式，失败 %d 次），过期时间: %s",
 			platform, providerName, fallbackDuration, failureCount, blacklistedUntil.Format("15:04:05"))
 
+		bs.notifyBlacklisted(platform, providerName)
 		// 发送拉黑通知（固定模式无等级，level 传 0）
 		if bs.notificationService != nil {
 			bs.notificationService.NotifyProviderBlacklisted(platform, providerName, 0, fallbackDuration)

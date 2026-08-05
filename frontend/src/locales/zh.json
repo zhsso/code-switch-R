@@ -183,6 +183,26 @@
         "noData": "今日暂无数据",
         "lastUsed": "正在使用"
       },
+      "dailyLimit": {
+        "today": "今日额度",
+        "manage": "管理今日费用额度",
+        "manageTitle": "今日额度 · {name}",
+        "used": "实际使用",
+        "system": "系统估算",
+        "manual": "人工修正",
+        "available": "可用 · {percent}%",
+        "quotaBlocked": "今日额度已用完",
+        "manualBlocked": "今日已手动封禁",
+        "quotaAndManualBlocked": "今日额度及手动封禁均已生效",
+        "actualUsage": "今日实际使用金额",
+        "saveUsage": "更新金额",
+        "blockToday": "封禁今日",
+        "unblockToday": "临时解禁",
+        "usageSaved": "{name} 的今日实际使用金额已更新",
+        "blockedSuccess": "{name} 已封禁至今日结束",
+        "unblockedSuccess": "{name} 已临时解禁",
+        "actionFailed": "额度操作失败"
+      },
       "form": {
         "createTitle": "新增供应商",
         "editTitle": "编辑供应商",
@@ -200,6 +220,8 @@
           "fallbackApiUrls": "备用 API 地址",
           "maxConcurrency": "最大并发请求数",
           "costMultiplier": "费用倍率",
+          "dailyCostLimit": "每日费用限额",
+          "dailyCostLimitAmount": "每日限额（USD）",
           "apiKey": "API 密钥",
           "apiEndpoint": "API 端点（可选）",
           "compatibilityMode": "请求兼容模式",
@@ -240,6 +262,7 @@
         "hints": {
           "maxConcurrency": "同一时刻最多向该供应商转发的请求数（0=不限）。满载时请求会先转其它供应商，全部满载则短暂排队。仅限本机代理转发生效",
           "costMultiplier": "1 为模型原价，当前倍率会应用到该供应商的全部费用统计",
+          "dailyCostLimit": "达到 100%，或达到 95% 后进入普通黑名单时，停止当日新请求",
           "fallbackApiUrls": "主地址失败且属可切换错误（网络失败/408/421/429/5xx）时，同一请求内按序改试备用地址；全部失败才算该供应商一次失败",
           "level": "数字越小优先级越高，Level 1 会被优先尝试，失败后依次尝试 Level 2、Level 3 等",
           "apiEndpoint": "覆盖 Codex 默认端点；留空使用 /responses。",
@@ -282,7 +305,8 @@
           "tooManyFallbacks": "备用地址最多 4 个",
           "invalidFallbackUrl": "备用地址必须是合法的 http/https 地址",
           "revealApiKeyFailed": "显示 API 密钥失败",
-          "invalidCostMultiplier": "费用倍率必须在 0.01–100 之间"
+          "invalidCostMultiplier": "费用倍率必须在 0.01–100 之间",
+          "invalidDailyCostLimit": "金额必须大于 0，且最多保留 6 位小数"
         },
         "saveFailed": "保存供应商配置失败"
       },
@@ -444,6 +468,8 @@
         "roundRobinHint": "启用后同 Level 的供应商轮流处理请求，关闭则始终从第一个开始",
         "autoConnectivityTest": "自动可用性监控",
         "autoConnectivityTestHint": "启用后会每分钟自动检测已启用监控的供应商可用性",
+        "timezone": "时区",
+        "timezoneHint": "用于判断 Provider 每日费用限额的日期边界",
         "autoSyncModels": "自动同步模型与价格",
         "autoSyncModelsHint": "每天从 llm-metadata 数据源同步最新模型目录与价格，默认模型自动跟随最新",
         "modelSyncStatus": "同步状态",

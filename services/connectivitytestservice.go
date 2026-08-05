@@ -54,10 +54,11 @@ type ConnectivityResult struct {
 
 // ConnectivityTestService 连通性测试服务
 type ConnectivityTestService struct {
-	providerService  *ProviderService
-	blacklistService *BlacklistService
-	settingsService  *SettingsService
-	policy           *DefaultModelPolicy
+	providerService   *ProviderService
+	blacklistService  *BlacklistService
+	dailyLimitService *DailyCostLimitService
+	settingsService   *SettingsService
+	policy            *DefaultModelPolicy
 
 	mu      sync.RWMutex
 	results map[string]map[int64]*ConnectivityResult // platform -> providerID -> result
@@ -69,6 +70,10 @@ type ConnectivityTestService struct {
 	// insecure 变体供开启 insecureSkipVerify 的供应商使用，与转发路径保持同一验证策略
 	client         *http.Client
 	clientInsecure *http.Client
+}
+
+func (cts *ConnectivityTestService) SetDailyCostLimitService(service *DailyCostLimitService) {
+	cts.dailyLimitService = service
 }
 
 // NewConnectivityTestService 创建连通性测试服务
@@ -390,6 +395,10 @@ func isTimeoutError(err error) bool {
 
 // TestAll 测试指定平台的所有启用检测的供应商
 func (cts *ConnectivityTestService) TestAll(platform string) []ConnectivityResult {
+	return cts.testAll(platform, false)
+}
+
+func (cts *ConnectivityTestService) testAll(platform string, skipDailyBlocked bool) []ConnectivityResult {
 	if requireCodexPlatform(platform) != nil {
 		return nil
 	}
@@ -412,6 +421,17 @@ func (cts *ConnectivityTestService) TestAll(platform string) []ConnectivityResul
 		// 旧字段 ConnectivityCheck 已废弃且保存时会被 clearLegacyFields 清零，不能再作过滤依据
 		if !provider.AvailabilityMonitorEnabled {
 			continue
+		}
+		if skipDailyBlocked && cts.dailyLimitService != nil {
+			blocked, blockErr := cts.dailyLimitService.IsProviderBlocked(platform, provider)
+			if blockErr != nil {
+				log.Printf("[ConnectivityTest] Provider %s 每日额度状态读取失败，跳过自动测试: %v", provider.Name, blockErr)
+				blocked = provider.DailyCostLimitEnabled
+			}
+			if blocked {
+				log.Printf("[ConnectivityTest] Provider %s 当日额度已封禁，跳过自动测试", provider.Name)
+				continue
+			}
 		}
 
 		wg.Add(1)
@@ -628,7 +648,7 @@ func (cts *ConnectivityTestService) stopAutoTest() {
 func (cts *ConnectivityTestService) runAllPlatformTests() {
 	platforms := []string{CodexPlatform}
 	for _, platform := range platforms {
-		cts.TestAll(platform)
+		cts.testAll(platform, true)
 	}
 }
 

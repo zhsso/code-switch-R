@@ -14,7 +14,7 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . ./
 COPY --from=webui /src/frontend/dist ./frontend/dist
-ARG VERSION=v2.6.44-codexplus.1
+ARG VERSION=v2.6.44-codexplus.2
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \

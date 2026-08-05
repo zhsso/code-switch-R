@@ -75,7 +75,7 @@ docker compose config --quiet
 docker compose build
 ```
 
-镜像版本为 `v2.6.44-codexplus.1`，可通过 `http://127.0.0.1:8080/api/info` 查看。
+镜像版本为 `v2.6.44-codexplus.2`，可通过 `http://127.0.0.1:8080/api/info` 查看。
 
 ## License
 

@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
+	_ "time/tzdata"
 )
 
 const (
@@ -13,19 +16,21 @@ const (
 
 	defaultHistoryRetentionDays = 30
 	maxHistoryRetentionDays     = 3650
+	defaultAppTimezone          = "Asia/Shanghai"
 )
 
 // AppSettings contains only settings that are meaningful to the headless
 // relay and its browser UI. Desktop startup, updater and CLI-file settings are
 // deliberately absent.
 type AppSettings struct {
-	ShowHeatmap          bool `json:"show_heatmap"`
-	ShowHomeTitle        bool `json:"show_home_title"`
-	AutoSyncModels       bool `json:"auto_sync_models"`
-	AutoConnectivityTest bool `json:"auto_connectivity_test"`
-	EnableSwitchNotify   bool `json:"enable_switch_notify"`
-	EnableRoundRobin     bool `json:"enable_round_robin"`
-	HistoryRetentionDays int  `json:"history_retention_days"`
+	ShowHeatmap          bool   `json:"show_heatmap"`
+	ShowHomeTitle        bool   `json:"show_home_title"`
+	AutoSyncModels       bool   `json:"auto_sync_models"`
+	AutoConnectivityTest bool   `json:"auto_connectivity_test"`
+	EnableSwitchNotify   bool   `json:"enable_switch_notify"`
+	EnableRoundRobin     bool   `json:"enable_round_robin"`
+	HistoryRetentionDays int    `json:"history_retention_days"`
+	Timezone             string `json:"timezone"`
 }
 
 type AppSettingsService struct {
@@ -50,6 +55,7 @@ func (as *AppSettingsService) defaultSettings() AppSettings {
 		EnableSwitchNotify:   true,
 		EnableRoundRobin:     false,
 		HistoryRetentionDays: defaultHistoryRetentionDays,
+		Timezone:             defaultAppTimezone,
 	}
 }
 
@@ -60,6 +66,11 @@ func (as *AppSettingsService) GetAppSettings() (AppSettings, error) {
 }
 
 func (as *AppSettingsService) SaveAppSettings(settings AppSettings) (AppSettings, error) {
+	if strings.TrimSpace(settings.Timezone) == "" {
+		settings.Timezone = defaultAppTimezone
+	} else {
+		settings.Timezone = strings.TrimSpace(settings.Timezone)
+	}
 	if err := validateAppSettings(settings); err != nil {
 		return settings, err
 	}
@@ -74,6 +85,13 @@ func (as *AppSettingsService) SaveAppSettings(settings AppSettings) (AppSettings
 func validateAppSettings(settings AppSettings) error {
 	if settings.HistoryRetentionDays < 1 || settings.HistoryRetentionDays > maxHistoryRetentionDays {
 		return fmt.Errorf("history retention must be between 1 and %d days", maxHistoryRetentionDays)
+	}
+	timezone := strings.TrimSpace(settings.Timezone)
+	if timezone == "" {
+		return fmt.Errorf("timezone must not be empty")
+	}
+	if _, err := time.LoadLocation(timezone); err != nil {
+		return fmt.Errorf("invalid timezone %q: %w", timezone, err)
 	}
 	return nil
 }
@@ -113,6 +131,10 @@ func (as *AppSettingsService) loadLocked() (AppSettings, error) {
 	if settings.HistoryRetentionDays == 0 {
 		settings.HistoryRetentionDays = defaultHistoryRetentionDays
 	}
+	if strings.TrimSpace(settings.Timezone) == "" {
+		settings.Timezone = defaultAppTimezone
+	}
+	settings.Timezone = strings.TrimSpace(settings.Timezone)
 	return settings, validateAppSettings(settings)
 }
 

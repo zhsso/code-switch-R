@@ -235,6 +235,30 @@
                   <span>{{ stats.cost }}</span>
                 </template>
               </p>
+              <div
+                v-if="card.dailyCostLimitEnabled && getDailyLimitStatus(card.id)"
+                :class="['daily-limit-strip', { blocked: getDailyLimitStatus(card.id)!.blocked }]"
+                :title="dailyLimitStatusLabel(getDailyLimitStatus(card.id)!)"
+              >
+                <div class="daily-limit-heading">
+                  <span>{{ t('components.main.dailyLimit.today') }}</span>
+                  <span class="daily-limit-amount">
+                    {{ formatDailyMicros(getDailyLimitStatus(card.id)!.usedMicros) }} /
+                    {{ formatDailyMicros(getDailyLimitStatus(card.id)!.limitMicros) }}
+                  </span>
+                </div>
+                <div class="daily-limit-track" aria-hidden="true">
+                  <span
+                    class="daily-limit-fill"
+                    :style="{ width: `${dailyLimitPercent(getDailyLimitStatus(card.id)!)}%` }"
+                  />
+                  <span class="daily-limit-threshold" />
+                </div>
+                <div class="daily-limit-foot">
+                  <span>{{ dailyLimitStatusLabel(getDailyLimitStatus(card.id)!) }}</span>
+                  <span>{{ getDailyLimitStatus(card.id)!.day }}</span>
+                </div>
+              </div>
               <!-- 黑名单横幅 -->
               <div
                 v-if="getProviderBlacklistStatus(card.name)?.isBlacklisted"
@@ -313,6 +337,16 @@
                 />
                 <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
+            </button>
+            <button
+              v-if="card.dailyCostLimitEnabled"
+              class="ghost-icon daily-limit-action"
+              :class="{ blocked: getDailyLimitStatus(card.id)?.blocked }"
+              :data-tooltip="t('components.main.dailyLimit.manage')"
+              :aria-label="t('components.main.dailyLimit.manage')"
+              @click="openDailyLimitManager(card)"
+            >
+              <span aria-hidden="true">$</span>
             </button>
             <button class="ghost-icon" :data-tooltip="t('components.main.controls.duplicate')" @click="handleDuplicate(card)">
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -435,6 +469,38 @@
                     :class="{ 'has-error': !!modalState.errors.costMultiplier }"
                   />
                   <span class="field-hint">{{ t('components.main.form.hints.costMultiplier') }}</span>
+                </label>
+
+                <div class="form-field switch-field daily-limit-setting">
+                  <span>{{ t('components.main.form.labels.dailyCostLimit') }}</span>
+                  <div class="switch-inline">
+                    <label class="mac-switch">
+                      <input type="checkbox" v-model="modalState.form.dailyCostLimitEnabled" />
+                      <span></span>
+                    </label>
+                    <span class="switch-text">
+                      {{ modalState.form.dailyCostLimitEnabled ? t('components.main.form.switch.on') : t('components.main.form.switch.off') }}
+                    </span>
+                  </div>
+                </div>
+                <label v-if="modalState.form.dailyCostLimitEnabled" class="form-field daily-limit-amount-field">
+                  <span class="label-row">
+                    {{ t('components.main.form.labels.dailyCostLimitAmount') }}
+                    <span v-if="modalState.errors.dailyCostLimit" class="field-error">
+                      {{ modalState.errors.dailyCostLimit }}
+                    </span>
+                  </span>
+                  <div class="currency-input">
+                    <span class="currency-prefix">$</span>
+                    <input
+                      v-model="modalState.form.dailyCostLimitUSD"
+                      type="number"
+                      min="0.000001"
+                      step="0.000001"
+                      :class="{ 'has-error': !!modalState.errors.dailyCostLimit }"
+                    />
+                  </div>
+                  <span class="field-hint">{{ t('components.main.form.hints.dailyCostLimit') }}</span>
                 </label>
 
                 <label class="form-field">
@@ -712,6 +778,90 @@
       </form>
       </BaseModal>
       <BaseModal
+        :open="dailyLimitManager.open"
+        :title="t('components.main.dailyLimit.manageTitle', { name: dailyLimitManager.providerName })"
+        @close="closeDailyLimitManager"
+      >
+        <div class="daily-limit-manager">
+          <div v-if="dailyLimitManager.status" class="daily-limit-summary">
+            <div class="daily-limit-summary-row">
+              <span>{{ t('components.main.dailyLimit.used') }}</span>
+              <strong>
+                {{ formatDailyMicros(dailyLimitManager.status.usedMicros) }} /
+                {{ formatDailyMicros(dailyLimitManager.status.limitMicros) }}
+              </strong>
+            </div>
+            <div class="daily-limit-track" aria-hidden="true">
+              <span
+                class="daily-limit-fill"
+                :style="{ width: `${dailyLimitPercent(dailyLimitManager.status)}%` }"
+              />
+              <span class="daily-limit-threshold" />
+            </div>
+            <div class="daily-limit-summary-meta">
+              <span>{{ dailyLimitManager.status.day }}</span>
+              <span>{{ dailyLimitManager.status.timezone }}</span>
+            </div>
+            <div class="daily-limit-breakdown">
+              <span>{{ t('components.main.dailyLimit.system') }} {{ formatDailyMicros(dailyLimitManager.status.systemCostMicros) }}</span>
+              <span>{{ t('components.main.dailyLimit.manual') }} {{ formatDailyMicros(dailyLimitManager.status.manualAdjustmentMicros) }}</span>
+            </div>
+            <p v-if="dailyLimitManager.status.blocked" class="daily-limit-state blocked">
+              {{ dailyLimitStatusLabel(dailyLimitManager.status) }}
+            </p>
+          </div>
+
+          <label class="form-field">
+            <span class="label-row">
+              {{ t('components.main.dailyLimit.actualUsage') }}
+              <span v-if="dailyLimitManager.error" class="field-error">{{ dailyLimitManager.error }}</span>
+            </span>
+            <div class="currency-input">
+              <span class="currency-prefix">$</span>
+              <input
+                v-model="dailyLimitManager.actualUsageUSD"
+                type="text"
+                inputmode="decimal"
+                autocomplete="off"
+                :disabled="dailyLimitManager.busy"
+              />
+            </div>
+          </label>
+
+          <div class="daily-limit-manager-actions">
+            <BaseButton
+              type="button"
+              :disabled="dailyLimitManager.busy"
+              @click="saveDailyActualUsage"
+            >
+              {{ t('components.main.dailyLimit.saveUsage') }}
+            </BaseButton>
+            <BaseButton
+              variant="danger"
+              type="button"
+              :disabled="dailyLimitManager.busy"
+              @click="manualBlockCurrentProvider"
+            >
+              {{ t('components.main.dailyLimit.blockToday') }}
+            </BaseButton>
+            <BaseButton
+              variant="outline"
+              type="button"
+              :disabled="dailyLimitManager.busy || !dailyLimitManager.status?.blocked"
+              @click="temporaryUnblockCurrentProvider"
+            >
+              {{ t('components.main.dailyLimit.unblockToday') }}
+            </BaseButton>
+          </div>
+
+          <footer class="form-actions">
+            <BaseButton variant="outline" type="button" @click="closeDailyLimitManager">
+              {{ t('components.main.form.actions.cancel') }}
+            </BaseButton>
+          </footer>
+        </div>
+      </BaseModal>
+      <BaseModal
       :open="confirmState.open"
       :title="t('components.main.form.confirmDeleteTitle')"
       variant="confirm"
@@ -771,6 +921,13 @@ import { showToast } from '../../utils/toast'
 import { extractErrorMessage } from '../../utils/error'
 import { getBlacklistStatus, manualUnblock, type BlacklistStatus } from '../../services/blacklist'
 import {
+  fetchDailyCostLimitStatuses,
+  manuallyBlockDaily,
+  setDailyActualUsage,
+  temporarilyUnblockDaily,
+  type DailyCostLimitStatus,
+} from '../../services/dailyLimits'
+import {
   getConnectivityResults,
   StatusAvailable,
   StatusDegraded,
@@ -819,6 +976,8 @@ const blacklistStatusMap = reactive<Record<ProviderTab, Record<string, Blacklist
   codex: {},
 })
 let blacklistTimer: number | undefined
+
+const dailyLimitStatusMap = ref<Record<number, DailyCostLimitStatus>>({})
 
 // 连通性状态（已废弃，保留用于兼容）
 const connectivityResultsMap = reactive<Record<ProviderTab, Record<number, ConnectivityResult>>>({
@@ -1026,7 +1185,7 @@ const loadAppSettings = async () => {
 }
 
 const handleAppSettingsUpdated = () => {
-  void loadAppSettings()
+  void Promise.all([loadAppSettings(), loadDailyLimitStatuses()])
 }
 
 const normalizeProviderKey = (value: string) => value?.trim().toLowerCase() ?? ''
@@ -1056,6 +1215,10 @@ const serializeProviders = (providers: AutomationCard[]) =>
     // 倍率 1 使用后端兼容默认值，不写入冗余字段
     costMultiplier: provider.costMultiplier && provider.costMultiplier !== 1
       ? provider.costMultiplier
+      : undefined,
+    dailyCostLimitEnabled: !!provider.dailyCostLimitEnabled,
+    dailyCostLimitMicros: provider.dailyCostLimitMicros && provider.dailyCostLimitMicros > 0
+      ? Math.round(provider.dailyCostLimitMicros)
       : undefined,
     // 跳过 TLS 验证与请求清理
     insecureSkipVerify: !!provider.insecureSkipVerify,
@@ -1172,6 +1335,44 @@ const loadBlacklistStatus = async (tab: ProviderTab) => {
   } catch (err) {
     console.error(`加载 ${tab} 黑名单状态失败:`, err)
   }
+}
+
+const loadDailyLimitStatuses = async () => {
+  try {
+    const statuses = await fetchDailyCostLimitStatuses('codex')
+    const next: Record<number, DailyCostLimitStatus> = {}
+    statuses.forEach((status) => {
+      next[Number(status.providerId)] = status
+    })
+    dailyLimitStatusMap.value = next
+  } catch (error) {
+    console.error('加载每日费用限额状态失败:', error)
+  }
+}
+
+const getDailyLimitStatus = (providerId: number): DailyCostLimitStatus | null =>
+  dailyLimitStatusMap.value[providerId] || null
+
+const dailyLimitPercent = (status: DailyCostLimitStatus): number =>
+  clamp(Number(status.usagePercent) || 0, 0, 100)
+
+const formatDailyMicros = (micros: number): string => {
+  const amount = (Number(micros) || 0) / 1_000_000
+  return new Intl.NumberFormat(locale.value || 'en', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 6,
+  }).format(amount)
+}
+
+const dailyLimitStatusLabel = (status: DailyCostLimitStatus): string => {
+  if (status.blocked) {
+    if (status.blockReason === 'manual') return t('components.main.dailyLimit.manualBlocked')
+    if (status.blockReason === 'quota_and_manual') return t('components.main.dailyLimit.quotaAndManualBlocked')
+    return t('components.main.dailyLimit.quotaBlocked')
+  }
+  return t('components.main.dailyLimit.available', { percent: Math.round(status.usagePercent) })
 }
 
 // 手动解禁并重置（完全重置）
@@ -1312,6 +1513,7 @@ const refreshAllData = async () => {
       loadProvidersFromDisk(),
       loadProviderStats(activeTab),
       loadBlacklistStatus(activeTab),
+      loadDailyLimitStatuses(),
       loadAvailabilityResults(),
     ])
   } catch (error) {
@@ -1463,6 +1665,7 @@ const switchToTabAndHighlight = (platform: string, providerName: string) => {
 
   // 刷新黑名单状态
   void loadBlacklistStatus(platform as ProviderTab)
+  void loadDailyLimitStatuses()
 }
 
 // 处理供应商切换事件
@@ -1485,6 +1688,7 @@ const handleServerEventsResync = () => {
   void Promise.allSettled([
     loadProviderStats(activeTab),
     loadBlacklistStatus(activeTab),
+    loadDailyLimitStatuses(),
     loadAvailabilityResults(),
     loadLastUsedProviders(),
   ])
@@ -1515,6 +1719,7 @@ onMounted(async () => {
   await loadProvidersFromDisk()
   await loadProviderStats(activeTab)
   await loadAppSettings()
+  await loadDailyLimitStatuses()
   startProviderStatsTimer()
 
   // 加载初始黑名单状态
@@ -1539,13 +1744,14 @@ onMounted(async () => {
 
   // 窗口焦点事件：从最小化恢复时立即刷新黑名单状态
   const handleWindowFocus = () => {
-    void loadBlacklistStatus(activeTab)
+    void Promise.all([loadBlacklistStatus(activeTab), loadDailyLimitStatuses()])
   }
   window.addEventListener('focus', handleWindowFocus)
 
   // 定期轮询黑名单状态（每 10 秒）
   const blacklistPollingTimer = window.setInterval(() => {
     void loadBlacklistStatus(activeTab)
+    void loadDailyLimitStatuses()
   }, 10_000)
 
   // 存储定时器 ID 以便清理
@@ -1556,7 +1762,7 @@ onMounted(async () => {
 
   // 监听可用性页面的 Provider 更新事件
   const handleProvidersUpdated = () => {
-    void loadProvidersFromDisk()
+    void Promise.all([loadProvidersFromDisk(), loadDailyLimitStatuses()])
   }
   window.addEventListener('providers-updated', handleProvidersUpdated)
   ;(window as any).__handleProvidersUpdated = handleProvidersUpdated
@@ -1688,6 +1894,28 @@ const handleGithubClick = () => {
   window.open(releasePageUrl, '_blank', 'noopener,noreferrer')
 }
 
+const MAX_MONEY_MICROS = 9_000_000_000_000_000n
+
+const parseUSDToMicros = (value: unknown): number | null => {
+  const text = String(value ?? '').trim()
+  if (!/^\d+(?:\.\d{1,6})?$/.test(text)) return null
+  const [whole, fraction = ''] = text.split('.')
+  try {
+    const micros = BigInt(whole) * 1_000_000n + BigInt(fraction.padEnd(6, '0'))
+    if (micros < 0n || micros > MAX_MONEY_MICROS) return null
+    return Number(micros)
+  } catch {
+    return null
+  }
+}
+
+const microsToUSDInput = (micros: number): string => {
+  const safe = Math.max(0, Math.round(Number(micros) || 0))
+  const whole = Math.floor(safe / 1_000_000)
+  const fraction = String(safe % 1_000_000).padStart(6, '0').replace(/0+$/, '')
+  return fraction ? `${whole}.${fraction}` : String(whole)
+}
+
 // 获取 GitHub 图标的 tooltip
 const getGithubTooltip = () => {
   return t('components.main.controls.github')
@@ -1710,6 +1938,8 @@ type VendorForm = {
   maxConcurrency?: number
   // 费用统计倍率（缺失时为 1）
   costMultiplier?: number
+  dailyCostLimitEnabled?: boolean
+  dailyCostLimitUSD?: string
   // === 可用性监控配置（新） ===
   availabilityMonitorEnabled?: boolean
   connectivityAutoBlacklist?: boolean
@@ -1764,6 +1994,8 @@ const defaultFormValues = (platform?: string): VendorForm => ({
   fallbackApiUrlsText: '',
   maxConcurrency: 0,
   costMultiplier: 1,
+  dailyCostLimitEnabled: false,
+  dailyCostLimitUSD: '',
   insecureSkipVerify: false, // 默认严格验证上游 TLS 证书
   requestSanitizeEnabled: false, // 请求清理默认关闭
   sanitizeConfig: {},
@@ -1837,6 +2069,7 @@ const modalState = reactive({
     apiUrl: '',
     fallbackApiUrls: '',
     costMultiplier: '',
+    dailyCostLimit: '',
   },
 })
 
@@ -1897,6 +2130,82 @@ const resolveEffectiveAuthType = () =>
 
 const confirmState = reactive({ open: false, card: null as AutomationCard | null, tabId: activeTab })
 
+const dailyLimitManager = reactive({
+  open: false,
+  providerId: 0,
+  providerName: '',
+  actualUsageUSD: '',
+  status: null as DailyCostLimitStatus | null,
+  busy: false,
+  error: '',
+})
+
+const refreshDailyLimitManager = async (syncInput = false) => {
+  await loadDailyLimitStatuses()
+  if (!dailyLimitManager.open) return
+  dailyLimitManager.status = getDailyLimitStatus(dailyLimitManager.providerId)
+  if (syncInput && dailyLimitManager.status) {
+    dailyLimitManager.actualUsageUSD = microsToUSDInput(dailyLimitManager.status.usedMicros)
+  }
+}
+
+const openDailyLimitManager = (card: AutomationCard) => {
+  dailyLimitManager.open = true
+  dailyLimitManager.providerId = card.id
+  dailyLimitManager.providerName = card.name
+  dailyLimitManager.status = getDailyLimitStatus(card.id)
+  dailyLimitManager.actualUsageUSD = microsToUSDInput(dailyLimitManager.status?.usedMicros ?? 0)
+  dailyLimitManager.error = ''
+  void refreshDailyLimitManager(true)
+}
+
+const closeDailyLimitManager = () => {
+  if (dailyLimitManager.busy) return
+  dailyLimitManager.open = false
+  dailyLimitManager.status = null
+  dailyLimitManager.error = ''
+}
+
+const runDailyLimitAction = async (action: () => Promise<unknown>, successKey: string, syncInput = false) => {
+  if (dailyLimitManager.busy) return
+  dailyLimitManager.busy = true
+  dailyLimitManager.error = ''
+  try {
+    await action()
+    await refreshDailyLimitManager(syncInput)
+    showToast(t(successKey, { name: dailyLimitManager.providerName }), 'success')
+  } catch (error) {
+    const message = extractErrorMessage(error)
+    dailyLimitManager.error = message
+    showToast(t('components.main.dailyLimit.actionFailed') + ': ' + message, 'error')
+  } finally {
+    dailyLimitManager.busy = false
+  }
+}
+
+const saveDailyActualUsage = async () => {
+  const actualMicros = parseUSDToMicros(dailyLimitManager.actualUsageUSD)
+  if (actualMicros === null) {
+    dailyLimitManager.error = t('components.main.form.errors.invalidDailyCostLimit')
+    return
+  }
+  await runDailyLimitAction(
+    () => setDailyActualUsage(activeTab, dailyLimitManager.providerId, actualMicros),
+    'components.main.dailyLimit.usageSaved',
+    true,
+  )
+}
+
+const manualBlockCurrentProvider = () => runDailyLimitAction(
+  () => manuallyBlockDaily(activeTab, dailyLimitManager.providerId),
+  'components.main.dailyLimit.blockedSuccess',
+)
+
+const temporaryUnblockCurrentProvider = () => runDailyLimitAction(
+  () => temporarilyUnblockDaily(activeTab, dailyLimitManager.providerId),
+  'components.main.dailyLimit.unblockedSuccess',
+)
+
 const openCreateModal = () => {
   modalState.tabId = activeTab
   modalState.editingId = null
@@ -1911,6 +2220,7 @@ const openCreateModal = () => {
   modalState.errors.apiUrl = ''
   modalState.errors.fallbackApiUrls = ''
   modalState.errors.costMultiplier = ''
+  modalState.errors.dailyCostLimit = ''
   modalState.open = true
 }
 
@@ -1932,6 +2242,10 @@ const openEditModal = (card: AutomationCard) => {
     fallbackApiUrlsText: (card.fallbackApiUrls || []).join('\n'),
     maxConcurrency: card.maxConcurrency || 0,
     costMultiplier: card.costMultiplier && card.costMultiplier > 0 ? card.costMultiplier : 1,
+    dailyCostLimitEnabled: card.dailyCostLimitEnabled ?? false,
+    dailyCostLimitUSD: card.dailyCostLimitMicros
+      ? microsToUSDInput(card.dailyCostLimitMicros)
+      : '',
     insecureSkipVerify: card.insecureSkipVerify ?? false,
     requestSanitizeEnabled: card.requestSanitizeEnabled ?? false,
     sanitizeConfig: card.sanitizeConfig || {},
@@ -1975,6 +2289,7 @@ const openEditModal = (card: AutomationCard) => {
   modalState.errors.apiUrl = ''
   modalState.errors.fallbackApiUrls = ''
   modalState.errors.costMultiplier = ''
+  modalState.errors.dailyCostLimit = ''
   modalState.open = true
 }
 
@@ -1998,11 +2313,18 @@ const submitModal = async (): Promise<boolean> => {
   const officialSite = modalState.form.officialSite.trim()
   const icon = (modalState.form.icon || defaultIconKey).toString().trim().toLowerCase() || defaultIconKey
   const costMultiplier = Number(modalState.form.costMultiplier)
+  const parsedDailyLimitMicros = parseUSDToMicros(modalState.form.dailyCostLimitUSD)
+  const dailyCostLimitMicros = parsedDailyLimitMicros ?? 0
   modalState.errors.apiUrl = ''
   modalState.errors.fallbackApiUrls = ''
   modalState.errors.costMultiplier = ''
+  modalState.errors.dailyCostLimit = ''
   if (!Number.isFinite(costMultiplier) || costMultiplier < 0.01 || costMultiplier > 100) {
     modalState.errors.costMultiplier = t('components.main.form.errors.invalidCostMultiplier')
+    return false
+  }
+  if (modalState.form.dailyCostLimitEnabled && (!parsedDailyLimitMicros || parsedDailyLimitMicros <= 0)) {
+    modalState.errors.dailyCostLimit = t('components.main.form.errors.invalidDailyCostLimit')
     return false
   }
   try {
@@ -2066,6 +2388,8 @@ const submitModal = async (): Promise<boolean> => {
       fallbackApiUrls,
       maxConcurrency: normalizeMaxConcurrency(modalState.form.maxConcurrency),
       costMultiplier,
+      dailyCostLimitEnabled: !!modalState.form.dailyCostLimitEnabled,
+      dailyCostLimitMicros,
       insecureSkipVerify: !!modalState.form.insecureSkipVerify,
       requestSanitizeEnabled: !!modalState.form.requestSanitizeEnabled,
       sanitizeConfig: modalState.form.sanitizeConfig || undefined,
@@ -2114,6 +2438,8 @@ const submitModal = async (): Promise<boolean> => {
       fallbackApiUrls,
       maxConcurrency: normalizeMaxConcurrency(modalState.form.maxConcurrency),
       costMultiplier,
+      dailyCostLimitEnabled: !!modalState.form.dailyCostLimitEnabled,
+      dailyCostLimitMicros,
       insecureSkipVerify: !!modalState.form.insecureSkipVerify,
       requestSanitizeEnabled: !!modalState.form.requestSanitizeEnabled,
       sanitizeConfig: modalState.form.sanitizeConfig || undefined,
@@ -2146,6 +2472,7 @@ const submitModal = async (): Promise<boolean> => {
   }
 
   await loadProvidersFromDisk()
+  await loadDailyLimitStatuses()
   closeModal()
 
   // 通知可用性页面刷新
@@ -2188,7 +2515,7 @@ const handleDuplicate = async (card: AutomationCard) => {
       return
     }
     console.log(`[Duplicate] Provider "${card.name}" duplicated as "${newProvider.name}"`)
-    await loadProvidersFromDisk()
+    await Promise.all([loadProvidersFromDisk(), loadDailyLimitStatuses()])
   } catch (error) {
     console.error('[Duplicate] Failed to duplicate provider:', error)
     showToast(t('components.main.controls.duplicateFailed') + ': ' + extractErrorMessage(error), 'error')
@@ -3123,6 +3450,178 @@ const vendorInitials = (name: string) => {
 :global(.dark) .test-result.error {
   background: rgba(239, 68, 68, 0.15);
   color: #f87171;
+}
+
+.card-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.daily-limit-strip {
+  width: min(460px, 100%);
+  margin-top: 9px;
+  color: var(--mac-text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.daily-limit-heading,
+.daily-limit-foot,
+.daily-limit-summary-row,
+.daily-limit-summary-meta,
+.daily-limit-breakdown {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.daily-limit-heading {
+  margin-bottom: 5px;
+  color: var(--mac-text-secondary);
+  font-weight: 600;
+}
+
+.daily-limit-amount {
+  color: var(--mac-text);
+  white-space: nowrap;
+}
+
+.daily-limit-track {
+  position: relative;
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--mac-text-secondary) 18%, transparent);
+}
+
+.daily-limit-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: #0f9d73;
+  transition: width 0.2s ease;
+}
+
+.daily-limit-threshold {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: 95%;
+  width: 2px;
+  background: #d97706;
+}
+
+.daily-limit-foot {
+  margin-top: 4px;
+  color: var(--mac-text-secondary);
+}
+
+.daily-limit-strip.blocked .daily-limit-fill,
+.daily-limit-summary .daily-limit-state.blocked {
+  background: #dc2626;
+}
+
+.daily-limit-strip.blocked .daily-limit-foot span:first-child {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.daily-limit-action > span {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.daily-limit-action.blocked {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.1);
+}
+
+.currency-input {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.currency-input .currency-prefix {
+  position: absolute;
+  left: 13px;
+  z-index: 1;
+  color: var(--mac-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.currency-input input {
+  width: 100%;
+  padding-left: 30px;
+  font-variant-numeric: tabular-nums;
+}
+
+.daily-limit-manager {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.daily-limit-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--mac-border);
+}
+
+.daily-limit-summary-row strong {
+  color: var(--mac-text);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.daily-limit-summary-meta,
+.daily-limit-breakdown {
+  color: var(--mac-text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.daily-limit-breakdown {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.daily-limit-state {
+  align-self: flex-start;
+  margin: 0;
+  border-radius: 4px;
+  padding: 4px 7px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.daily-limit-manager-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 640px) {
+  .daily-limit-strip {
+    width: 100%;
+  }
+
+  .daily-limit-manager-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .daily-limit-manager-actions :deep(.btn) {
+    width: 100%;
+  }
 }
 
 </style>

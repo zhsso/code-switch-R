@@ -182,6 +182,26 @@
         "noData": "No data yet today",
         "lastUsed": "In Use"
       },
+      "dailyLimit": {
+        "today": "Today's quota",
+        "manage": "Manage today's cost quota",
+        "manageTitle": "Today's quota · {name}",
+        "used": "Actual usage",
+        "system": "System estimate",
+        "manual": "Manual adjustment",
+        "available": "Available · {percent}%",
+        "quotaBlocked": "Today's quota is exhausted",
+        "manualBlocked": "Manually blocked for today",
+        "quotaAndManualBlocked": "Quota and manual blocks are both active",
+        "actualUsage": "Today's actual usage",
+        "saveUsage": "Update amount",
+        "blockToday": "Block today",
+        "unblockToday": "Temporary unblock",
+        "usageSaved": "Today's actual usage for {name} was updated",
+        "blockedSuccess": "{name} is blocked until the end of today",
+        "unblockedSuccess": "{name} was temporarily unblocked",
+        "actionFailed": "Quota action failed"
+      },
       "form": {
         "createTitle": "Add provider",
         "editTitle": "Edit provider",
@@ -199,6 +219,8 @@
           "fallbackApiUrls": "Fallback API URLs",
           "maxConcurrency": "Max concurrent requests",
           "costMultiplier": "Cost multiplier",
+          "dailyCostLimit": "Daily cost limit",
+          "dailyCostLimitAmount": "Daily limit (USD)",
           "apiKey": "API key",
           "apiEndpoint": "API Endpoint Path (optional)",
           "compatibilityMode": "Request Compatibility Mode",
@@ -239,6 +261,7 @@
         "hints": {
           "maxConcurrency": "Max in-flight proxied requests to this provider (0 = unlimited). When full, requests go to other providers first, or queue briefly if all are full. Applies to this app's proxy only",
           "costMultiplier": "1 uses the model's base price; the current multiplier applies to all cost reports for this provider",
+          "dailyCostLimit": "Stops new requests for the day at 100%, or after ordinary blacklisting at 95%",
           "fallbackApiUrls": "When the primary URL fails with a switchable error (network/408/421/429/5xx), fallbacks are tried in order within the same request; the provider only counts as failed after all URLs fail",
           "level": "Lower numbers = higher priority. Level 1 providers are tried first, then Level 2, etc.",
           "apiEndpoint": "Override the Codex default endpoint. Leave blank to use /responses.",
@@ -281,7 +304,8 @@
           "tooManyFallbacks": "At most 4 fallback URLs",
           "invalidFallbackUrl": "Fallback URLs must be valid http/https addresses",
           "revealApiKeyFailed": "Failed to reveal API key",
-          "invalidCostMultiplier": "Cost multiplier must be between 0.01 and 100"
+          "invalidCostMultiplier": "Cost multiplier must be between 0.01 and 100",
+          "invalidDailyCostLimit": "Amount must be greater than 0 with at most 6 decimal places"
         },
         "saveFailed": "Failed to save provider configuration"
       },
@@ -443,6 +467,8 @@
         "roundRobinHint": "When enabled, providers at the same Level take turns handling requests; when disabled, always starts from the first",
         "autoConnectivityTest": "Auto Availability Monitoring",
         "autoConnectivityTestHint": "Automatically check availability of monitored providers every minute",
+        "timezone": "Time zone",
+        "timezoneHint": "Defines the calendar-day boundary for each Provider's daily cost limit",
         "autoSyncModels": "Auto-sync models & pricing",
         "autoSyncModelsHint": "Sync the latest model catalog and pricing from llm-metadata daily; default models follow the latest automatically",
         "modelSyncStatus": "Sync status",

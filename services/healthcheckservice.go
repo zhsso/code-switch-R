@@ -89,10 +89,11 @@ type AvailabilityFailureCounter struct {
 
 // HealthCheckService 健康检查服务
 type HealthCheckService struct {
-	providerService  *ProviderService
-	blacklistService *BlacklistService
-	settingsService  *SettingsService
-	policy           *DefaultModelPolicy
+	providerService   *ProviderService
+	blacklistService  *BlacklistService
+	dailyLimitService *DailyCostLimitService
+	settingsService   *SettingsService
+	policy            *DefaultModelPolicy
 
 	mu            sync.RWMutex
 	failCounters  map[string]*AvailabilityFailureCounter  // key: platform:providerName
@@ -107,6 +108,10 @@ type HealthCheckService struct {
 	// 与转发路径保持同一验证策略，避免"转发通、探测挂"导致误拉黑
 	client         *http.Client
 	clientInsecure *http.Client
+}
+
+func (hcs *HealthCheckService) SetDailyCostLimitService(service *DailyCostLimitService) {
+	hcs.dailyLimitService = service
 }
 
 // NewHealthCheckService 创建健康检查服务
@@ -480,7 +485,7 @@ func (hcs *HealthCheckService) RunAllChecks() (map[string][]HealthCheckResult, e
 	results := make(map[string][]HealthCheckResult)
 
 	for _, platform := range []string{CodexPlatform} {
-		platformResults := hcs.checkAllProviders(platform)
+		platformResults := hcs.checkAllProviders(platform, false)
 		results[platform] = platformResults
 	}
 
@@ -513,7 +518,7 @@ func batchCheckTimeout(providers []Provider) time.Duration {
 }
 
 // checkAllProviders 检测指定平台的所有启用监控的供应商
-func (hcs *HealthCheckService) checkAllProviders(platform string) []HealthCheckResult {
+func (hcs *HealthCheckService) checkAllProviders(platform string, skipDailyBlocked bool) []HealthCheckResult {
 	if requireCodexPlatform(platform) != nil {
 		return nil
 	}
@@ -536,6 +541,17 @@ func (hcs *HealthCheckService) checkAllProviders(platform string) []HealthCheckR
 		// 只检测启用了可用性监控的供应商
 		if !provider.AvailabilityMonitorEnabled {
 			continue
+		}
+		if skipDailyBlocked && hcs.dailyLimitService != nil {
+			blocked, blockErr := hcs.dailyLimitService.IsProviderBlocked(platform, provider)
+			if blockErr != nil {
+				log.Printf("[HealthCheck] Provider %s 每日额度状态读取失败，跳过自动检查: %v", provider.Name, blockErr)
+				blocked = provider.DailyCostLimitEnabled
+			}
+			if blocked {
+				log.Printf("[HealthCheck] Provider %s 当日额度已封禁，跳过自动检查", provider.Name)
+				continue
+			}
 		}
 
 		wg.Add(1)
@@ -1121,7 +1137,7 @@ func (hcs *HealthCheckService) SetAutoAvailabilityPolling(enabled bool) {
 func (hcs *HealthCheckService) runAllPlatformChecks() {
 	platforms := []string{CodexPlatform}
 	for _, platform := range platforms {
-		hcs.checkAllProviders(platform)
+		hcs.checkAllProviders(platform, true)
 	}
 }
 

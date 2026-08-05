@@ -8,7 +8,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        VERSION: v2.6.44-codexplus.1
+        VERSION: v2.6.44-codexplus.2
     network_mode: host
     user: "10001:10001"
     init: true

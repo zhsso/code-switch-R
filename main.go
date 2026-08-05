@@ -63,6 +63,10 @@ func main() {
 		config.RelayAddr(),
 	)
 	logService := services.NewLogService(providerService)
+	dailyLimitService := services.NewDailyCostLimitService(providerService, appSettings, logService)
+	dailyLimitService.SetBlacklistService(blacklistService)
+	blacklistService.SetBlacklistObserver(dailyLimitService.OnProviderBlacklisted)
+	providerRelay.SetDailyCostLimitService(dailyLimitService)
 	speedTestService := services.NewSpeedTestService()
 	connectivityTestService := services.NewConnectivityTestService(
 		providerService,
@@ -70,12 +74,14 @@ func main() {
 		settingsService,
 		defaultModelPolicy,
 	)
+	connectivityTestService.SetDailyCostLimitService(dailyLimitService)
 	healthCheckService := services.NewHealthCheckService(
 		providerService,
 		blacklistService,
 		settingsService,
 		defaultModelPolicy,
 	)
+	healthCheckService.SetDailyCostLimitService(dailyLimitService)
 	if err := healthCheckService.Start(); err != nil {
 		shutdownDatabaseQueues()
 		log.Fatalf("initialize health checks: %v", err)
@@ -88,6 +94,7 @@ func main() {
 		settings:     settingsService,
 		appSettings:  appSettings,
 		blacklist:    blacklistService,
+		dailyLimits:  dailyLimitService,
 		logs:         logService,
 		modelSync:    modelSyncService,
 		speedTest:    speedTestService,
@@ -215,6 +222,8 @@ func registerWebServices(registry *rpcRegistry, svc webServices) {
 		"GetAppSettings", "SaveAppSettings")
 	registry.Register("codeswitch/services.BlacklistService", svc.blacklist,
 		"GetBlacklistStatus", "ManualUnblock", "ManualUnblockAndReset", "ManualResetLevel")
+	registry.Register("codeswitch/services.DailyCostLimitService", svc.dailyLimits,
+		"GetStatuses", "SetActualUsage", "ManualBlock", "TemporaryUnblock")
 	registry.Register("codeswitch/services.LogService", svc.logs,
 		"CostSince", "ListRequestLogs", "GetRequestLogDetail", "ListProviders",
 		"HeatmapStats", "StatsSince", "ProviderDailyStats")
@@ -242,6 +251,7 @@ type webServices struct {
 	settings     *services.SettingsService
 	appSettings  *services.AppSettingsService
 	blacklist    *services.BlacklistService
+	dailyLimits  *services.DailyCostLimitService
 	logs         *services.LogService
 	modelSync    *services.ModelSyncService
 	speedTest    *services.SpeedTestService

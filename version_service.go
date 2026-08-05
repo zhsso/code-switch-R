@@ -1,6 +1,6 @@
 package main
 
-var AppVersion = "v2.6.44-codexplus.1"
+var AppVersion = "v2.6.44-codexplus.2"
 
 type VersionService struct {
 	version string

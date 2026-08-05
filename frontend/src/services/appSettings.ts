@@ -8,6 +8,7 @@ export type AppSettings = {
   enable_switch_notify: boolean
   enable_round_robin: boolean
   history_retention_days: number
+  timezone: string
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -18,11 +19,12 @@ const DEFAULT_SETTINGS: AppSettings = {
   enable_switch_notify: true,
   enable_round_robin: false,
   history_retention_days: 30,
+  timezone: 'Asia/Shanghai',
 }
 
 export const fetchAppSettings = async (): Promise<AppSettings> => {
   const data = await Call.ByName('codeswitch/services.AppSettingsService.GetAppSettings')
-  return data ?? DEFAULT_SETTINGS
+  return { ...DEFAULT_SETTINGS, ...(data ?? {}) }
 }
 
 export const saveAppSettings = async (settings: AppSettings): Promise<AppSettings> => {

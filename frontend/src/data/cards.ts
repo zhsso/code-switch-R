@@ -26,6 +26,9 @@ export type AutomationCard = {
   maxConcurrency?: number
   // 费用统计倍率（缺失时按 1）
   costMultiplier?: number
+  // 每日费用限额（微美元，1 USD = 1,000,000）
+  dailyCostLimitEnabled?: boolean
+  dailyCostLimitMicros?: number
   // === 可用性监控配置（新） ===
   // 可用性监控开关：是否启用后台健康检查
   availabilityMonitorEnabled?: boolean

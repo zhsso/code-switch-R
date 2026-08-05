@@ -79,8 +79,13 @@ type Provider struct {
 	// 使用 omitempty 确保零值不序列化，向后兼容
 	Level int `json:"level,omitempty"`
 
-	// 费用倍率 - 仅影响 WebUI 的费用统计，0 表示旧配置的默认倍率 1。
+	// 费用倍率 - 影响 WebUI 费用统计和每日费用限额，0 表示旧配置的默认倍率 1。
 	CostMultiplier float64 `json:"costMultiplier,omitempty"`
+
+	// 每日费用限额按微美元存储（1 USD = 1,000,000 micro-USD）。
+	// 独立状态服务负责当日封禁，不会修改 Provider.Enabled。
+	DailyCostLimitEnabled bool  `json:"dailyCostLimitEnabled,omitempty"`
+	DailyCostLimitMicros  int64 `json:"dailyCostLimitMicros,omitempty"`
 
 	// ========== 可用性监控字段（新增 v0.5.0） ==========
 
@@ -542,21 +547,23 @@ func (ps *ProviderService) DuplicateProvider(kind string, sourceID int64) (*Prov
 	// 名字必须在现有列表里唯一：黑名单、用量统计、别名迁移全部以 name 为键，
 	// 同名供应商会互相串扰（一个被拉黑，另一个也被跳过；用量记到同一条）
 	cloned := &Provider{
-		ID:                   newID,
-		Name:                 uniqueProviderName(providers, source.Name+" (副本)"),
-		APIURL:               source.APIURL,
-		APIKey:               source.APIKey,
-		Site:                 source.Site,
-		Icon:                 source.Icon,
-		Tint:                 source.Tint,
-		Accent:               source.Accent,
-		Enabled:              false, // 默认禁用，避免与源供应商冲突
-		Level:                source.Level,
-		CostMultiplier:       source.CostMultiplier,
-		APIEndpoint:          source.APIEndpoint,          // 复制端点配置
-		ConnectivityAuthType: source.ConnectivityAuthType, // 复制认证方式
-		InsecureSkipVerify:   source.InsecureSkipVerify,   // 复制 TLS 跳验开关
-		CompatibilityMode:    source.CompatibilityMode,    // 复制请求兼容模式
+		ID:                    newID,
+		Name:                  uniqueProviderName(providers, source.Name+" (副本)"),
+		APIURL:                source.APIURL,
+		APIKey:                source.APIKey,
+		Site:                  source.Site,
+		Icon:                  source.Icon,
+		Tint:                  source.Tint,
+		Accent:                source.Accent,
+		Enabled:               false, // 默认禁用，避免与源供应商冲突
+		Level:                 source.Level,
+		CostMultiplier:        source.CostMultiplier,
+		DailyCostLimitEnabled: source.DailyCostLimitEnabled,
+		DailyCostLimitMicros:  source.DailyCostLimitMicros,
+		APIEndpoint:           source.APIEndpoint,          // 复制端点配置
+		ConnectivityAuthType:  source.ConnectivityAuthType, // 复制认证方式
+		InsecureSkipVerify:    source.InsecureSkipVerify,   // 复制 TLS 跳验开关
+		CompatibilityMode:     source.CompatibilityMode,    // 复制请求兼容模式
 		// 请求清理配置
 		RequestSanitizeEnabled: source.RequestSanitizeEnabled,
 		// 可用性监控配置
@@ -774,6 +781,11 @@ func (p *Provider) ValidateConfiguration() []string {
 	}
 	if err := validateCostMultiplier(p.CostMultiplier); err != nil {
 		errors = append(errors, err.Error())
+	}
+	if p.DailyCostLimitMicros < 0 || p.DailyCostLimitMicros > maxMoneyMicros {
+		errors = append(errors, fmt.Sprintf("每日费用限额必须在 0-%d 微美元之间", maxMoneyMicros))
+	} else if p.DailyCostLimitEnabled && p.DailyCostLimitMicros <= 0 {
+		errors = append(errors, "启用每日费用限额时，限额必须大于 0")
 	}
 	p.configErrors = errors
 	return errors

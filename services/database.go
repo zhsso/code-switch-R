@@ -103,6 +103,9 @@ func InitDatabase() error {
 	if err := ensureProviderAliasTable(); err != nil {
 		return fmt.Errorf("初始化 provider_alias 表失败: %w", err)
 	}
+	if err := ensureDailyCostLimitTable(); err != nil {
+		return fmt.Errorf("初始化 provider_daily_cost_limit 表失败: %w", err)
+	}
 
 	// 5. 预热连接池：强制建立数据库连接，避免首次写入时失败
 	var count int
@@ -366,4 +369,35 @@ func ensureProviderAliasTable() error {
 	}
 
 	return nil
+}
+
+// ensureDailyCostLimitTable stores only per-day runtime state. Provider limit
+// configuration remains in codex.json so copying a Provider copies settings but
+// never copies today's usage adjustment or block state.
+func ensureDailyCostLimitTable() error {
+	db, err := xdb.DB("default")
+	if err != nil {
+		return fmt.Errorf("获取数据库连接失败: %w", err)
+	}
+
+	const schema = `CREATE TABLE IF NOT EXISTS provider_daily_cost_limit (
+		platform TEXT NOT NULL,
+		provider_id INTEGER NOT NULL,
+		timezone TEXT NOT NULL,
+		day_key TEXT NOT NULL,
+		system_cost_micros INTEGER NOT NULL DEFAULT 0,
+		manual_adjustment_micros INTEGER NOT NULL DEFAULT 0,
+		auto_blocked INTEGER NOT NULL DEFAULT 0,
+		manual_blocked INTEGER NOT NULL DEFAULT 0,
+		feature_enabled INTEGER NOT NULL DEFAULT 0,
+		limit_micros INTEGER NOT NULL DEFAULT 0,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (platform, provider_id, timezone, day_key)
+	)`
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_provider_daily_cost_limit_day
+		ON provider_daily_cost_limit(platform, timezone, day_key)`)
+	return err
 }

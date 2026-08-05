@@ -33,7 +33,28 @@ const settings = reactive<AppSettings>({
   enable_switch_notify: true,
   enable_round_robin: false,
   history_retention_days: 30,
+  timezone: 'Asia/Shanghai',
 })
+
+const supportedTimezones = (() => {
+  try {
+    return Intl.supportedValuesOf('timeZone')
+  } catch {
+    return [] as string[]
+  }
+})()
+const timezoneOptions = computed(() => Array.from(new Set([
+  settings.timezone,
+  'Asia/Shanghai',
+  'Asia/Hong_Kong',
+  'Asia/Tokyo',
+  'Asia/Singapore',
+  'Europe/London',
+  'America/New_York',
+  'America/Los_Angeles',
+  'UTC',
+  ...supportedTimezones,
+])).filter(Boolean))
 
 const blacklistEnabled = ref(false)
 const levelBlacklistEnabled = ref(false)
@@ -214,6 +235,13 @@ onUnmounted(() => {
         <ListRow :label="t('components.general.label.switchNotify')" :sub-label="t('components.general.label.switchNotifyHintWeb')">
           <label class="mac-switch"><input v-model="settings.enable_switch_notify" type="checkbox"><span /></label>
         </ListRow>
+        <ListRow :label="t('components.general.label.timezone')" :sub-label="t('components.general.label.timezoneHint')">
+          <select v-model="settings.timezone" class="timezone-select">
+            <option v-for="timezone in timezoneOptions" :key="timezone" :value="timezone">
+              {{ timezone }}
+            </option>
+          </select>
+        </ListRow>
       </section>
 
       <section class="settings-section">
@@ -324,6 +352,16 @@ onUnmounted(() => {
 
 .number-control span { color: var(--mac-text-secondary); font-size: 0.82rem; }
 
+.timezone-select {
+  width: min(280px, 100%);
+  min-height: 34px;
+  border: 1px solid var(--mac-border);
+  border-radius: 6px;
+  padding: 0 30px 0 9px;
+  color: var(--mac-text);
+  background: var(--mac-card);
+}
+
 @media (max-width: 680px) {
   .button-row {
     width: 100%;
@@ -332,6 +370,10 @@ onUnmounted(() => {
   }
 
   .button-row .secondary-action {
+    width: 100%;
+  }
+
+  .timezone-select {
     width: 100%;
   }
 

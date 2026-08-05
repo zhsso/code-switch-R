@@ -750,13 +750,15 @@ func TestDuplicateProvider(t *testing.T) {
 		{
 			name: "复制基础供应商",
 			source: Provider{
-				ID:             1,
-				Name:           "Test Provider",
-				APIURL:         "https://api.example.com",
-				APIKey:         "sk-test-key",
-				Enabled:        true,
-				Level:          2,
-				CostMultiplier: 0.75,
+				ID:                    1,
+				Name:                  "Test Provider",
+				APIURL:                "https://api.example.com",
+				APIKey:                "sk-test-key",
+				Enabled:               true,
+				Level:                 2,
+				CostMultiplier:        0.75,
+				DailyCostLimitEnabled: true,
+				DailyCostLimitMicros:  12_345_678,
 			},
 			expectName:  "Test Provider (副本)",
 			expectLevel: 2,
@@ -812,6 +814,12 @@ func TestDuplicateProvider(t *testing.T) {
 			}
 			if cloned.CostMultiplier != tt.source.CostMultiplier {
 				t.Errorf("期望费用倍率 %v，实际 %v", tt.source.CostMultiplier, cloned.CostMultiplier)
+			}
+			if cloned.DailyCostLimitEnabled != tt.source.DailyCostLimitEnabled ||
+				cloned.DailyCostLimitMicros != tt.source.DailyCostLimitMicros {
+				t.Errorf("每日费用限额配置未完整复制：actual=%v/%d want=%v/%d",
+					cloned.DailyCostLimitEnabled, cloned.DailyCostLimitMicros,
+					tt.source.DailyCostLimitEnabled, tt.source.DailyCostLimitMicros)
 			}
 
 			// 验证新 ID 为当前最大 ID + 1

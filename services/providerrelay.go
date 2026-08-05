@@ -53,6 +53,7 @@ type LastUsedProvider struct {
 type ProviderRelayService struct {
 	providerService     *ProviderService
 	blacklistService    *BlacklistService
+	dailyLimitService   *DailyCostLimitService
 	notificationService *NotificationService
 	appSettings         *AppSettingsService // 应用设置服务（用于获取轮询开关状态）
 	server              *http.Server
@@ -302,7 +303,11 @@ func checkNonStreamTruncated(resp *xrequest.Response, written int64) error {
 // 把"为什么被跳过"按原因拆开讲清并给排查指引：白名单不匹配、临时拉黑与
 // 未启用是三种完全不同的处置方式，混在一个计数里用户无从下手（issue #29）。
 // 多种原因并存时全部列出，不做"选一个当代表"的省略
-func respondNoEligibleProviders(c *gin.Context, requestedModel string, skippedModel, skippedBlacklist, skippedInvalid int) {
+func respondNoEligibleProviders(c *gin.Context, requestedModel string, skippedModel, skippedBlacklist, skippedInvalid int, dailySkipped ...int) {
+	skippedDaily := 0
+	if len(dailySkipped) > 0 {
+		skippedDaily = dailySkipped[0]
+	}
 	var reasons, hints []string
 	if skippedModel > 0 {
 		reasons = append(reasons, fmt.Sprintf("%d 个供应商的模型白名单/映射不包含该模型", skippedModel))
@@ -311,6 +316,10 @@ func respondNoEligibleProviders(c *gin.Context, requestedModel string, skippedMo
 	if skippedBlacklist > 0 {
 		reasons = append(reasons, fmt.Sprintf("%d 个正被临时拉黑", skippedBlacklist))
 		hints = append(hints, "被拉黑的供应商可等待自动恢复，或到黑名单页手动解除")
+	}
+	if skippedDaily > 0 {
+		reasons = append(reasons, fmt.Sprintf("%d 个已达到当日费用限额", skippedDaily))
+		hints = append(hints, "可在 Provider 的额度管理中查看用量，次日自动恢复或临时解禁")
 	}
 	if skippedInvalid > 0 {
 		reasons = append(reasons, fmt.Sprintf("%d 个配置校验失败（详见控制台日志）", skippedInvalid))
@@ -402,6 +411,24 @@ func NewProviderRelayService(providerService *ProviderService, blacklistService 
 		concurrency:            newConcurrencyLimiter(),
 		captureDeletedSessions: make(map[int64]struct{}),
 	}
+}
+
+func (prs *ProviderRelayService) SetDailyCostLimitService(service *DailyCostLimitService) {
+	prs.dailyLimitService = service
+}
+
+func (prs *ProviderRelayService) isDailyCostBlocked(kind string, provider Provider) bool {
+	if prs.dailyLimitService == nil {
+		return false
+	}
+	blocked, err := prs.dailyLimitService.IsProviderBlocked(kind, provider)
+	if err != nil {
+		fmt.Printf("[WARN] Provider %s 每日额度状态读取失败: %v\n", provider.Name, err)
+		// An enabled limit fails closed so a storage/configuration error cannot
+		// silently turn an enforced budget into unlimited routing.
+		return provider.DailyCostLimitEnabled
+	}
+	return blocked
 }
 
 // setLastUsedProvider 记录最后使用的供应商
@@ -902,7 +929,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 
 		active := make([]Provider, 0, len(providers))
 		skippedCount := 0
-		skippedModel, skippedBlacklist, skippedInvalid := 0, 0, 0
+		skippedModel, skippedBlacklist, skippedInvalid, skippedDaily := 0, 0, 0, 0
 		for _, provider := range providers {
 			// 基础过滤：enabled、URL、APIKey
 			if !provider.Enabled || provider.APIURL == "" || provider.APIKey == "" {
@@ -932,12 +959,18 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 				skippedBlacklist++
 				continue
 			}
+			if prs.isDailyCostBlocked(kind, provider) {
+				fmt.Printf("⛔ Provider %s 已达到当日费用限额，跳过路由\n", provider.Name)
+				skippedCount++
+				skippedDaily++
+				continue
+			}
 
 			active = append(active, provider)
 		}
 
 		if len(active) == 0 {
-			respondNoEligibleProviders(c, requestedModel, skippedModel, skippedBlacklist, skippedInvalid)
+			respondNoEligibleProviders(c, requestedModel, skippedModel, skippedBlacklist, skippedInvalid, skippedDaily)
 			return
 		}
 
@@ -1033,6 +1066,10 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 							fmt.Printf("[INFO] ⏭️ 跳过已拉黑的 Provider: %s (解禁时间: %v)\n", provider.Name, until)
 							continue
 						}
+						if prs.isDailyCostBlocked(kind, provider) {
+							fmt.Printf("[INFO] ⏭️ 跳过当日额度耗尽的 Provider: %s\n", provider.Name)
+							continue
+						}
 
 						// 获取实际模型名
 						effectiveModel := provider.GetEffectiveModel(requestedModel)
@@ -1057,6 +1094,10 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 							// 再次检查是否已被拉黑（重试过程中可能被拉黑）
 							if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
 								fmt.Printf("[INFO] 🚫 Provider %s 已被拉黑，切换到下一个\n", provider.Name)
+								break
+							}
+							if prs.isDailyCostBlocked(kind, provider) {
+								fmt.Printf("[INFO] 🚫 Provider %s 已达到当日费用限额，切换到下一个\n", provider.Name)
 								break
 							}
 
@@ -1137,6 +1178,10 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 							// 检查是否刚被拉黑
 							if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
 								fmt.Printf("[INFO] 🚫 Provider %s 达到失败阈值，已被拉黑，切换到下一个\n", provider.Name)
+								break
+							}
+							if prs.isDailyCostBlocked(kind, provider) {
+								fmt.Printf("[INFO] 🚫 Provider %s 已达到当日费用限额，切换到下一个\n", provider.Name)
 								break
 							}
 
@@ -1266,6 +1311,13 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 
 				for i, provider := range providersInLevel {
 					if attemptedProviders[strconv.FormatInt(provider.ID, 10)] {
+						continue
+					}
+					if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
+						continue
+					}
+					if prs.isDailyCostBlocked(kind, provider) {
+						fmt.Printf("[INFO] ⏭️ 跳过当日额度耗尽的 Provider: %s\n", provider.Name)
 						continue
 					}
 					totalAttempts++
@@ -1540,6 +1592,11 @@ func (prs *ProviderRelayService) forwardRequest(
 		requestLog.DurationSec = time.Since(start).Seconds()
 		// 若请求过程中发生 rename,把旧名兑换成新名再落库
 		requestLog.Provider = ResolveProviderAlias(requestLog.Platform, requestLog.Provider)
+		if prs.dailyLimitService != nil {
+			if err := prs.dailyLimitService.SettleRequest(provider, requestLog); err != nil {
+				fmt.Printf("[WARN] 更新 Provider %s 每日费用状态失败: %v\n", provider.Name, err)
+			}
+		}
 		// 读锁覆盖"代次校验 + 提交"全程,与清除的写锁互斥,堵死校验后提交前的清除窗口
 		prs.captureWriteMu.RLock()
 		defer prs.captureWriteMu.RUnlock()
