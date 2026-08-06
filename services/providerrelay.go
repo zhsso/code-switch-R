@@ -1872,6 +1872,10 @@ func (prs *ProviderRelayService) relayResponseToClient(
 	if copyErr == nil {
 		return true, nil
 	}
+	if probeWriter.SuccessfulTerminalDetected() && !errors.Is(copyErr, errUpstreamModelCapacity) {
+		fmt.Printf("[INFO] Provider %s 已返回 response.completed，忽略客户端收尾断开\n", provider.Name)
+		return true, nil
+	}
 
 	if c.Request.Context().Err() != nil || errors.Is(copyErr, context.Canceled) {
 		fmt.Printf("[INFO] Provider %s 转发过程中客户端断开，不计入供应商失败\n", provider.Name)

@@ -1,6 +1,8 @@
 package services
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -14,6 +16,19 @@ import (
 )
 
 const capacityMessage = "Selected model is at capacity. Please try a different model."
+
+type cancelOnCompletedWriter struct {
+	gin.ResponseWriter
+	cancel context.CancelFunc
+}
+
+func (w *cancelOnCompletedWriter) Write(data []byte) (int, error) {
+	if bytes.Contains(data, []byte(`"response.completed"`)) {
+		w.cancel()
+		return 0, context.Canceled
+	}
+	return w.ResponseWriter.Write(data)
+}
 
 func TestModelCapacityErrorEnvelopeClassification(t *testing.T) {
 	cases := []struct {
@@ -166,6 +181,37 @@ func TestRelayResponseDoesNotTreatGeneratedCapacityTextAsError(t *testing.T) {
 	}
 	if recorder.Body.String() != body {
 		t.Fatalf("normal generated text changed: %q", recorder.Body.String())
+	}
+}
+
+func TestRelayResponseTreatsClientCloseAfterCompletedAsSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	requestContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	c.Request = httptest.NewRequest(http.MethodPost, "/responses", nil).WithContext(requestContext)
+	c.Writer = &cancelOnCompletedWriter{ResponseWriter: c.Writer, cancel: cancel}
+
+	body := "event: response.created\n" +
+		`data: {"type":"response.created","response":{"status":"in_progress"}}` + "\n\n" +
+		"event: response.output_text.delta\n" +
+		`data: {"type":"response.output_text.delta","delta":"completed output"}` + "\n\n" +
+		"event: response.completed\n" +
+		`data: {"type":"response.completed","response":{"status":"completed","error":null,"usage":{"input_tokens":10,"output_tokens":5}}}` + "\n\n"
+	resp := xrequest.NewResponse(&http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	})
+	relay := NewProviderRelayService(nil, nil, nil, nil, "127.0.0.1:0")
+	ok, err := relay.relayResponseToClient(c, CodexPlatform, Provider{Name: "completed"}, resp, true, &RequestLog{})
+
+	if !ok || err != nil {
+		t.Fatalf("completed response result = (%v, %v), want success", ok, err)
+	}
+	if requestContext.Err() == nil {
+		t.Fatal("test writer did not cancel the client context")
 	}
 }
 

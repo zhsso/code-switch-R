@@ -199,14 +199,15 @@ func (trace *relayRequestTrace) RecordForwardError(provider string, err error, a
 	if trace == nil {
 		return
 	}
+	if errors.Is(err, errClientAbort) {
+		trace.clientAborted = true
+		return
+	}
 	trace.lastError = err
 	trace.lastProvider = strings.TrimSpace(provider)
 	trace.hasIncident = true
 	outcome := "continued"
-	if errors.Is(err, errClientAbort) {
-		trace.clientAborted = true
-		outcome = "client_aborted"
-	} else if errors.Is(err, errUpstreamStreamAborted) {
+	if errors.Is(err, errUpstreamStreamAborted) {
 		trace.terminalFailed = true
 		outcome = "failed"
 	}
@@ -282,11 +283,12 @@ func (trace *relayRequestTrace) Finish(status int, clientAborted bool) {
 	}
 	trace.completed = true
 	clientAborted = clientAborted || trace.clientAborted
+	if clientAborted && !trace.succeeded {
+		return
+	}
 	outcome := "failed"
 	if trace.succeeded {
 		outcome = "success"
-	} else if clientAborted {
-		outcome = "client_aborted"
 	} else if !trace.terminalFailed && status >= 200 && status < 300 {
 		outcome = "success"
 	}

@@ -99,6 +99,7 @@ func TestEnsureRequestEventTableNormalizesTerminalOutcomes(t *testing.T) {
 		VALUES
 			('client-abort', 'codex', 'request_error', 'primary', 1, 'client_aborted', 'continued'),
 			('client-abort', 'codex', 'request_completed', 'primary', 1, '', 'success'),
+			('legacy-499', 'codex', 'request_error', 'primary', 1, '', 'failed'),
 			('stream-abort', 'codex', 'request_error', 'primary', 1, 'stream_aborted', 'continued'),
 			('stream-abort', 'codex', 'request_completed', 'primary', 1, '', 'success'),
 			('routine-success', 'codex', 'request_completed', 'primary', 1, '', 'success'),
@@ -112,24 +113,35 @@ func TestEnsureRequestEventTableNormalizesTerminalOutcomes(t *testing.T) {
 		t.Fatalf("normalize request event outcomes: %v", err)
 	}
 
-	for _, testCase := range []struct {
-		requestID string
-		want      string
-	}{
-		{requestID: "client-abort", want: "client_aborted"},
-		{requestID: "stream-abort", want: "failed"},
-	} {
-		var count int
-		if err := db.QueryRow(
-			`SELECT COUNT(*) FROM request_event_log WHERE request_id = ? AND outcome = ?`,
-			testCase.requestID,
-			testCase.want,
-		).Scan(&count); err != nil {
-			t.Fatalf("count normalized outcomes for %s: %v", testCase.requestID, err)
-		}
-		if count != 2 {
-			t.Fatalf("normalized rows for %s = %d, want 2", testCase.requestID, count)
-		}
+	var clientAbortCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM request_event_log WHERE request_id = 'client-abort'`).Scan(&clientAbortCount); err != nil {
+		t.Fatalf("count removed client abort events: %v", err)
+	}
+	if clientAbortCount != 0 {
+		t.Fatalf("client abort events = %d, want 0", clientAbortCount)
+	}
+	if _, err := db.Exec(`UPDATE request_event_log SET http_code = 499 WHERE request_id = 'legacy-499'`); err != nil {
+		t.Fatalf("mark legacy 499 event: %v", err)
+	}
+	if err := ensureRequestEventTable(); err != nil {
+		t.Fatalf("remove legacy 499 event: %v", err)
+	}
+	var legacy499Count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM request_event_log WHERE request_id = 'legacy-499'`).Scan(&legacy499Count); err != nil {
+		t.Fatalf("count removed legacy 499 event: %v", err)
+	}
+	if legacy499Count != 0 {
+		t.Fatalf("legacy 499 events = %d, want 0", legacy499Count)
+	}
+
+	var streamAbortCount int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM request_event_log WHERE request_id = 'stream-abort' AND outcome = 'failed'`,
+	).Scan(&streamAbortCount); err != nil {
+		t.Fatalf("count normalized stream abort outcomes: %v", err)
+	}
+	if streamAbortCount != 2 {
+		t.Fatalf("normalized stream abort rows = %d, want 2", streamAbortCount)
 	}
 
 	var routineCount int
@@ -309,7 +321,7 @@ func TestRelayRequestTraceLocalSummaryOutcomes(t *testing.T) {
 	}
 }
 
-func TestRelayRequestTraceMarksClientAbort(t *testing.T) {
+func TestRelayRequestTraceIgnoresClientAbort(t *testing.T) {
 	setupRenameTestEnv(t)
 	db, err := xdb.DB("default")
 	if err != nil {
@@ -326,22 +338,29 @@ func TestRelayRequestTraceMarksClientAbort(t *testing.T) {
 	})
 
 	trace := newRelayRequestTrace(NewRequestEventService(), CodexPlatform)
-	attempt := trace.BeforeAttempt("primary")
-	trace.RecordForwardError("primary", errClientAbort, attempt, 1, 10*time.Millisecond)
+	firstAttempt := trace.BeforeAttempt("primary")
+	trace.RecordForwardError("primary", newUpstreamStatusError(nil, 503, "upstream status 503"), firstAttempt, 1, 10*time.Millisecond)
+	secondAttempt := trace.BeforeAttempt("backup")
+	trace.RecordForwardError("backup", errClientAbort, secondAttempt, 1, 10*time.Millisecond)
 	trace.Finish(http.StatusOK, false)
 
-	var outcome string
-	if err := db.QueryRow(`SELECT outcome FROM request_event_log WHERE request_id = ? AND event_type = ?`, trace.RequestID(), RequestEventError).Scan(&outcome); err != nil {
-		t.Fatalf("read client abort event: %v", err)
+	var clientAbortCount int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM request_event_log WHERE request_id = ? AND (error_type = 'client_aborted' OR outcome = 'client_aborted' OR http_code = 499)`,
+		trace.RequestID(),
+	).Scan(&clientAbortCount); err != nil {
+		t.Fatalf("count client abort events: %v", err)
 	}
-	if outcome != "client_aborted" {
-		t.Fatalf("error outcome = %q, want client_aborted", outcome)
+	if clientAbortCount != 0 {
+		t.Fatalf("client abort events = %d, want 0", clientAbortCount)
 	}
-	if err := db.QueryRow(`SELECT outcome FROM request_event_log WHERE request_id = ? AND event_type = ? ORDER BY id DESC LIMIT 1`, trace.RequestID(), RequestEventCompleted).Scan(&outcome); err != nil {
-		t.Fatalf("read client abort completion: %v", err)
+
+	var incidentCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM request_event_log WHERE request_id = ?`, trace.RequestID()).Scan(&incidentCount); err != nil {
+		t.Fatalf("count retained provider incidents: %v", err)
 	}
-	if outcome != "client_aborted" {
-		t.Fatalf("completion outcome = %q, want client_aborted", outcome)
+	if incidentCount != 2 {
+		t.Fatalf("retained provider incidents = %d, want provider error + switch", incidentCount)
 	}
 }
 

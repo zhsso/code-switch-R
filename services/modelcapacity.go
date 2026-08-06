@@ -114,6 +114,32 @@ func isModelCapacitySSEEvent(event []byte) bool {
 	return isModelCapacityErrorEnvelope(data)
 }
 
+func isSuccessfulTerminalSSEEvent(event []byte) bool {
+	eventName, data := parseSSEEvent(event)
+	if eventName == "" && gjson.ValidBytes(data) {
+		eventName = strings.ToLower(gjson.GetBytes(data, "type").String())
+	}
+	if eventName != "response.completed" && eventName != "response.done" {
+		return false
+	}
+
+	status := strings.ToLower(gjson.GetBytes(data, "response.status").String())
+	if status == "" {
+		status = strings.ToLower(gjson.GetBytes(data, "status").String())
+	}
+	switch status {
+	case "failed", "cancelled", "canceled", "incomplete":
+		return false
+	}
+	for _, path := range []string{"error", "response.error"} {
+		value := gjson.GetBytes(data, path)
+		if value.Exists() && value.Type != gjson.Null {
+			return false
+		}
+	}
+	return true
+}
+
 func isBufferedSSEPrelude(event []byte) bool {
 	eventName, data := parseSSEEvent(event)
 	if eventName == "" && len(bytes.TrimSpace(data)) == 0 {
@@ -171,6 +197,7 @@ type modelCapacityProbeWriter struct {
 	stream           bool
 	committed        bool
 	capacityDetected bool
+	terminalSuccess  bool
 	pending          bytes.Buffer
 	ssePending       []byte
 }
@@ -247,8 +274,13 @@ func (w *modelCapacityProbeWriter) Flush() {
 }
 
 func (w *modelCapacityProbeWriter) Finish() error {
-	if w.stream && len(w.ssePending) > 0 && isModelCapacitySSEEvent(w.ssePending) {
-		w.capacityDetected = true
+	if w.stream && len(w.ssePending) > 0 {
+		if isModelCapacitySSEEvent(w.ssePending) {
+			w.capacityDetected = true
+		}
+		if isSuccessfulTerminalSSEEvent(w.ssePending) {
+			w.terminalSuccess = true
+		}
 	}
 	if w.capacityDetected {
 		return errUpstreamModelCapacity
@@ -257,6 +289,10 @@ func (w *modelCapacityProbeWriter) Finish() error {
 		return w.commit()
 	}
 	return nil
+}
+
+func (w *modelCapacityProbeWriter) SuccessfulTerminalDetected() bool {
+	return w != nil && w.terminalSuccess
 }
 
 func (w *modelCapacityProbeWriter) inspectSSE(data []byte) (capacity, shouldCommit bool) {
@@ -271,6 +307,9 @@ func (w *modelCapacityProbeWriter) inspectSSE(data []byte) (capacity, shouldComm
 		}
 		if isModelCapacitySSEEvent(event) {
 			capacity = true
+		}
+		if isSuccessfulTerminalSSEEvent(event) {
+			w.terminalSuccess = true
 		}
 		if !isBufferedSSEPrelude(event) {
 			shouldCommit = true

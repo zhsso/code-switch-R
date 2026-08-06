@@ -367,8 +367,8 @@ func ensureRequestEventTable() error {
 		return err
 	}
 
-	// Normalize rows written by the initial event logger, which labeled terminal
-	// client/stream failures as continued before the request outcome was known.
+	// Normalize legacy stream outcomes and remove client-disconnect noise from
+	// the incident timeline.
 	corrections := []string{
 		`UPDATE request_event_log
 		 SET outcome = 'client_aborted'
@@ -412,6 +412,8 @@ func ensureRequestEventTable() error {
 			WHERE incident.request_id = request_event_log.request_id
 			AND incident.event_type IN ('request_error', 'provider_switch')
 		 )`,
+		`DELETE FROM request_event_log
+		 WHERE error_type = 'client_aborted' OR outcome = 'client_aborted' OR http_code = 499`,
 	}
 	for _, correction := range corrections {
 		if _, err := db.Exec(correction); err != nil {
