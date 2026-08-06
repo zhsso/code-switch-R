@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	modelCapacityMessage   = "selected model is at capacity"
-	modelOverloadedCode    = "server_overloaded"
-	modelCapacityProbeSize = 64 << 10
+	modelCapacityMessage      = "selected model is at capacity"
+	modelOverloadedCode       = "server_overloaded"
+	modelServerOverloadedCode = "server_is_overloaded"
+	modelCapacityProbeSize    = 64 << 10
 )
 
 var errUpstreamModelCapacity = errors.New("upstream model is at capacity")
@@ -27,11 +28,22 @@ func containsModelCapacityMessage(data []byte) bool {
 
 func containsModelCapacitySignal(data []byte) bool {
 	return containsModelCapacityMessage(data) ||
-		strings.Contains(strings.ToLower(string(data)), modelOverloadedCode)
+		containsModelOverloadedCode(data)
 }
 
 func isModelOverloadedCode(value string) bool {
-	return strings.EqualFold(strings.Trim(strings.TrimSpace(value), `"'`), modelOverloadedCode)
+	switch strings.ToLower(strings.Trim(strings.TrimSpace(value), `"'`)) {
+	case modelOverloadedCode, modelServerOverloadedCode:
+		return true
+	default:
+		return false
+	}
+}
+
+func containsModelOverloadedCode(data []byte) bool {
+	text := strings.ToLower(string(data))
+	return strings.Contains(text, modelOverloadedCode) ||
+		strings.Contains(text, modelServerOverloadedCode)
 }
 
 func hasStructuredModelOverloadedCode(data []byte) bool {

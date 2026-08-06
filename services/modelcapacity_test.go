@@ -42,6 +42,11 @@ func TestModelCapacityErrorEnvelopeClassification(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "service unavailable overloaded code",
+			body: `{"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}`,
+			want: true,
+		},
+		{
 			name: "failed response overloaded code",
 			body: `{"type":"response.failed","response":{"status":"failed","error":{"code":"server_overloaded"}}}`,
 			want: true,
@@ -185,9 +190,12 @@ func TestForwardRequestFallsBackFromCapacitySSEToSecondAddress(t *testing.T) {
 		_, _ = io.WriteString(w, "event: response.in_progress\n")
 		_, _ = io.WriteString(w,
 			`data: {"type":"response.in_progress","response":{"status":"in_progress"}}`+"\n\n")
+		_, _ = io.WriteString(w, "event: error\n")
+		_, _ = io.WriteString(w,
+			`data: {"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."},"sequence_number":2}`+"\n\n")
 		_, _ = io.WriteString(w, "event: response.failed\n")
 		_, _ = io.WriteString(w,
-			`data: {"type":"response.failed","response":{"status":"failed","error":{"code":"server_overloaded"}}}`+"\n\n")
+			`data: {"type":"response.failed","response":{"status":"failed","error":{"code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}},"sequence_number":3}`+"\n\n")
 	}))
 	defer primary.Close()
 	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
