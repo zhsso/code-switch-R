@@ -102,6 +102,7 @@ func TestEnsureRequestEventTableNormalizesTerminalOutcomes(t *testing.T) {
 			('stream-abort', 'codex', 'request_error', 'primary', 1, 'stream_aborted', 'continued'),
 			('stream-abort', 'codex', 'request_completed', 'primary', 1, '', 'success'),
 			('routine-success', 'codex', 'request_completed', 'primary', 1, '', 'success'),
+			('orphan-abort', 'codex', 'request_completed', 'primary', 1, '', 'client_aborted'),
 			('fallback-success', 'codex', 'request_error', 'primary', 1, 'provider_error', 'continued'),
 			('fallback-success', 'codex', 'request_completed', 'backup', 2, '', 'success')
 	`); err != nil {
@@ -137,6 +138,13 @@ func TestEnsureRequestEventTableNormalizesTerminalOutcomes(t *testing.T) {
 	}
 	if routineCount != 0 {
 		t.Fatalf("routine success events = %d, want 0", routineCount)
+	}
+	var orphanAbortCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM request_event_log WHERE request_id = 'orphan-abort'`).Scan(&orphanAbortCount); err != nil {
+		t.Fatalf("count orphan abort events: %v", err)
+	}
+	if orphanAbortCount != 0 {
+		t.Fatalf("orphan abort events = %d, want 0", orphanAbortCount)
 	}
 	var fallbackCompletionCount int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM request_event_log WHERE request_id = 'fallback-success' AND event_type = 'request_completed'`).Scan(&fallbackCompletionCount); err != nil {
@@ -216,7 +224,8 @@ func TestRelayRequestTraceSkipsRoutineSuccessCompletion(t *testing.T) {
 	trace := newRelayRequestTrace(NewRequestEventService(), CodexPlatform)
 	trace.SetModel("gpt-5.6")
 	trace.BeforeAttempt("primary")
-	trace.Finish(http.StatusOK, false)
+	trace.MarkSucceeded()
+	trace.Finish(http.StatusOK, true)
 
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM request_event_log WHERE request_id = ?`, trace.RequestID()).Scan(&count); err != nil {
@@ -247,7 +256,8 @@ func TestRelayRequestTraceKeepsCompletionAfterFallback(t *testing.T) {
 	firstAttempt := trace.BeforeAttempt("primary")
 	trace.RecordForwardError("primary", newUpstreamStatusError(nil, 503, "upstream status 503"), firstAttempt, 1, time.Second)
 	trace.BeforeAttempt("backup")
-	trace.Finish(http.StatusOK, false)
+	trace.MarkSucceeded()
+	trace.Finish(http.StatusOK, true)
 
 	var outcome string
 	if err := db.QueryRow(`SELECT outcome FROM request_event_log WHERE request_id = ? AND event_type = ?`, trace.RequestID(), RequestEventCompleted).Scan(&outcome); err != nil {

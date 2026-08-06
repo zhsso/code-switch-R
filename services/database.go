@@ -406,7 +406,7 @@ func ensureRequestEventTable() error {
 			AND failed_event.outcome = 'failed'
 		 )`,
 		`DELETE FROM request_event_log
-		 WHERE event_type = 'request_completed' AND outcome = 'success'
+		 WHERE event_type = 'request_completed'
 		 AND NOT EXISTS (
 			SELECT 1 FROM request_event_log AS incident
 			WHERE incident.request_id = request_event_log.request_id

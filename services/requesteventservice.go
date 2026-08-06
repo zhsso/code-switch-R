@@ -144,6 +144,7 @@ type relayRequestTrace struct {
 	clientAborted  bool
 	terminalFailed bool
 	hasIncident    bool
+	succeeded      bool
 	completed      bool
 }
 
@@ -269,6 +270,12 @@ func (trace *relayRequestTrace) MarkFailed(err error) {
 	}
 }
 
+func (trace *relayRequestTrace) MarkSucceeded() {
+	if trace != nil {
+		trace.succeeded = true
+	}
+}
+
 func (trace *relayRequestTrace) Finish(status int, clientAborted bool) {
 	if trace == nil || trace.completed {
 		return
@@ -276,12 +283,14 @@ func (trace *relayRequestTrace) Finish(status int, clientAborted bool) {
 	trace.completed = true
 	clientAborted = clientAborted || trace.clientAborted
 	outcome := "failed"
-	if clientAborted {
+	if trace.succeeded {
+		outcome = "success"
+	} else if clientAborted {
 		outcome = "client_aborted"
 	} else if !trace.terminalFailed && status >= 200 && status < 300 {
 		outcome = "success"
 	}
-	if outcome == "success" && !trace.hasIncident {
+	if !trace.hasIncident {
 		return
 	}
 	errorType, errorCode, message, httpCode := requestEventErrorDetails(trace.lastError)

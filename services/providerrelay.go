@@ -1135,6 +1135,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 							}
 
 							if ok {
+								trace.MarkSucceeded()
 								fmt.Printf("[INFO] ✓ 成功: %s | 重试 %d 次 | 耗时: %.2fs\n",
 									provider.Name, retryCount+1, duration.Seconds())
 								if err := prs.blacklistService.RecordSuccess(kind, provider.Name); err != nil {
@@ -1381,6 +1382,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 					}
 
 					if ok {
+						trace.MarkSucceeded()
 						fmt.Printf("[INFO]   ✓ Level %d 成功: %s | 耗时: %.2fs\n", level, provider.Name, duration.Seconds())
 
 						// 成功：清零连续失败计数
