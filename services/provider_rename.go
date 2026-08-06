@@ -14,6 +14,45 @@ import (
 // aliasTTL 定义 rename 后旧名保留时长,必须 > in-flight 请求上限(32h)并留 buffer。
 const aliasTTL = 48 * time.Hour
 
+// nextAvailableProviderID 在当前配置最大 ID 之后分配新 ID，同时避开仍被
+// 活动 alias 引用的历史 ID。Provider 删除后 alias 仍需保留到过期，以承接
+// 在途请求；复用这类 ID 会让新副本被误判为刚改过名的旧 Provider。
+func nextAvailableProviderID(platform string, providers []Provider) (int64, error) {
+	maxID := int64(0)
+	for _, provider := range providers {
+		if provider.ID > maxID {
+			maxID = provider.ID
+		}
+	}
+
+	if err := cleanupExpiredAliases(); err != nil {
+		return 0, fmt.Errorf("清理过期 alias 失败: %w", err)
+	}
+	db, err := xdb.DB("default")
+	if err != nil {
+		return 0, fmt.Errorf("获取数据库连接失败: %w", err)
+	}
+
+	candidate := maxID + 1
+	for candidate > 0 {
+		var occupied int
+		err := db.QueryRow(
+			`SELECT COUNT(*) FROM provider_alias
+			 WHERE platform = ? AND provider_id = ? AND expires_at > CURRENT_TIMESTAMP`,
+			platform, candidate,
+		).Scan(&occupied)
+		if err != nil {
+			return 0, fmt.Errorf("查询 provider ID alias 占用失败: %w", err)
+		}
+		if occupied == 0 {
+			return candidate, nil
+		}
+		candidate++
+	}
+
+	return 0, fmt.Errorf("没有可用的 provider ID")
+}
+
 // RenameProvider 改名 provider:事务更新 DB 中按 name 存储的历史数据,
 // 写入 48h alias 兜底 in-flight 请求,最后原子替换配置文件。
 //

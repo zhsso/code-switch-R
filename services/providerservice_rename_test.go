@@ -297,6 +297,37 @@ func TestRenameProvider_TTLCleanup(t *testing.T) {
 	}
 }
 
+func TestDuplicateProviderSkipsActiveAliasID(t *testing.T) {
+	setupRenameTestEnv(t)
+	ps := NewProviderService()
+	saveProviderFixture(t, ps, []Provider{
+		{ID: 1, Name: "Source", APIURL: "https://source.example.com", APIKey: "key"},
+	})
+
+	db, err := xdb.DB("default")
+	if err != nil {
+		t.Fatalf("获取数据库失败: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO provider_alias (platform, provider_id, alias_name, canonical_name, expires_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		CodexPlatform, 2, "deleted-provider", "previous-name", time.Now().Add(time.Hour),
+	); err != nil {
+		t.Fatalf("写入活动 alias 失败: %v", err)
+	}
+
+	cloned, err := ps.DuplicateProvider(CodexPlatform, 1)
+	if err != nil {
+		t.Fatalf("复制 Provider 失败: %v", err)
+	}
+	if cloned.ID != 3 {
+		t.Fatalf("副本应跳过活动 alias 的 ID 2，实际 ID=%d", cloned.ID)
+	}
+	if err := ps.RenameProvider(CodexPlatform, cloned.ID, "Renamed Copy"); err != nil {
+		t.Fatalf("复制后的 Provider 应可立即改名: %v", err)
+	}
+}
+
 // TestRenameProvider_NotFound id 不存在时报错。
 func TestRenameProvider_NotFound(t *testing.T) {
 	setupRenameTestEnv(t)

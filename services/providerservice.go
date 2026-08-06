@@ -534,14 +534,15 @@ func (ps *ProviderService) DuplicateProvider(kind string, sourceID int64) (*Prov
 		return nil, fmt.Errorf("未找到 ID 为 %d 的供应商", sourceID)
 	}
 
-	// 4. 生成新 ID（当前最大 ID + 1）
-	maxID := int64(0)
-	for _, p := range providers {
-		if p.ID > maxID {
-			maxID = p.ID
-		}
+	// 4. 生成新 ID，避开活动 alias 仍占用的历史 ID
+	platform, err := resolvePlatform(kind)
+	if err != nil {
+		return nil, err
 	}
-	newID := maxID + 1
+	newID, err := nextAvailableProviderID(platform, providers)
+	if err != nil {
+		return nil, fmt.Errorf("生成副本 ID 失败: %w", err)
+	}
 
 	// 5. 克隆配置（深拷贝）
 	// 名字必须在现有列表里唯一：黑名单、用量统计、别名迁移全部以 name 为键，
