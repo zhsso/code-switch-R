@@ -60,7 +60,7 @@ func setupRenameTestEnv(t *testing.T) string {
 			platform TEXT NOT NULL, provider_name TEXT NOT NULL,
 			failure_count INTEGER DEFAULT 0,
 			blacklisted_at DATETIME, blacklisted_until DATETIME,
-			last_failure_at DATETIME, blacklist_level INTEGER DEFAULT 0,
+			last_failure_at DATETIME, last_failure_reason TEXT DEFAULT '', blacklist_level INTEGER DEFAULT 0,
 			last_recovered_at DATETIME, last_degrade_hour INTEGER DEFAULT 0,
 			last_failure_window_start DATETIME, auto_recovered INTEGER DEFAULT 0,
 			UNIQUE(platform, provider_name)

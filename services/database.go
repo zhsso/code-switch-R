@@ -100,6 +100,9 @@ func InitDatabase() error {
 	if err := ensureBlacklistTables(); err != nil {
 		return fmt.Errorf("初始化黑名单表失败: %w", err)
 	}
+	if err := ensureRequestEventTable(); err != nil {
+		return fmt.Errorf("初始化请求事件表失败: %w", err)
+	}
 	if err := ensureProviderAliasTable(); err != nil {
 		return fmt.Errorf("初始化 provider_alias 表失败: %w", err)
 	}
@@ -273,6 +276,7 @@ func ensureBlacklistTables() error {
 		blacklisted_at DATETIME,
 		blacklisted_until DATETIME,
 		last_failure_at DATETIME,
+		last_failure_reason TEXT DEFAULT '',
 		blacklist_level INTEGER DEFAULT 0,
 		last_recovered_at DATETIME,
 		last_degrade_hour INTEGER DEFAULT 0,
@@ -284,7 +288,7 @@ func ensureBlacklistTables() error {
 		return fmt.Errorf("创建 provider_blacklist 表失败: %w", err)
 	}
 
-	// 2.1 旧库补列：分级拉黑引入的四列对已存在的旧表不会由 CREATE TABLE IF NOT EXISTS 补上，
+	// 2.1 旧库补列：分级拉黑和原因展示引入的列对已存在的旧表不会由 CREATE TABLE IF NOT EXISTS 补上，
 	// 必须按 pragma_table_info 检测后 ALTER 补齐，否则旧库升级后黑名单 SQL 全部报 no such column
 	blacklistMigrations := []struct {
 		column     string
@@ -294,6 +298,7 @@ func ensureBlacklistTables() error {
 		{"last_recovered_at", "DATETIME"},
 		{"last_degrade_hour", "INTEGER DEFAULT 0"},
 		{"last_failure_window_start", "DATETIME"},
+		{"last_failure_reason", "TEXT DEFAULT ''"},
 	}
 	for _, m := range blacklistMigrations {
 		if err := ensureBlacklistColumn(db, m.column, m.definition); err != nil {
@@ -320,6 +325,92 @@ func ensureBlacklistTables() error {
 		}
 	}
 
+	return nil
+}
+
+func ensureRequestEventTable() error {
+	db, err := xdb.DB("default")
+	if err != nil {
+		return fmt.Errorf("获取数据库连接失败: %w", err)
+	}
+
+	const schema = `CREATE TABLE IF NOT EXISTS request_event_log (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		request_id TEXT NOT NULL,
+		platform TEXT NOT NULL,
+		model TEXT NOT NULL DEFAULT '',
+		event_type TEXT NOT NULL,
+		provider TEXT NOT NULL DEFAULT '',
+		from_provider TEXT NOT NULL DEFAULT '',
+		to_provider TEXT NOT NULL DEFAULT '',
+		attempt INTEGER NOT NULL DEFAULT 0,
+		retry INTEGER NOT NULL DEFAULT 0,
+		http_code INTEGER NOT NULL DEFAULT 0,
+		error_type TEXT NOT NULL DEFAULT '',
+		error_code TEXT NOT NULL DEFAULT '',
+		message TEXT NOT NULL DEFAULT '',
+		duration_sec REAL NOT NULL DEFAULT 0,
+		outcome TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	if _, err = db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_request_event_created_at
+			ON request_event_log(platform, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_request_event_request_id
+			ON request_event_log(platform, request_id, id);
+		CREATE INDEX IF NOT EXISTS idx_request_event_provider
+			ON request_event_log(platform, provider, created_at DESC)
+	`); err != nil {
+		return err
+	}
+
+	// Normalize rows written by the initial event logger, which labeled terminal
+	// client/stream failures as continued before the request outcome was known.
+	corrections := []string{
+		`UPDATE request_event_log
+		 SET outcome = 'client_aborted'
+		 WHERE event_type = 'request_error' AND error_type = 'client_aborted' AND outcome != 'client_aborted'`,
+		`UPDATE request_event_log
+		 SET outcome = 'failed'
+		 WHERE event_type = 'request_error' AND error_type = 'stream_aborted' AND outcome != 'failed'`,
+		`UPDATE request_event_log
+		 SET outcome = 'failed'
+		 WHERE event_type = 'request_error' AND error_type = 'model_capacity' AND outcome = 'continued'
+		 AND EXISTS (
+			SELECT 1 FROM request_event_log AS completed
+			WHERE completed.request_id = request_event_log.request_id
+			AND completed.event_type = 'request_completed'
+			AND completed.outcome = 'success'
+			AND completed.provider = request_event_log.provider
+			AND completed.attempt = request_event_log.attempt
+		 )`,
+		`UPDATE request_event_log
+		 SET outcome = 'client_aborted'
+		 WHERE event_type = 'request_completed'
+		 AND EXISTS (
+			SELECT 1 FROM request_event_log AS failed_event
+			WHERE failed_event.request_id = request_event_log.request_id
+			AND failed_event.event_type = 'request_error'
+			AND failed_event.outcome = 'client_aborted'
+		 )`,
+		`UPDATE request_event_log
+		 SET outcome = 'failed'
+		 WHERE event_type = 'request_completed' AND outcome = 'success'
+		 AND EXISTS (
+			SELECT 1 FROM request_event_log AS failed_event
+			WHERE failed_event.request_id = request_event_log.request_id
+			AND failed_event.event_type = 'request_error'
+			AND failed_event.outcome = 'failed'
+		 )`,
+	}
+	for _, correction := range corrections {
+		if _, err := db.Exec(correction); err != nil {
+			return fmt.Errorf("修正请求事件结果失败: %w", err)
+		}
+	}
 	return nil
 }
 

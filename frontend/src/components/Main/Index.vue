@@ -279,6 +279,10 @@
                     {{ formatBlacklistCountdown(getProviderBlacklistStatus(card.name)!.remainingSeconds) }}
                   </span>
                 </div>
+                <div class="blacklist-reason">
+                  <span class="blacklist-reason-label">{{ t('components.main.blacklist.reason') }}</span>
+                  <span>{{ getProviderBlacklistStatus(card.name)!.lastFailureReason || t('components.main.blacklist.unknownReason') }}</span>
+                </div>
                 <div class="blacklist-actions">
                   <button
                     class="unblock-btn primary"
@@ -3031,6 +3035,22 @@ const vendorInitials = (name: string) => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.blacklist-reason {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding-left: 24px;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.blacklist-reason-label {
+  font-weight: 600;
+  flex-shrink: 0;
 }
 
 .blacklist-icon {

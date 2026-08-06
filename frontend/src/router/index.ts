@@ -5,6 +5,7 @@ const routes = [
   { path: '/availability', component: () => import('../components/Availability/Index.vue') },
   { path: '/speedtest', component: () => import('../components/SpeedTest/Index.vue') },
   { path: '/logs', component: () => import('../components/Logs/Index.vue') },
+  { path: '/events', component: () => import('../components/RequestEvents/Index.vue') },
   { path: '/capture', component: () => import('../components/Capture/Index.vue') },
   { path: '/settings', component: () => import('../components/General/Index.vue') },
 ]

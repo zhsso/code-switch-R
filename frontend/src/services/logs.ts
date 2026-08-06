@@ -2,6 +2,13 @@ import { Call } from '../runtime'
 
 export type LogPlatform = 'codex'
 
+export type RequestEventType =
+  | 'incident'
+  | 'all'
+  | 'request_error'
+  | 'provider_switch'
+  | 'request_completed'
+
 export type RequestLog = {
   id: number
   platform: LogPlatform
@@ -65,6 +72,56 @@ export const fetchRequestLogs = async (query: RequestLogQuery = {}): Promise<Req
 
 export const fetchLogProviders = async (platform: LogPlatform = 'codex'): Promise<string[]> => {
   return Call.ByName('codeswitch/services.LogService.ListProviders', platform)
+}
+
+export type RequestEvent = {
+  id: number
+  request_id: string
+  platform: LogPlatform
+  model: string
+  event_type: 'request_error' | 'provider_switch' | 'request_completed' | string
+  provider: string
+  from_provider: string
+  to_provider: string
+  attempt: number
+  retry: number
+  http_code: number
+  error_type: string
+  error_code: string
+  message: string
+  duration_sec: number
+  outcome: string
+  created_at: string
+}
+
+export type RequestEventQuery = {
+  platform?: LogPlatform
+  eventType?: RequestEventType
+  provider?: string
+  requestId?: string
+  days?: number
+  limit?: number
+  offset?: number
+}
+
+export const fetchRequestEvents = async (query: RequestEventQuery = {}): Promise<RequestEvent[]> => {
+  const platform = query.platform ?? 'codex'
+  const eventType = query.eventType ?? 'incident'
+  const provider = query.provider ?? ''
+  const requestId = query.requestId ?? ''
+  const days = query.days ?? 30
+  const limit = query.limit ?? 50
+  const offset = query.offset ?? 0
+  return Call.ByName(
+    'codeswitch/services.LogService.ListRequestEvents',
+    platform,
+    eventType,
+    provider,
+    requestId,
+    days,
+    limit,
+    offset,
+  )
 }
 
 export type LogStatsSeries = {

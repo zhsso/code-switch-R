@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,6 +53,7 @@ type BlacklistStatus struct {
 	BlacklistLevel       int        `json:"blacklistLevel"`       // 当前黑名单等级 (0-5)
 	LastRecoveredAt      *time.Time `json:"lastRecoveredAt"`      // 最后恢复时间
 	ForgivenessRemaining int        `json:"forgivenessRemaining"` // 距离宽恕还剩多少秒（3小时倒计时）
+	LastFailureReason    string     `json:"lastFailureReason"`    // 最近一次触发失败计数的脱敏原因
 }
 
 func NewBlacklistService(settingsService *SettingsService, notificationService *NotificationService) *BlacklistService {
@@ -200,12 +202,18 @@ func (bs *BlacklistService) RecordSuccess(platform string, providerName string) 
 	return nil
 }
 
-// RecordFailure 记录 provider 失败，连续失败次数达到阈值时自动拉黑（支持等级拉黑）
+// RecordFailure 记录 provider 失败，连续失败次数达到阈值时自动拉黑（支持等级拉黑）。
 func (bs *BlacklistService) RecordFailure(platform string, providerName string) error {
+	return bs.RecordFailureWithReason(platform, providerName, "")
+}
+
+// RecordFailureWithReason 记录失败及一个不含请求/响应正文的错误摘要。
+func (bs *BlacklistService) RecordFailureWithReason(platform string, providerName string, reason string) error {
 	if err := requireCodexPlatform(platform); err != nil {
 		return err
 	}
 	platform = CodexPlatform
+	reason = sanitizeBlacklistReason(reason)
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	providerName = ResolveProviderAlias(platform, providerName)
@@ -236,7 +244,7 @@ func (bs *BlacklistService) RecordFailure(platform string, providerName string) 
 			threshold = levelConfig.FailureThreshold
 			duration = levelConfig.FallbackDurationMinutes
 		}
-		return bs.recordFailureFixedMode(platform, providerName, levelConfig.FallbackMode, duration, threshold)
+		return bs.recordFailureFixedMode(platform, providerName, levelConfig.FallbackMode, duration, threshold, reason)
 	}
 
 	now := time.Now()
@@ -264,9 +272,9 @@ func (bs *BlacklistService) RecordFailure(platform string, providerName string) 
 
 			err = GlobalDBQueue.Exec(`
 				INSERT INTO provider_blacklist
-					(platform, provider_name, failure_count, last_failure_at, blacklisted_at, blacklisted_until, blacklist_level, last_failure_window_start, auto_recovered)
-				VALUES (?, ?, 0, ?, ?, ?, ?, ?, 0)
-			`, platform, providerName, now, now, blacklistedUntil, newLevel, now)
+					(platform, provider_name, failure_count, last_failure_at, last_failure_reason, blacklisted_at, blacklisted_until, blacklist_level, last_failure_window_start, auto_recovered)
+				VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, 0)
+			`, platform, providerName, now, reason, now, blacklistedUntil, newLevel, now)
 
 			if err != nil {
 				return fmt.Errorf("插入拉黑记录失败: %w", err)
@@ -286,9 +294,9 @@ func (bs *BlacklistService) RecordFailure(platform string, providerName string) 
 		// 首次失败，插入新记录
 		err = GlobalDBQueue.Exec(`
 			INSERT INTO provider_blacklist
-				(platform, provider_name, failure_count, last_failure_at, last_failure_window_start, blacklist_level)
-			VALUES (?, ?, 1, ?, ?, 0)
-		`, platform, providerName, now, now)
+				(platform, provider_name, failure_count, last_failure_at, last_failure_reason, last_failure_window_start, blacklist_level)
+			VALUES (?, ?, 1, ?, ?, ?, 0)
+		`, platform, providerName, now, reason, now)
 
 		if err != nil {
 			return fmt.Errorf("插入失败记录失败: %w", err)
@@ -361,6 +369,7 @@ func (bs *BlacklistService) RecordFailure(platform string, providerName string) 
 			UPDATE provider_blacklist
 			SET failure_count = 0,
 				last_failure_at = ?,
+				last_failure_reason = ?,
 				blacklisted_at = ?,
 				blacklisted_until = ?,
 				blacklist_level = ?,
@@ -369,7 +378,7 @@ func (bs *BlacklistService) RecordFailure(platform string, providerName string) 
 				last_recovered_at = NULL,
 				last_degrade_hour = 0
 			WHERE id = ?
-		`, now, blacklistedAt, blacklistedUntil, newLevel, now, id)
+		`, now, reason, blacklistedAt, blacklistedUntil, newLevel, now, id)
 
 		if err != nil {
 			return fmt.Errorf("更新拉黑状态失败: %w", err)
@@ -388,9 +397,9 @@ func (bs *BlacklistService) RecordFailure(platform string, providerName string) 
 		// 未达到阈值，仅更新失败计数和窗口起始时间
 		err = GlobalDBQueue.Exec(`
 			UPDATE provider_blacklist
-			SET failure_count = ?, last_failure_at = ?, last_failure_window_start = ?
+			SET failure_count = ?, last_failure_at = ?, last_failure_reason = ?, last_failure_window_start = ?
 			WHERE id = ?
-		`, failureCount, now, now, id)
+		`, failureCount, now, reason, now, id)
 
 		if err != nil {
 			return fmt.Errorf("更新失败计数失败: %w", err)
@@ -404,7 +413,7 @@ func (bs *BlacklistService) RecordFailure(platform string, providerName string) 
 }
 
 // recordFailureFixedMode 固定拉黑模式（向后兼容）
-func (bs *BlacklistService) recordFailureFixedMode(platform string, providerName string, fallbackMode string, fallbackDuration int, failureThreshold int) error {
+func (bs *BlacklistService) recordFailureFixedMode(platform string, providerName string, fallbackMode string, fallbackDuration int, failureThreshold int, reason string) error {
 	if fallbackMode == "none" {
 		log.Printf("🚫 Provider %s/%s 失败，但等级拉黑已关闭且 fallbackMode=none，不拉黑", platform, providerName)
 		return nil
@@ -436,9 +445,9 @@ func (bs *BlacklistService) recordFailureFixedMode(platform string, providerName
 
 			err = GlobalDBQueue.Exec(`
 				INSERT INTO provider_blacklist
-					(platform, provider_name, failure_count, last_failure_at, blacklisted_at, blacklisted_until, auto_recovered)
-				VALUES (?, ?, 0, ?, ?, ?, 0)
-			`, platform, providerName, now, now, blacklistedUntil)
+					(platform, provider_name, failure_count, last_failure_at, last_failure_reason, blacklisted_at, blacklisted_until, auto_recovered)
+				VALUES (?, ?, 0, ?, ?, ?, ?, 0)
+			`, platform, providerName, now, reason, now, blacklistedUntil)
 
 			if err != nil {
 				return fmt.Errorf("插入拉黑记录失败: %w", err)
@@ -458,9 +467,9 @@ func (bs *BlacklistService) recordFailureFixedMode(platform string, providerName
 		// 首次失败，插入新记录
 		err = GlobalDBQueue.Exec(`
 			INSERT INTO provider_blacklist
-				(platform, provider_name, failure_count, last_failure_at)
-			VALUES (?, ?, 1, ?)
-		`, platform, providerName, now)
+				(platform, provider_name, failure_count, last_failure_at, last_failure_reason)
+			VALUES (?, ?, 1, ?, ?)
+		`, platform, providerName, now, reason)
 
 		if err != nil {
 			return fmt.Errorf("插入失败记录失败: %w", err)
@@ -492,11 +501,12 @@ func (bs *BlacklistService) recordFailureFixedMode(platform string, providerName
 			UPDATE provider_blacklist
 			SET failure_count = 0,
 				last_failure_at = ?,
+				last_failure_reason = ?,
 				blacklisted_at = ?,
 				blacklisted_until = ?,
 				auto_recovered = 0
 			WHERE id = ?
-		`, now, blacklistedAt, blacklistedUntil, id)
+		`, now, reason, blacklistedAt, blacklistedUntil, id)
 
 		if err != nil {
 			return fmt.Errorf("更新拉黑状态失败: %w", err)
@@ -515,9 +525,9 @@ func (bs *BlacklistService) recordFailureFixedMode(platform string, providerName
 		// 更新失败计数
 		err = GlobalDBQueue.Exec(`
 			UPDATE provider_blacklist
-			SET failure_count = ?, last_failure_at = ?
+			SET failure_count = ?, last_failure_at = ?, last_failure_reason = ?
 			WHERE id = ?
-		`, failureCount, now, id)
+		`, failureCount, now, reason, id)
 
 		if err != nil {
 			return fmt.Errorf("更新失败计数失败: %w", err)
@@ -860,6 +870,7 @@ func (bs *BlacklistService) GetBlacklistStatus(platform string) ([]BlacklistStat
 			blacklisted_at,
 			blacklisted_until,
 			last_failure_at,
+			COALESCE(last_failure_reason, ''),
 			blacklist_level,
 			last_recovered_at
 		FROM provider_blacklist
@@ -878,6 +889,7 @@ func (bs *BlacklistService) GetBlacklistStatus(platform string) ([]BlacklistStat
 	for rows.Next() {
 		var s BlacklistStatus
 		var blacklistedAt, blacklistedUntil, lastFailureAt, lastRecoveredAt sql.NullTime
+		var lastFailureReason string
 
 		err := rows.Scan(
 			&s.Platform,
@@ -886,6 +898,7 @@ func (bs *BlacklistService) GetBlacklistStatus(platform string) ([]BlacklistStat
 			&blacklistedAt,
 			&blacklistedUntil,
 			&lastFailureAt,
+			&lastFailureReason,
 			&s.BlacklistLevel,
 			&lastRecoveredAt,
 		)
@@ -912,6 +925,7 @@ func (bs *BlacklistService) GetBlacklistStatus(platform string) ([]BlacklistStat
 		if lastRecoveredAt.Valid {
 			s.LastRecoveredAt = &lastRecoveredAt.Time
 		}
+		s.LastFailureReason = lastFailureReason
 
 		// 计算宽恕倒计时（如果正在降级计时中）
 		if levelConfig.EnableLevelBlacklist && lastRecoveredAt.Valid && s.BlacklistLevel >= 3 {
@@ -929,6 +943,19 @@ func (bs *BlacklistService) GetBlacklistStatus(platform string) ([]BlacklistStat
 	}
 
 	return statuses, nil
+}
+
+func sanitizeBlacklistReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return "provider request failed"
+	}
+	reason = redactSensitiveText(reason)
+	const maxReasonBytes = 512
+	if len(reason) > maxReasonBytes {
+		return reason[:maxReasonBytes] + "..."
+	}
+	return reason
 }
 
 // ShouldUseFixedMode 返回是否应该使用固定拉黑模式（禁用自动降级）

@@ -8,6 +8,7 @@
     "availability": "Availability",
     "speedtest": "Speed Test",
     "logs": "Logs",
+    "events": "Event Log",
     "capture": "Capture",
     "settings": "Settings",
     "toggleTheme": "Toggle light / dark theme",
@@ -355,7 +356,9 @@
         "resetLevelSuccess": "{name} level has been reset",
         "resetLevelFailed": "Failed to reset level",
         "levelHint": "Has failure record",
-        "levelTitle": "Blacklist Level L{level}"
+        "levelTitle": "Blacklist Level L{level}",
+        "reason": "Reason",
+        "unknownReason": "No specific reason recorded"
       },
       "errors": {
         "loadAppSettingsFailed": "Failed to load application settings",
@@ -443,6 +446,66 @@
       },
       "tokenDetail": {
         "title": "Today's Token Breakdown"
+      }
+    },
+    "requestEvents": {
+      "eyebrow": "Request diagnostics",
+      "title": "Request errors & Provider switches",
+      "subtitle": "Trace errors, retries, and fallback paths by request ID.",
+      "live": "Auto-refresh",
+      "refresh": "Refresh events",
+      "loading": "Loading events...",
+      "empty": "No events match the current filters",
+      "unknownProvider": "Unknown provider",
+      "copyRequestId": "Copy request ID",
+      "copiedRequestId": "Request ID copied",
+      "timeline": "Event timeline",
+      "timelineTitle": "Recent request activity",
+      "summary": {
+        "ariaLabel": "Event summary",
+        "errors": "Request errors",
+        "switches": "Provider switches",
+        "requests": "Correlated requests",
+        "currentPage": "Current page",
+        "correlated": "With request IDs",
+        "window": "Time window",
+        "days": "days"
+      },
+      "filters": {
+        "title": "Filter events",
+        "hint": "Only sanitized error summaries and routing metadata are stored",
+        "type": "Event type",
+        "incidents": "Errors + switches",
+        "errors": "Errors only",
+        "switches": "Switches only",
+        "all": "All events",
+        "provider": "Provider",
+        "allProviders": "All providers",
+        "requestId": "Request ID",
+        "requestIdPlaceholder": "Paste a full request ID",
+        "range": "Time range",
+        "dayOption": "Last {count} days",
+        "apply": "Apply filters"
+      },
+      "event": {
+        "error": "Request error",
+        "switch": "Provider switch",
+        "completed": "Request completed"
+      },
+      "outcome": {
+        "success": "Success",
+        "failed": "Failed",
+        "clientAborted": "Client aborted",
+        "continued": "Continuing"
+      },
+      "meta": {
+        "attempt": "Attempt {count}",
+        "retry": "Retry {count}"
+      },
+      "pagination": {
+        "page": "Page {page}",
+        "previous": "Previous page",
+        "next": "Next page"
       }
     },
     "general": {

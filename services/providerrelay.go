@@ -55,6 +55,7 @@ type ProviderRelayService struct {
 	blacklistService    *BlacklistService
 	dailyLimitService   *DailyCostLimitService
 	notificationService *NotificationService
+	requestEventService *RequestEventService
 	appSettings         *AppSettingsService // 应用设置服务（用于获取轮询开关状态）
 	server              *http.Server
 	serverMu            sync.Mutex // 保护 server：Start/Stop 均可从前端 RPC 触发
@@ -391,15 +392,21 @@ func isClientSideUpstreamStatus(status int) bool {
 }
 
 // NewProviderRelayService 构造代理服务。
-func NewProviderRelayService(providerService *ProviderService, blacklistService *BlacklistService, notificationService *NotificationService, appSettings *AppSettingsService, addr string) *ProviderRelayService {
+func NewProviderRelayService(providerService *ProviderService, blacklistService *BlacklistService, notificationService *NotificationService, appSettings *AppSettingsService, addr string, eventServices ...*RequestEventService) *ProviderRelayService {
 	if addr == "" {
 		addr = "127.0.0.1:18100" // 【安全修复】仅监听本地回环地址，防止 API Key 暴露到局域网
+	}
+
+	var requestEventService *RequestEventService
+	if len(eventServices) > 0 {
+		requestEventService = eventServices[0]
 	}
 
 	return &ProviderRelayService{
 		providerService:     providerService,
 		blacklistService:    blacklistService,
 		notificationService: notificationService,
+		requestEventService: requestEventService,
 		appSettings:         appSettings,
 		acceptingRequests:   true,
 		addr:                addr,
@@ -411,6 +418,10 @@ func NewProviderRelayService(providerService *ProviderService, blacklistService 
 		concurrency:            newConcurrencyLimiter(),
 		captureDeletedSessions: make(map[int64]struct{}),
 	}
+}
+
+func (prs *ProviderRelayService) SetRequestEventService(service *RequestEventService) {
+	prs.requestEventService = service
 }
 
 func (prs *ProviderRelayService) SetDailyCostLimitService(service *DailyCostLimitService) {
@@ -889,10 +900,16 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		trace := newRelayRequestTrace(prs.requestEventService, kind)
+		c.Header("X-Request-ID", trace.RequestID())
+		defer func() {
+			trace.Finish(c.Writer.Status(), c.Request.Context().Err() != nil)
+		}()
 		var bodyBytes []byte
 		if c.Request.Body != nil {
 			data, err := io.ReadAll(c.Request.Body)
 			if err != nil {
+				trace.RecordSummary("invalid_request", "request body could not be read")
 				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 				return
 			}
@@ -903,6 +920,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 		// 空 body 或非法 JSON 一定会被所有上游拒绝，提前挡掉：
 		// 否则每个供应商都要挨一次 4xx，还会白耗一轮降级
 		if !gjson.ValidBytes(bodyBytes) {
+			trace.RecordSummary("invalid_request", "request body must be valid JSON")
 			c.JSON(http.StatusBadRequest, gin.H{
 				"type":    "error",
 				"error":   map[string]string{"type": "invalid_request_error", "message": "request body must be valid JSON"},
@@ -913,6 +931,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 
 		isStream := gjson.GetBytes(bodyBytes, "stream").Bool()
 		requestedModel := gjson.GetBytes(bodyBytes, "model").String()
+		trace.SetModel(requestedModel)
 
 		// 如果未指定模型，记录警告但不拦截
 		if requestedModel == "" {
@@ -923,6 +942,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 		// 分两步读取会让旧配置带上新代数、降容被来回覆盖
 		providers, configGen, err := prs.providerService.LoadProvidersWithGen(kind)
 		if err != nil {
+			trace.RecordSummary("relay_error", "provider configuration could not be loaded")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load providers"})
 			return
 		}
@@ -970,6 +990,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 		}
 
 		if len(active) == 0 {
+			trace.RecordSummary("no_eligible_provider", "no eligible provider was available")
 			respondNoEligibleProviders(c, requestedModel, skippedModel, skippedBlacklist, skippedInvalid, skippedDaily)
 			return
 		}
@@ -1078,6 +1099,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 							fmt.Printf("[INFO] Provider %s 映射模型: %s -> %s\n", provider.Name, requestedModel, effectiveModel)
 							modifiedBody, err := ReplaceModelInRequestBody(bodyBytes, effectiveModel)
 							if err != nil {
+								trace.RecordLocalSummary(provider.Name, "model_mapping_error", "provider model mapping could not be applied")
 								fmt.Printf("[ERROR] 模型映射失败: %v，跳过此 Provider\n", err)
 								continue
 							}
@@ -1104,9 +1126,13 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 							fmt.Printf("[INFO] [拉黑模式] Provider: %s (Level %d) | 重试 %d/%d | Model: %s\n",
 								provider.Name, level, retryCount+1, maxRetryPerProvider, effectiveModel)
 
+							attempt := trace.BeforeAttempt(provider.Name)
 							startTime := time.Now()
 							ok, err := prs.forwardRequest(c, kind, provider, effectiveEndpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel, configGen)
 							duration := time.Since(startTime)
+							if err != nil {
+								trace.RecordForwardError(provider.Name, err, attempt, retryCount+1, duration)
+							}
 
 							if ok {
 								fmt.Printf("[INFO] ✓ 成功: %s | 重试 %d 次 | 耗时: %.2fs\n",
@@ -1151,7 +1177,8 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 							// 上游 2xx 后中途断流：响应已部分写出，不能再换供应商（会写出两段响应），
 							// 但必须计入失败，否则半死的供应商永远不会被拉黑
 							if errors.Is(err, errUpstreamStreamAborted) {
-								if err := prs.blacklistService.RecordFailure(kind, provider.Name); err != nil {
+								trace.MarkFailed(err)
+								if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
 									fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
 								}
 								return
@@ -1167,7 +1194,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 							sawNonClientError = true
 
 							// 记录失败次数（可能触发拉黑）
-							if err := prs.blacklistService.RecordFailure(kind, provider.Name); err != nil {
+							if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
 								fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
 							}
 							if errors.Is(err, errUpstreamModelCapacity) {
@@ -1332,6 +1359,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 
 						modifiedBody, err := ReplaceModelInRequestBody(bodyBytes, effectiveModel)
 						if err != nil {
+							trace.RecordLocalSummary(provider.Name, "model_mapping_error", "provider model mapping could not be applied")
 							fmt.Printf("[ERROR] 替换模型名失败: %v\n", err)
 							// 映射失败不应阻止尝试其他 provider
 							continue
@@ -1344,9 +1372,13 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 					// 尝试发送请求
 					// 获取有效的端点（用户配置优先）
 					effectiveEndpoint := provider.GetEffectiveEndpoint(endpoint)
+					attempt := trace.BeforeAttempt(provider.Name)
 					startTime := time.Now()
 					ok, err := prs.forwardRequest(c, kind, provider, effectiveEndpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel, configGen)
 					duration := time.Since(startTime)
+					if err != nil {
+						trace.RecordForwardError(provider.Name, err, attempt, i+1, duration)
+					}
 
 					if ok {
 						fmt.Printf("[INFO]   ✓ Level %d 成功: %s | 耗时: %.2fs\n", level, provider.Name, duration.Seconds())
@@ -1392,7 +1424,8 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 
 					// 上游 2xx 后中途断流：响应已部分写出，不能再降级，但必须计入失败
 					if errors.Is(err, errUpstreamStreamAborted) {
-						if err := prs.blacklistService.RecordFailure(kind, provider.Name); err != nil {
+						trace.MarkFailed(err)
+						if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
 							fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
 						}
 						return
@@ -1403,7 +1436,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 						fmt.Printf("[INFO] 上游拒绝请求内容，不计供应商失败\n")
 					} else {
 						sawNonClientError = true
-						if err := prs.blacklistService.RecordFailure(kind, provider.Name); err != nil {
+						if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
 							fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
 						}
 					}

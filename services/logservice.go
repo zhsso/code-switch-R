@@ -162,6 +162,13 @@ func (ls *LogService) CleanupOldRecords(daysToKeep int) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("delete request history: %w", err)
 	}
+	if _, err := tx.Exec(
+		`DELETE FROM request_event_log WHERE platform = ? AND created_at < ?`,
+		CodexPlatform,
+		cutoff,
+	); err != nil && !isNoSuchTableErr(err) {
+		return 0, fmt.Errorf("delete request event history: %w", err)
+	}
 	if _, err := tx.Exec(`DELETE FROM capture_session
 		WHERE (ended_at IS NOT NULL OR interrupted != 0)
 		AND NOT EXISTS (
@@ -329,6 +336,111 @@ func (ls *LogService) ListProviders(platform string) ([]string, error) {
 		}
 	}
 	return providers, nil
+}
+
+// ListRequestEvents returns the sanitized relay timeline used by the event
+// diagnostics page. It intentionally excludes request and response payloads.
+func (ls *LogService) ListRequestEvents(
+	platform string,
+	eventType string,
+	provider string,
+	requestID string,
+	days int,
+	limit int,
+	offset int,
+) ([]RequestEvent, error) {
+	if platform != "" {
+		if err := requireCodexPlatform(platform); err != nil {
+			return nil, err
+		}
+	}
+	if days < 1 {
+		days = 30
+	}
+	if days > 3650 {
+		days = 3650
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	db, err := xdb.DB("default")
+	if err != nil {
+		return nil, err
+	}
+	query := `
+		SELECT id, request_id, platform, model, event_type, provider,
+			from_provider, to_provider, attempt, retry, http_code,
+			error_type, error_code, message, duration_sec, outcome, created_at
+		FROM request_event_log
+		WHERE platform = ? AND created_at >= ?`
+	args := []interface{}{CodexPlatform, requestEventCutoff(days)}
+
+	if normalized := strings.TrimSpace(eventType); normalized != "" && normalized != "all" {
+		if normalized == "incident" {
+			query += " AND event_type IN (?, ?)"
+			args = append(args, RequestEventError, RequestEventSwitch)
+		} else {
+			query += " AND event_type = ?"
+			args = append(args, normalized)
+		}
+	}
+	if normalized := strings.TrimSpace(provider); normalized != "" {
+		query += " AND (provider = ? OR from_provider = ? OR to_provider = ?)"
+		args = append(args, normalized, normalized, normalized)
+	}
+	if normalized := strings.TrimSpace(requestID); normalized != "" {
+		query += " AND request_id = ?"
+		args = append(args, normalized)
+	}
+	query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		if isNoSuchTableErr(err) {
+			return []RequestEvent{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := make([]RequestEvent, 0, limit)
+	for rows.Next() {
+		var event RequestEvent
+		if err := rows.Scan(
+			&event.ID,
+			&event.RequestID,
+			&event.Platform,
+			&event.Model,
+			&event.EventType,
+			&event.Provider,
+			&event.FromProvider,
+			&event.ToProvider,
+			&event.Attempt,
+			&event.Retry,
+			&event.HTTPCode,
+			&event.ErrorType,
+			&event.ErrorCode,
+			&event.Message,
+			&event.DurationSec,
+			&event.Outcome,
+			&event.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return events, nil
 }
 
 func (ls *LogService) HeatmapStats(days int) ([]HeatmapStat, error) {

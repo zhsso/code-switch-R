@@ -55,12 +55,14 @@ func main() {
 	}
 	modelSyncService.SetEventEmitter(events)
 	blacklistService := services.NewBlacklistService(settingsService, notificationService)
+	requestEventService := services.NewRequestEventService()
 	providerRelay := services.NewProviderRelayService(
 		providerService,
 		blacklistService,
 		notificationService,
 		appSettings,
 		config.RelayAddr(),
+		requestEventService,
 	)
 	logService := services.NewLogService(providerService)
 	dailyLimitService := services.NewDailyCostLimitService(providerService, appSettings, logService)
@@ -226,7 +228,7 @@ func registerWebServices(registry *rpcRegistry, svc webServices) {
 		"GetStatuses", "SetActualUsage", "ManualBlock", "TemporaryUnblock")
 	registry.Register("codeswitch/services.LogService", svc.logs,
 		"CostSince", "ListRequestLogs", "GetRequestLogDetail", "ListProviders",
-		"HeatmapStats", "StatsSince", "ProviderDailyStats")
+		"HeatmapStats", "StatsSince", "ProviderDailyStats", "ListRequestEvents")
 	registry.Register("codeswitch/services.ModelSyncService", svc.modelSync,
 		"SyncNow", "GetSyncStatus", "GetDefaultModels", "RestoreBuiltinPricing")
 	registry.Register("codeswitch/services.SpeedTestService", svc.speedTest, "TestEndpoints")

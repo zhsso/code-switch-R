@@ -219,7 +219,7 @@ func applyMigrationTransaction(db *sql.DB, purgeLegacy bool) error {
 		return err
 	}
 	if purgeLegacy {
-		for _, table := range []string{"request_log", "provider_blacklist", "health_check_history", "provider_alias"} {
+		for _, table := range []string{"request_log", "request_event_log", "provider_blacklist", "health_check_history", "provider_alias"} {
 			exists, err := tableHasColumn(tx, table, "platform")
 			if err != nil {
 				return err

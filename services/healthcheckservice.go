@@ -1212,7 +1212,8 @@ func (hcs *HealthCheckService) handleBlacklistIntegration(provider *Provider, re
 
 	// 在锁外执行耗时的 RPC 调用，避免阻塞其他检测
 	if shouldTriggerBlacklist {
-		if err := hcs.blacklistService.RecordFailure(result.Platform, provider.Name); err != nil {
+		reason := fmt.Sprintf("availability check failed: %s", strings.TrimSpace(result.ErrorMessage))
+		if err := hcs.blacklistService.RecordFailureWithReason(result.Platform, provider.Name, reason); err != nil {
 			log.Printf("[HealthCheck] 上报拉黑服务失败: %v", err)
 		} else {
 			// 注意：RecordFailure 只累计一次失败，拉黑服务内部还有自己的失败阈值，

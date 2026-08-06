@@ -486,7 +486,8 @@ func (cts *ConnectivityTestService) handleBlacklistIntegration(platform, provide
 			return
 		}
 		// 红色：调用 RecordFailure 累计失败
-		if err := cts.blacklistService.RecordFailure(platform, providerName); err != nil {
+		reason := fmt.Sprintf("connectivity check failed: %s", strings.TrimSpace(result.SubStatus))
+		if err := cts.blacklistService.RecordFailureWithReason(platform, providerName, reason); err != nil {
 			log.Printf("[ConnectivityTest] RecordFailure 失败: %v", err)
 		}
 	case StatusDegraded:

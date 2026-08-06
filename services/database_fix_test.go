@@ -68,7 +68,7 @@ func TestInitDatabaseBusyTimeoutOnAllConnections(t *testing.T) {
 	}
 }
 
-// TestEnsureBlacklistTablesMigratesOldSchema 验证分级拉黑之前的旧库升级后自动补齐四列。
+// TestEnsureBlacklistTablesMigratesOldSchema 验证旧库升级后自动补齐黑名单扩展列。
 // CREATE TABLE IF NOT EXISTS 对已存在的旧表是 no-op,缺列时黑名单 SQL 会报 no such column。
 func TestEnsureBlacklistTablesMigratesOldSchema(t *testing.T) {
 	tmpHome := setupDatabaseFixTestHome(t)
@@ -87,7 +87,7 @@ func TestEnsureBlacklistTablesMigratesOldSchema(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	// 模拟分级拉黑引入之前的旧表结构(无 blacklist_level 等四列)
+	// 模拟扩展字段引入之前的旧表结构。
 	const oldSchema = `CREATE TABLE provider_blacklist (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		platform TEXT NOT NULL,
@@ -113,6 +113,7 @@ func TestEnsureBlacklistTablesMigratesOldSchema(t *testing.T) {
 		"last_recovered_at",
 		"last_degrade_hour",
 		"last_failure_window_start",
+		"last_failure_reason",
 	}
 	for _, col := range migratedColumns {
 		var count int

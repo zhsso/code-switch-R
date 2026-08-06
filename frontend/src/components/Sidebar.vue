@@ -84,6 +84,7 @@ const navItems: NavItem[] = [
   { path: '/availability', icon: 'activity', labelKey: 'sidebar.availability', isNew: true },
   { path: '/speedtest', icon: 'zap', labelKey: 'sidebar.speedtest', isNew: true },
   { path: '/logs', icon: 'bar-chart', labelKey: 'sidebar.logs' },
+  { path: '/events', icon: 'alert-triangle', labelKey: 'sidebar.events', isNew: true },
   { path: '/capture', icon: 'search', labelKey: 'sidebar.capture', isNew: true },
   { path: '/settings', icon: 'settings', labelKey: 'sidebar.settings' },
 ]
@@ -153,6 +154,13 @@ const navigate = (path: string) => {
           <line x1="12" y1="20" x2="12" y2="10"></line>
           <line x1="18" y1="20" x2="18" y2="4"></line>
           <line x1="6" y1="20" x2="6" y2="16"></line>
+        </svg>
+
+        <!-- Alert Triangle -->
+        <svg v-else-if="item.icon === 'alert-triangle'" class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M10.3 3.9 2.2 18a2 2 0 0 0 1.7 3h16.2a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"></path>
+          <line x1="12" y1="9" x2="12" y2="13"></line>
+          <line x1="12" y1="17" x2="12.01" y2="17"></line>
         </svg>
 
         <!-- Settings -->

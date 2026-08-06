@@ -8,6 +8,7 @@
     "availability": "可用性",
     "speedtest": "测速",
     "logs": "日志",
+    "events": "事件日志",
     "capture": "抓包",
     "settings": "设置",
     "toggleTheme": "切换明暗主题",
@@ -356,7 +357,9 @@
         "resetLevelSuccess": "已清零 {name} 的等级",
         "resetLevelFailed": "清零等级失败，请稍后重试",
         "levelHint": "有失败记录",
-        "levelTitle": "黑名单等级 L{level}"
+        "levelTitle": "黑名单等级 L{level}",
+        "reason": "原因",
+        "unknownReason": "未记录具体原因"
       },
       "errors": {
         "loadAppSettingsFailed": "加载应用设置失败",
@@ -444,6 +447,66 @@
       },
       "tokenDetail": {
         "title": "今日 Token 明细"
+      }
+    },
+    "requestEvents": {
+      "eyebrow": "请求诊断",
+      "title": "请求错误与 Provider 切换",
+      "subtitle": "按请求 ID 还原错误、重试和降级链路。",
+      "live": "自动刷新",
+      "refresh": "刷新事件",
+      "loading": "正在加载事件...",
+      "empty": "当前筛选范围内没有事件",
+      "unknownProvider": "未知 Provider",
+      "copyRequestId": "复制请求 ID",
+      "copiedRequestId": "请求 ID 已复制",
+      "timeline": "事件时间线",
+      "timelineTitle": "最近的请求活动",
+      "summary": {
+        "ariaLabel": "事件摘要",
+        "errors": "请求错误",
+        "switches": "Provider 切换",
+        "requests": "关联请求",
+        "currentPage": "当前页",
+        "correlated": "已关联请求 ID",
+        "window": "时间范围",
+        "days": "天"
+      },
+      "filters": {
+        "title": "筛选事件",
+        "hint": "只保存脱敏错误摘要和路由元数据",
+        "type": "事件类型",
+        "incidents": "错误 + 切换",
+        "errors": "仅错误",
+        "switches": "仅切换",
+        "all": "全部事件",
+        "provider": "Provider",
+        "allProviders": "全部 Provider",
+        "requestId": "请求 ID",
+        "requestIdPlaceholder": "粘贴完整请求 ID",
+        "range": "时间范围",
+        "dayOption": "最近 {count} 天",
+        "apply": "应用筛选"
+      },
+      "event": {
+        "error": "请求错误",
+        "switch": "Provider 切换",
+        "completed": "请求完成"
+      },
+      "outcome": {
+        "success": "成功",
+        "failed": "失败",
+        "clientAborted": "客户端中断",
+        "continued": "继续尝试"
+      },
+      "meta": {
+        "attempt": "第 {count} 次尝试",
+        "retry": "重试 {count}"
+      },
+      "pagination": {
+        "page": "第 {page} 页",
+        "previous": "上一页",
+        "next": "下一页"
       }
     },
     "general": {
