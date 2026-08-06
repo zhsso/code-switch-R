@@ -4,7 +4,6 @@ import fallbackIcons from './fallbackLobeIcons'
 // icon catalog made the WebUI bundle needlessly large and also pulled in icons
 // for removed platform integrations.
 import alibaba from '../../node_modules/@lobehub/icons-static-svg/icons/alibaba.svg?raw'
-import deepseek from '../../node_modules/@lobehub/icons-static-svg/icons/deepseek.svg?raw'
 import kimi from '../../node_modules/@lobehub/icons-static-svg/icons/kimi.svg?raw'
 import moonshot from '../../node_modules/@lobehub/icons-static-svg/icons/moonshot.svg?raw'
 import openai from '../../node_modules/@lobehub/icons-static-svg/icons/openai.svg?raw'
@@ -17,7 +16,6 @@ import zhipu from '../../node_modules/@lobehub/icons-static-svg/icons/zhipu.svg?
 const lobeIconMap: Record<string, string> = {
   ...fallbackIcons,
   alibaba,
-  deepseek,
   kimi,
   moonshot,
   openai,

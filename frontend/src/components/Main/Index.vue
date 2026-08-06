@@ -384,18 +384,6 @@
       @close="closeModal"
     >
       <form class="vendor-form" @submit.prevent="submitModal">
-                <div v-if="!modalState.editingId" class="provider-preset-row">
-                  <span class="provider-preset-label">{{ t('components.main.form.presets.label') }}</span>
-                  <button
-                    type="button"
-                    class="provider-preset-button"
-                    @click="applyDeepSeekV4FlashPreset"
-                  >
-                    <span class="provider-preset-icon" v-html="iconSvg('deepseek')" aria-hidden="true"></span>
-                    <span>{{ t('components.main.form.presets.deepseekV4Flash') }}</span>
-                  </button>
-                </div>
-
                 <label class="form-field">
                   <span>{{ t('components.main.form.labels.name') }}</span>
                   <BaseInput
@@ -554,14 +542,6 @@
                     :placeholder="t('components.main.form.placeholders.apiEndpoint')"
                   />
                   <span class="field-hint">{{ t('components.main.form.hints.apiEndpoint') }}</span>
-                </label>
-
-                <label class="form-field">
-                  <span>{{ t('components.main.form.labels.compatibilityMode') }}</span>
-                  <select v-model="modalState.form.compatibilityMode">
-                    <option value="">{{ t('components.main.form.compatibility.standard') }}</option>
-                    <option value="deepseek-codex">{{ t('components.main.form.compatibility.deepseekCodex') }}</option>
-                  </select>
                 </label>
 
                 <!-- 认证方式 -->
@@ -896,9 +876,7 @@ import {
   automationCardGroups,
   createAutomationCards,
   type AutomationCard,
-  type ProviderCompatibilityMode,
 } from '../../data/cards'
-import { createDeepSeekV4FlashPreset } from '../../data/providerPresets'
 import lobeIcons from '../../icons/lobeIconMap'
 import BaseButton from '../common/BaseButton.vue'
 import BaseModal from '../common/BaseModal.vue'
@@ -1969,7 +1947,6 @@ type VendorForm = {
     blockedBodyFields?: string[]
     blockedHeaders?: string[]
   }
-  compatibilityMode?: ProviderCompatibilityMode
 }
 
 const iconOptions = Object.keys(lobeIcons).sort((a, b) => a.localeCompare(b))
@@ -2002,7 +1979,6 @@ const defaultFormValues = (platform?: string): VendorForm => ({
   insecureSkipVerify: false, // 默认严格验证上游 TLS 证书
   requestSanitizeEnabled: false, // 请求清理默认关闭
   sanitizeConfig: {},
-  compatibilityMode: '',
   // 可用性监控配置（新）
   availabilityMonitorEnabled: false,
   connectivityAutoBlacklist: false,
@@ -2117,14 +2093,6 @@ const authTypeOptions = computed(() => [
   { value: 'bearer', label: 'Bearer' },
   { value: 'x-api-key', label: 'X-API-Key' },
 ])
-
-const applyDeepSeekV4FlashPreset = () => {
-  const apiKey = modalState.form.apiKey
-  Object.assign(modalState.form, createDeepSeekV4FlashPreset(), { apiKey })
-  selectedAuthType.value = 'bearer'
-  customAuthHeader.value = ''
-  connectivityTestResult.value = null
-}
 
 // 上游协议类型选项
 
@@ -2252,7 +2220,6 @@ const openEditModal = (card: AutomationCard) => {
     insecureSkipVerify: card.insecureSkipVerify ?? false,
     requestSanitizeEnabled: card.requestSanitizeEnabled ?? false,
     sanitizeConfig: card.sanitizeConfig || {},
-    compatibilityMode: card.compatibilityMode || '',
     // 可用性监控配置（新）- 兼容从旧字段迁移
     availabilityMonitorEnabled:
       card.availabilityMonitorEnabled ?? card.connectivityCheck ?? false,
@@ -2396,7 +2363,6 @@ const submitModal = async (): Promise<boolean> => {
       insecureSkipVerify: !!modalState.form.insecureSkipVerify,
       requestSanitizeEnabled: !!modalState.form.requestSanitizeEnabled,
       sanitizeConfig: modalState.form.sanitizeConfig || undefined,
-      compatibilityMode: modalState.form.compatibilityMode || '',
       // 可用性监控配置（新）
       availabilityMonitorEnabled: !!modalState.form.availabilityMonitorEnabled,
       connectivityAutoBlacklist: !!modalState.form.connectivityAutoBlacklist,
@@ -2446,7 +2412,6 @@ const submitModal = async (): Promise<boolean> => {
       insecureSkipVerify: !!modalState.form.insecureSkipVerify,
       requestSanitizeEnabled: !!modalState.form.requestSanitizeEnabled,
       sanitizeConfig: modalState.form.sanitizeConfig || undefined,
-      compatibilityMode: modalState.form.compatibilityMode || '',
       // 可用性监控配置（新）
       availabilityMonitorEnabled: !!modalState.form.availabilityMonitorEnabled,
       connectivityAutoBlacklist: !!modalState.form.connectivityAutoBlacklist,
@@ -2699,73 +2664,6 @@ const vendorInitials = (name: string) => {
   stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.provider-preset-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 36px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--mac-border);
-}
-
-.provider-preset-label {
-  flex: 0 0 auto;
-  color: var(--mac-text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.provider-preset-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-width: 172px;
-  height: 34px;
-  padding: 0 12px;
-  border: 1px solid var(--mac-border);
-  border-radius: 6px;
-  background: var(--mac-surface);
-  color: var(--mac-text);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: border-color 0.15s ease, background-color 0.15s ease;
-}
-
-.provider-preset-button:hover {
-  border-color: var(--mac-accent);
-  background: var(--mac-surface-strong);
-}
-
-.provider-preset-button:focus-visible {
-  outline: 2px solid var(--mac-accent);
-  outline-offset: 2px;
-}
-
-.provider-preset-icon {
-  display: inline-flex;
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
-}
-
-.provider-preset-icon :deep(svg) {
-  width: 100%;
-  height: 100%;
-}
-
-@media (max-width: 520px) {
-  .provider-preset-row {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .provider-preset-button {
-    width: 100%;
-  }
 }
 
 .fallback-urls-input {

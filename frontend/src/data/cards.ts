@@ -1,5 +1,3 @@
-export type ProviderCompatibilityMode = '' | 'deepseek-codex'
-
 export type AutomationCard = {
   id: number
   name: string
@@ -50,9 +48,6 @@ export type AutomationCard = {
     blockedBodyFields?: string[]
     blockedHeaders?: string[]
   }
-
-  // 特定兼容 API 的隔离请求转换；空值保持标准 Codex 请求。
-  compatibilityMode?: ProviderCompatibilityMode
 
   // === 旧连通性字段（已废弃，仅用于兼容旧数据） ===
   /** @deprecated 已迁移到 availabilityMonitorEnabled */

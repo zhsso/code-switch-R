@@ -205,14 +205,6 @@
       "form": {
         "createTitle": "Add provider",
         "editTitle": "Edit provider",
-        "presets": {
-          "label": "Quick preset",
-          "deepseekV4Flash": "DeepSeek V4 Flash"
-        },
-        "compatibility": {
-          "standard": "Standard Codex",
-          "deepseekCodex": "DeepSeek Codex"
-        },
         "labels": {
           "name": "Provider name",
           "apiUrl": "API endpoint",
@@ -223,7 +215,6 @@
           "dailyCostLimitAmount": "Daily limit (USD)",
           "apiKey": "API key",
           "apiEndpoint": "API Endpoint Path (optional)",
-          "compatibilityMode": "Request Compatibility Mode",
           "insecureSkipVerify": "Skip TLS Certificate Verification",
           "requestSanitize": "Request Sanitize",
           "officialSite": "Official site",

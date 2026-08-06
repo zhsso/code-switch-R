@@ -71,7 +71,6 @@ func isModelSyncProvider(providerID string) bool {
 // providerCanaryPatterns 每厂商必须存在的标志性模型族,防止拿错/污染数据。
 var providerCanaryPatterns = map[string]*regexp.Regexp{
 	"openai":     regexp.MustCompile(`^gpt-\d`),
-	"deepseek":   regexp.MustCompile(`^deepseek-`),
 	"alibaba":    regexp.MustCompile(`^(qwen|qvq|qwq)`),
 	"moonshotai": regexp.MustCompile(`^(kimi-|moonshot-)`),
 	"zhipuai":    regexp.MustCompile(`^glm-`),

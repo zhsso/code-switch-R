@@ -31,8 +31,6 @@ type SanitizeConfig struct {
 	BlockedHeaders    *[]string `json:"blockedHeaders,omitempty"`    // 要移除的请求头（小写）
 }
 
-const CompatibilityModeDeepSeekCodex = "deepseek-codex"
-
 // cloneStringListPtr 深拷贝三态列表指针：nil 保持 nil，非 nil 复制底层数组。
 func cloneStringListPtr(p *[]string) *[]string {
 	if p == nil {
@@ -114,9 +112,6 @@ type Provider struct {
 	// 解决 LiteLLM 等中转服务的 "Extra inputs are not permitted" 兼容性问题
 	RequestSanitizeEnabled bool            `json:"requestSanitizeEnabled,omitempty"`
 	SanitizeConfig         *SanitizeConfig `json:"sanitizeConfig,omitempty"`
-
-	// 请求兼容模式 - 对特定兼容 API 做隔离的请求规范化；空值保持原行为。
-	CompatibilityMode string `json:"compatibilityMode,omitempty"`
 
 	// ========== 旧字段（已废弃，仅用于读取迁移） ==========
 	// 这些字段在保存时不再写入，但读取时会自动迁移到新字段
@@ -563,7 +558,6 @@ func (ps *ProviderService) DuplicateProvider(kind string, sourceID int64) (*Prov
 		APIEndpoint:           source.APIEndpoint,          // 复制端点配置
 		ConnectivityAuthType:  source.ConnectivityAuthType, // 复制认证方式
 		InsecureSkipVerify:    source.InsecureSkipVerify,   // 复制 TLS 跳验开关
-		CompatibilityMode:     source.CompatibilityMode,    // 复制请求兼容模式
 		// 请求清理配置
 		RequestSanitizeEnabled: source.RequestSanitizeEnabled,
 		// 可用性监控配置
@@ -773,9 +767,6 @@ func validateModelConfig(supported map[string]bool, mapping map[string]string) [
 func (p *Provider) ValidateConfiguration() []string {
 	errors := validateModelConfig(p.SupportedModels, p.ModelMapping)
 	errors = append(errors, validateFallbackURLs(p.FallbackAPIURLs)...)
-	if err := validateCompatibilityMode(p.CompatibilityMode); err != nil {
-		errors = append(errors, err.Error())
-	}
 	if p.MaxConcurrency < 0 {
 		errors = append(errors, "最大并发数不能为负（0 表示不限）")
 	}
@@ -789,15 +780,6 @@ func (p *Provider) ValidateConfiguration() []string {
 	}
 	p.configErrors = errors
 	return errors
-}
-
-func validateCompatibilityMode(mode string) error {
-	switch mode {
-	case "", CompatibilityModeDeepSeekCodex:
-		return nil
-	default:
-		return fmt.Errorf("未知请求兼容模式：%q", mode)
-	}
 }
 
 func validateCostMultiplier(multiplier float64) error {

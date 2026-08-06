@@ -206,14 +206,6 @@
       "form": {
         "createTitle": "新增供应商",
         "editTitle": "编辑供应商",
-        "presets": {
-          "label": "快速预设",
-          "deepseekV4Flash": "DeepSeek V4 Flash"
-        },
-        "compatibility": {
-          "standard": "标准 Codex",
-          "deepseekCodex": "DeepSeek Codex"
-        },
         "labels": {
           "name": "供应商名称",
           "apiUrl": "API 地址",
@@ -224,7 +216,6 @@
           "dailyCostLimitAmount": "每日限额（USD）",
           "apiKey": "API 密钥",
           "apiEndpoint": "API 端点（可选）",
-          "compatibilityMode": "请求兼容模式",
           "insecureSkipVerify": "跳过 TLS 证书验证",
           "requestSanitize": "请求清理",
           "officialSite": "官网地址",

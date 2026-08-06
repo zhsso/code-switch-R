@@ -69,7 +69,7 @@ func TestValidateBatchCanary(t *testing.T) {
 }
 
 func TestModelSyncKeepsNonRemovedProviders(t *testing.T) {
-	want := []string{"openai", "deepseek", "alibaba", "moonshotai", "zhipuai"}
+	want := []string{"openai", "alibaba", "moonshotai", "zhipuai"}
 	got := modelSyncTargets([]string{"anthropic", "openai", "google", "deepseek", "alibaba", "moonshotai", "zhipuai"})
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("同步目标 = %v, want %v", got, want)
@@ -77,7 +77,7 @@ func TestModelSyncKeepsNonRemovedProviders(t *testing.T) {
 
 	s := newTestSyncService(t, nil)
 	canaries := map[string]string{
-		"openai": "gpt-5.6", "deepseek": "deepseek-v3", "alibaba": "qwen-max",
+		"openai": "gpt-5.6", "alibaba": "qwen-max",
 		"moonshotai": "kimi-k2", "zhipuai": "glm-5",
 	}
 	for providerID, modelID := range canaries {
@@ -86,45 +86,11 @@ func TestModelSyncKeepsNonRemovedProviders(t *testing.T) {
 			t.Errorf("剩余厂商 %s 的合法目录被拒绝: %v", providerID, err)
 		}
 	}
-	for _, providerID := range []string{"anthropic", "google"} {
+	for _, providerID := range []string{"anthropic", "deepseek", "google"} {
 		body := testCatalogJSON(providerID, map[string]map[string]any{"removed": testModelSpec(1, 2)})
 		if _, err := s.validateBatch(providerID, body, nil, nil); err == nil {
 			t.Errorf("已删除厂商 %s 的目录应被拒绝", providerID)
 		}
-	}
-}
-
-func TestRunSyncSupportsDeepSeekCatalog(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/providers/deepseek.json" {
-			http.NotFound(w, r)
-			return
-		}
-		_, _ = w.Write(testCatalogJSON("deepseek", map[string]map[string]any{
-			"deepseek-v3-sync-test": testModelSpec(1, 2),
-		}))
-	}))
-	defer server.Close()
-
-	s := newTestSyncService(t, []string{server.URL})
-	s.runSync([]string{"anthropic", "deepseek", "google"})
-
-	s.mu.Lock()
-	state := s.state.Providers["deepseek"]
-	removedState := s.state.Providers["anthropic"]
-	source := s.sources["deepseek"]
-	s.mu.Unlock()
-	if state == nil || state.LastError != "" || source != "remote" {
-		t.Fatalf("DeepSeek 同步失败: state=%+v source=%q", state, source)
-	}
-	if removedState != nil {
-		t.Fatalf("已删除厂商不应产生状态: %+v", removedState)
-	}
-	if _, err := os.Stat(filepath.Join(s.dir, "deepseek.json")); err != nil {
-		t.Fatalf("DeepSeek 缓存未落盘: %v", err)
-	}
-	if !s.pricing.HasPositivePricing("deepseek-v3-sync-test") {
-		t.Fatal("DeepSeek 同步目录未更新价格快照")
 	}
 }
 

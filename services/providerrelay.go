@@ -1540,13 +1540,6 @@ func (prs *ProviderRelayService) forwardRequest(
 		setHeaderCanonical(headers, "accept", "application/json")
 	}
 
-	// Provider 兼容转换作用于映射完成后的请求体，并先于抓包执行。
-	if cleaned, removed := normalizeProviderRequestBody(bodyBytes, provider.CompatibilityMode); len(removed) > 0 {
-		fmt.Printf("[Compatibility] Provider %s (%s): 移除请求体字段 %v\n",
-			provider.Name, provider.CompatibilityMode, removed)
-		bodyBytes = cleaned
-	}
-
 	// 请求清理在发送前执行，作用于实际出站 body。
 	if provider.RequestSanitizeEnabled {
 		if cleaned, removed := sanitizeRequestBody(bodyBytes, provider.SanitizeConfig); len(removed) > 0 {
@@ -2311,99 +2304,6 @@ func derefList(p *[]string) []string {
 		return []string{}
 	}
 	return *p
-}
-
-// normalizeProviderRequestBody 对特定 Provider 的兼容模式做隔离转换。
-// 未知模式由 Provider 验证拦截；这里保持原请求，避免运行时做猜测性改写。
-func normalizeProviderRequestBody(bodyBytes []byte, mode string) ([]byte, []string) {
-	if mode != CompatibilityModeDeepSeekCodex {
-		return bodyBytes, nil
-	}
-	return normalizeDeepSeekCodexRequest(bodyBytes)
-}
-
-// normalizeDeepSeekCodexRequest 移除 Codex 客户端元数据中 DeepSeek Responses
-// 端点不接受的字段。转换为全有或全无：遇到非法 JSON 或重复键时原样放行。
-func normalizeDeepSeekCodexRequest(bodyBytes []byte) ([]byte, []string) {
-	if !json.Valid(bodyBytes) {
-		return bodyBytes, nil
-	}
-
-	root := gjson.ParseBytes(bodyBytes)
-	if !root.IsObject() {
-		return bodyBytes, nil
-	}
-
-	topLevelKeys := 0
-	hasTarget := false
-	root.ForEach(func(key, value gjson.Result) bool {
-		topLevelKeys++
-		switch key.String() {
-		case "prompt_caching", "service_tier":
-			hasTarget = true
-		case "reasoning":
-			if value.IsObject() {
-				value.ForEach(func(reasoningKey, _ gjson.Result) bool {
-					if reasoningKey.String() == "summary" {
-						hasTarget = true
-					}
-					return true
-				})
-			}
-		}
-		return true
-	})
-	if !hasTarget {
-		return bodyBytes, nil
-	}
-
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(bodyBytes, &fields); err != nil || len(fields) != topLevelKeys {
-		return bodyBytes, nil
-	}
-
-	removed := make([]string, 0, 3)
-	for _, field := range []string{"prompt_caching", "service_tier"} {
-		if _, exists := fields[field]; exists {
-			delete(fields, field)
-			removed = append(removed, field)
-		}
-	}
-
-	if rawReasoning, exists := fields["reasoning"]; exists {
-		reasoningRoot := gjson.ParseBytes(rawReasoning)
-		if reasoningRoot.IsObject() {
-			reasoningKeys := 0
-			hasSummary := false
-			reasoningRoot.ForEach(func(key, _ gjson.Result) bool {
-				reasoningKeys++
-				if key.String() == "summary" {
-					hasSummary = true
-				}
-				return true
-			})
-			if hasSummary {
-				var reasoning map[string]json.RawMessage
-				if err := json.Unmarshal(rawReasoning, &reasoning); err != nil || len(reasoning) != reasoningKeys {
-					return bodyBytes, nil
-				}
-				delete(reasoning, "summary")
-				cleanedReasoning, err := json.Marshal(reasoning)
-				if err != nil {
-					return bodyBytes, nil
-				}
-				fields["reasoning"] = cleanedReasoning
-				removed = append(removed, "reasoning.summary")
-			}
-		}
-	}
-
-	cleaned, err := json.Marshal(fields)
-	if err != nil {
-		return bodyBytes, nil
-	}
-	sort.Strings(removed)
-	return cleaned, removed
 }
 
 // sanitizeRequestBody 移除请求体顶层黑名单字段，返回清理后的 body 与被移除的键。
