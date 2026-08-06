@@ -33,6 +33,7 @@ export interface ProviderTimeline {
   platform: string
   availabilityMonitorEnabled: boolean
   connectivityAutoBlacklist: boolean
+  availabilityAutoUnblock: boolean
   availabilityConfig?: AvailabilityConfig | null // 高级配置
   items: HealthCheckResult[]
   latest: HealthCheckResult | null
@@ -45,6 +46,7 @@ export interface AvailabilityConfig {
   testModel?: string
   testEndpoint?: string
   timeout?: number
+  pollIntervalSeconds?: number
 }
 
 const SERVICE_PATH = 'codeswitch/services.HealthCheckService'

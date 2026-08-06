@@ -47,20 +47,24 @@
     "field": {
       "testModel": "测试模型",
       "testEndpoint": "测试端点",
-      "timeout": "超时时间（毫秒）"
+      "timeout": "超时时间（毫秒）",
+      "pollInterval": "检测间隔（秒）"
     },
     "placeholder": {
       "testModel": "留空使用平台默认模型",
       "testEndpoint": "留空使用平台默认端点",
-      "timeout": "默认 15000"
+      "timeout": "默认 15000",
+      "pollInterval": "默认 60"
     },
     "hint": {
-      "timeout": "单位毫秒，留空或 0 将使用默认 15000"
+      "timeout": "单位毫秒，留空或 0 将使用默认 15000",
+      "pollInterval": "每个供应商独立设置，范围 15-86400 秒；修改后立即重新检测"
     },
     "default": "默认",
     "currentModel": "当前模型",
     "currentEndpoint": "当前端点",
     "currentTimeout": "当前超时",
+    "currentPollInterval": "检测间隔（秒）",
     "defaultModel": "平台默认模型",
     "defaultEndpoint": "平台默认端点",
     "advancedConfig": {
@@ -224,6 +228,7 @@
           "level": "优先级分组",
           "availabilityMonitor": "可用性监控",
           "connectivityAutoBlacklist": "失败自动拉黑",
+          "availabilityAutoUnblock": "可用时自动解禁",
           "availabilityTestModel": "测试模型（可选）",
           "availabilityTestEndpoint": "测试端点（可选）",
           "availabilityTimeout": "超时时间（毫秒）",
@@ -261,7 +266,8 @@
           "requestSanitize": "启用后会自动移除转发请求中的非标准字段和不支持的请求头，解决 LiteLLM 等中转的兼容性问题",
           "availabilityMonitor": "启用后会定期进行健康检查，监控此供应商的可用性状态",
           "connectivityAutoBlacklist": "健康检查失败时自动拉黑该供应商",
-          "availabilityAdvancedConfig": "高级配置（测试模型、端点、超时）可在可用性页面中编辑",
+          "availabilityAutoUnblock": "普通黑名单内连续两次检测成功后自动解禁；不影响每日额度封禁",
+          "availabilityAdvancedConfig": "高级配置（测试模型、端点、超时、检测间隔）可在可用性页面中编辑",
           "availabilityTestModel": "用于健康检查的模型，留空则使用平台默认模型",
           "availabilityTestEndpoint": "用于健康检查的 API 端点，留空则使用平台默认端点",
           "availabilityTimeout": "健康检查请求的超时时间（毫秒），默认 15000",

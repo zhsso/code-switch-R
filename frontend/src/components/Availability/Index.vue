@@ -34,6 +34,7 @@ const configForm = ref({
   testModel: '',
   testEndpoint: '',
   timeout: 15000,
+  pollIntervalSeconds: 60,
 })
 
 // 刷新定时器
@@ -203,6 +204,7 @@ function editConfig(platform: string, timeline: ProviderTimeline) {
     testModel: cfg.testModel || '',
     testEndpoint: cfg.testEndpoint || '',
     timeout: cfg.timeout || 15000,
+    pollIntervalSeconds: cfg.pollIntervalSeconds || 60,
   }
   showConfigModal.value = true
 }
@@ -223,6 +225,7 @@ async function saveConfig() {
       testModel: configForm.value.testModel,
       testEndpoint: configForm.value.testEndpoint,
       timeout: Number(configForm.value.timeout) || 15000,
+      pollIntervalSeconds: Number(configForm.value.pollIntervalSeconds) || 60,
     })
     showConfigModal.value = false
     await loadData()
@@ -410,6 +413,7 @@ onUnmounted(() => {
                 <div>{{ t('availability.currentModel') }}：{{ displayConfigValue(timeline.availabilityConfig?.testModel, t('availability.defaultModel')) }}</div>
                 <div>{{ t('availability.currentEndpoint') }}：{{ displayConfigValue(timeline.availabilityConfig?.testEndpoint, t('availability.defaultEndpoint')) }}</div>
                 <div>{{ t('availability.currentTimeout') }}：{{ displayConfigValue(timeline.availabilityConfig?.timeout, '15000ms') }}</div>
+                <div>{{ t('availability.currentPollInterval') }}：{{ displayConfigValue(timeline.availabilityConfig?.pollIntervalSeconds, '60s') }}</div>
               </div>
 
               <!-- 时间线（如果有历史记录） -->
@@ -483,6 +487,20 @@ onUnmounted(() => {
               :placeholder="t('availability.placeholder.timeout')"
             />
             <p class="mt-1 text-xs text-[var(--mac-text-secondary)]">{{ t('availability.hint.timeout') }}</p>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-[var(--mac-text)] mb-1">{{ t('availability.field.pollInterval') }}</label>
+            <input
+              v-model.number="configForm.pollIntervalSeconds"
+              type="number"
+              min="15"
+              max="86400"
+              step="1"
+              class="w-full rounded-lg border border-[var(--mac-border)] bg-[var(--mac-surface-strong)] px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[var(--mac-accent)]"
+              :placeholder="t('availability.placeholder.pollInterval')"
+            />
+            <p class="mt-1 text-xs text-[var(--mac-text-secondary)]">{{ t('availability.hint.pollInterval') }}</p>
           </div>
         </div>
 

@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
@@ -32,12 +31,17 @@ const (
 
 // 默认配置常量
 const (
-	DefaultOperationalThresholdMs = 6000  // 默认正常阈值（毫秒）
-	DefaultTimeoutMs              = 15000 // 默认超时（毫秒）
-	DefaultPollIntervalSeconds    = 60    // 默认检测间隔（秒）
-	DefaultFailureThreshold       = 2     // 默认拉黑阈值（连续失败次数）
-	MaxConcurrentChecks           = 5     // 最大并发检测数
-	MaxHistoryPerProvider         = 60    // 每个 Provider 最多保留历史数
+	DefaultOperationalThresholdMs          = 6000  // 默认正常阈值（毫秒）
+	DefaultTimeoutMs                       = 15000 // 默认超时（毫秒）
+	DefaultAvailabilityPollIntervalSeconds = 60    // 默认检测间隔（秒）
+	MinAvailabilityPollIntervalSeconds     = 15    // 最短检测间隔（秒）
+	MaxAvailabilityPollIntervalSeconds     = 86400 // 最长检测间隔（秒）
+	DefaultFailureThreshold                = 2     // 默认拉黑阈值（连续失败次数）
+	MaxConcurrentChecks                    = 5     // 最大并发检测数
+	MaxHistoryPerProvider                  = 60    // 每个 Provider 最多保留历史数
+	AvailabilityRecoveryThreshold          = 2     // 普通黑名单内连续成功两次后自动解禁
+	availabilitySchedulerTick              = time.Second
+	availabilityConfigRefreshInterval      = time.Minute
 )
 
 // HealthCheckResult 健康检查结果
@@ -72,6 +76,7 @@ type ProviderTimeline struct {
 	Platform                   string              `json:"platform"`
 	AvailabilityMonitorEnabled bool                `json:"availabilityMonitorEnabled"`
 	ConnectivityAutoBlacklist  bool                `json:"connectivityAutoBlacklist"`
+	AvailabilityAutoUnblock    bool                `json:"availabilityAutoUnblock"`
 	AvailabilityConfig         *AvailabilityConfig `json:"availabilityConfig,omitempty"` // 高级配置
 	Items                      []HealthCheckResult `json:"items"`                        // 历史记录
 	Latest                     *HealthCheckResult  `json:"latest"`                       // 最新一条
@@ -87,6 +92,18 @@ type AvailabilityFailureCounter struct {
 	LastFailedAt     time.Time // 最后失败时间
 }
 
+type availabilityRecoveryCounter struct {
+	BlacklistedUntil     time.Time
+	ConsecutiveSuccesses int
+}
+
+type availabilityCheckState struct {
+	InFlight       bool
+	NextDue        time.Time
+	Interval       time.Duration
+	RunAfterFlight bool
+}
+
 // HealthCheckService 健康检查服务
 type HealthCheckService struct {
 	providerService   *ProviderService
@@ -95,14 +112,20 @@ type HealthCheckService struct {
 	settingsService   *SettingsService
 	policy            *DefaultModelPolicy
 
-	mu            sync.RWMutex
-	failCounters  map[string]*AvailabilityFailureCounter  // key: platform:providerName
-	latestResults map[string]map[int64]*HealthCheckResult // platform -> providerID -> result
+	mu                        sync.RWMutex
+	failCounters              map[string]*AvailabilityFailureCounter // key: platform:providerName
+	recoveryCounters          map[string]*availabilityRecoveryCounter
+	latestResults             map[string]map[int64]*HealthCheckResult // platform -> providerID -> result
+	checkStates               map[string]*availabilityCheckState
+	checkSlots                chan struct{}
+	scheduleConfigGen         int64
+	scheduleConfigLoaded      bool
+	nextScheduleConfigRefresh time.Time
 
 	// 后台轮询
-	running      bool
-	stopChan     chan struct{}
-	pollInterval time.Duration
+	running       bool
+	stopChan      chan struct{}
+	schedulerDone chan struct{}
 
 	// HTTP 客户端（带连接池）；insecure 变体供开启 insecureSkipVerify 的供应商使用，
 	// 与转发路径保持同一验证策略，避免"转发通、探测挂"导致误拉黑
@@ -127,10 +150,12 @@ func NewHealthCheckService(
 		settingsService:  settingsService,
 		policy:           policy,
 		failCounters:     make(map[string]*AvailabilityFailureCounter),
+		recoveryCounters: make(map[string]*availabilityRecoveryCounter),
+		checkStates:      make(map[string]*availabilityCheckState),
+		checkSlots:       make(chan struct{}, MaxConcurrentChecks),
 		latestResults: map[string]map[int64]*HealthCheckResult{
 			CodexPlatform: {},
 		},
-		pollInterval: time.Duration(DefaultPollIntervalSeconds) * time.Second,
 		client: &http.Client{
 			// 由每次请求的 context 控制超时，避免固定值截断自定义配置
 			Timeout: 0,
@@ -231,6 +256,7 @@ func (hcs *HealthCheckService) GetLatestResults() (map[string][]ProviderTimeline
 				Platform:                   platform,
 				AvailabilityMonitorEnabled: p.AvailabilityMonitorEnabled,
 				ConnectivityAutoBlacklist:  p.ConnectivityAutoBlacklist,
+				AvailabilityAutoUnblock:    p.AvailabilityAutoUnblock,
 				AvailabilityConfig:         p.AvailabilityConfig,
 			}
 
@@ -459,25 +485,38 @@ func (hcs *HealthCheckService) RunSingleCheck(platform string, providerID int64)
 		return nil, fmt.Errorf("未找到供应商 ID: %d", providerID)
 	}
 
-	// 执行检测（使用 Provider 配置的有效超时）
-	timeout := hcs.getEffectiveTimeout(targetProvider)
+	key := availabilityCheckKey(platform, targetProvider.ID)
+	interval := hcs.providerPollInterval(*targetProvider)
+	if !hcs.beginManualCheck(key, interval) {
+		return nil, fmt.Errorf("Provider %s 正在检测中", targetProvider.Name)
+	}
+	defer hcs.finishProviderCheck(key)
+
+	result := hcs.executeProviderCheck(*targetProvider, platform)
+	if result == nil {
+		return nil, fmt.Errorf("Provider %s 检测未返回结果", targetProvider.Name)
+	}
+	return result, nil
+}
+
+func (hcs *HealthCheckService) executeProviderCheck(provider Provider, platform string) *HealthCheckResult {
+	hcs.checkSlots <- struct{}{}
+	defer func() { <-hcs.checkSlots }()
+
+	timeout := hcs.getEffectiveTimeout(&provider)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
 	defer cancel()
 
-	result := hcs.checkProvider(ctx, *targetProvider, platform)
-
-	// 保存结果
+	result := hcs.checkProvider(ctx, provider, platform)
+	if result == nil {
+		return nil
+	}
 	if err := hcs.saveResult(result); err != nil {
 		log.Printf("[HealthCheck] 保存结果失败: %v", err)
 	}
-
-	// 更新缓存
 	hcs.updateCache(result)
-
-	// 处理拉黑联动
-	hcs.handleBlacklistIntegration(targetProvider, result)
-
-	return result, nil
+	hcs.handleBlacklistIntegration(&provider, result)
+	return result
 }
 
 // RunAllChecks 手动触发全部检测
@@ -490,31 +529,6 @@ func (hcs *HealthCheckService) RunAllChecks() (map[string][]HealthCheckResult, e
 	}
 
 	return results, nil
-}
-
-func batchCheckTimeout(providers []Provider) time.Duration {
-	maxTimeout := DefaultTimeoutMs
-	enabled := 0
-	for i := range providers {
-		if !providers[i].AvailabilityMonitorEnabled {
-			continue
-		}
-		enabled++
-		timeout := DefaultTimeoutMs
-		if providers[i].AvailabilityConfig != nil && providers[i].AvailabilityConfig.Timeout > 0 {
-			timeout = providers[i].AvailabilityConfig.Timeout
-		}
-		if timeout > maxTimeout {
-			maxTimeout = timeout
-		}
-	}
-	// 并发上限为 MaxConcurrentChecks,超出的供应商要排队;
-	// 整体超时按波次数放大,避免排队靠后的健康供应商被共享 deadline 误杀进而误拉黑
-	waves := (enabled + MaxConcurrentChecks - 1) / MaxConcurrentChecks
-	if waves < 1 {
-		waves = 1
-	}
-	return time.Duration(maxTimeout)*time.Millisecond*time.Duration(waves) + 5*time.Second
 }
 
 // checkAllProviders 检测指定平台的所有启用监控的供应商
@@ -532,10 +546,6 @@ func (hcs *HealthCheckService) checkAllProviders(platform string, skipDailyBlock
 	var results []HealthCheckResult
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	sem := make(chan struct{}, MaxConcurrentChecks)
-
-	ctx, cancel := context.WithTimeout(context.Background(), batchCheckTimeout(providers))
-	defer cancel()
 
 	for _, provider := range providers {
 		// 只检测启用了可用性监控的供应商
@@ -553,34 +563,27 @@ func (hcs *HealthCheckService) checkAllProviders(platform string, skipDailyBlock
 				continue
 			}
 		}
+		key := availabilityCheckKey(platform, provider.ID)
+		if !hcs.beginManualCheck(key, hcs.providerPollInterval(provider)) {
+			log.Printf("[HealthCheck] %s/%s 已有检测进行中，跳过重复检测", platform, provider.Name)
+			continue
+		}
 
 		wg.Add(1)
 		go func(p Provider) {
 			defer wg.Done()
+			defer hcs.finishProviderCheck(availabilityCheckKey(platform, p.ID))
 			// panic 必须兜在 wg.Done 之后注册：这里 panic 若不恢复会直接杀进程；
 			// 恢复后本 provider 的结果缺席，但整批检查照常完成
 			defer RecoverAndLog("healthcheck-provider")
-			sem <- struct{}{}
-			defer func() { <-sem }()
 
-			result := hcs.checkProvider(ctx, p, platform)
+			result := hcs.executeProviderCheck(p, platform)
 			if result == nil {
 				// 现有实现靠"探测地址池至少一个元素"保证非 nil，属约定而非代码保证；
 				// 判空兜底避免该约定被破坏时在后台协程里空指针
 				log.Printf("[HealthCheck] %s/%s: 探测未返回结果", platform, p.Name)
 				return
 			}
-
-			// 保存结果
-			if err := hcs.saveResult(result); err != nil {
-				log.Printf("[HealthCheck] 保存结果失败: %v", err)
-			}
-
-			// 更新缓存
-			hcs.updateCache(result)
-
-			// 处理拉黑联动
-			hcs.handleBlacklistIntegration(&p, result)
 
 			mu.Lock()
 			results = append(results, *result)
@@ -959,8 +962,195 @@ func (hcs *HealthCheckService) updateCache(result *HealthCheckResult) {
 	hcs.latestResults[result.Platform][result.ProviderID] = result
 }
 
+func availabilityCheckKey(platform string, providerID int64) string {
+	return fmt.Sprintf("%s:%d", platform, providerID)
+}
+
+func availabilityRecoveryKey(platform, providerName string) string {
+	return fmt.Sprintf("%s:%s", platform, providerName)
+}
+
+func (hcs *HealthCheckService) providerPollInterval(provider Provider) time.Duration {
+	return time.Duration(provider.EffectiveAvailabilityPollIntervalSeconds()) * time.Second
+}
+
+func (hcs *HealthCheckService) beginManualCheck(key string, interval time.Duration) bool {
+	hcs.mu.Lock()
+	defer hcs.mu.Unlock()
+	state := hcs.checkStates[key]
+	if state == nil {
+		state = &availabilityCheckState{}
+		hcs.checkStates[key] = state
+	}
+	if state.InFlight {
+		return false
+	}
+	state.InFlight = true
+	state.Interval = interval
+	state.RunAfterFlight = false
+	return true
+}
+
+func (hcs *HealthCheckService) beginScheduledCheck(key string, interval time.Duration, now time.Time) bool {
+	hcs.mu.Lock()
+	defer hcs.mu.Unlock()
+	state := hcs.checkStates[key]
+	if state == nil {
+		state = &availabilityCheckState{Interval: interval, NextDue: now}
+		hcs.checkStates[key] = state
+	} else if state.Interval != interval {
+		state.Interval = interval
+		if state.InFlight {
+			state.RunAfterFlight = true
+			return false
+		}
+		state.NextDue = now
+	}
+	if state.InFlight || state.NextDue.After(now) {
+		return false
+	}
+	state.InFlight = true
+	return true
+}
+
+func (hcs *HealthCheckService) finishProviderCheck(key string) {
+	hcs.mu.Lock()
+	defer hcs.mu.Unlock()
+	state := hcs.checkStates[key]
+	if state == nil {
+		return
+	}
+	state.InFlight = false
+	if state.RunAfterFlight {
+		state.RunAfterFlight = false
+		state.NextDue = time.Now()
+		return
+	}
+	interval := state.Interval
+	if interval <= 0 {
+		interval = time.Duration(DefaultAvailabilityPollIntervalSeconds) * time.Second
+	}
+	state.NextDue = time.Now().Add(interval)
+}
+
+func (hcs *HealthCheckService) scheduleProviderCheckNow(platform string, providerID int64) {
+	key := availabilityCheckKey(platform, providerID)
+	hcs.mu.Lock()
+	defer hcs.mu.Unlock()
+	state := hcs.checkStates[key]
+	if state == nil {
+		state = &availabilityCheckState{}
+		hcs.checkStates[key] = state
+	}
+	if state.InFlight {
+		state.RunAfterFlight = true
+		return
+	}
+	state.NextDue = time.Now()
+}
+
+func (hcs *HealthCheckService) removeProviderCheckSchedule(platform string, providerID int64) {
+	key := availabilityCheckKey(platform, providerID)
+	hcs.mu.Lock()
+	defer hcs.mu.Unlock()
+	if state := hcs.checkStates[key]; state != nil && state.InFlight {
+		state.RunAfterFlight = false
+		return
+	}
+	delete(hcs.checkStates, key)
+}
+
+func (hcs *HealthCheckService) pruneProviderCheckSchedules(active map[string]struct{}) {
+	hcs.mu.Lock()
+	defer hcs.mu.Unlock()
+	for key, state := range hcs.checkStates {
+		if _, ok := active[key]; !ok && !state.InFlight {
+			delete(hcs.checkStates, key)
+		}
+	}
+}
+
+func (hcs *HealthCheckService) shouldScanProviderSchedules(now time.Time) bool {
+	configGen := hcs.providerService.configGeneration()
+	hcs.mu.RLock()
+	defer hcs.mu.RUnlock()
+	if !hcs.scheduleConfigLoaded || configGen != hcs.scheduleConfigGen || !hcs.nextScheduleConfigRefresh.After(now) {
+		return true
+	}
+	for _, state := range hcs.checkStates {
+		if !state.InFlight && (state.NextDue.IsZero() || !state.NextDue.After(now)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (hcs *HealthCheckService) markScheduleConfigLoaded(generation int64, now time.Time) {
+	hcs.mu.Lock()
+	hcs.scheduleConfigGen = generation
+	hcs.scheduleConfigLoaded = true
+	hcs.nextScheduleConfigRefresh = now.Add(availabilityConfigRefreshInterval)
+	hcs.mu.Unlock()
+}
+
+func isAvailabilitySuccess(status string) bool {
+	return status == HealthStatusOperational || status == HealthStatusDegraded
+}
+
+func (hcs *HealthCheckService) resetRecoveryCounter(key string) {
+	hcs.mu.Lock()
+	delete(hcs.recoveryCounters, key)
+	hcs.mu.Unlock()
+}
+
+func (hcs *HealthCheckService) handleAvailabilityAutoUnblock(provider *Provider, result *HealthCheckResult) bool {
+	key := availabilityRecoveryKey(result.Platform, provider.Name)
+	if !provider.AvailabilityAutoUnblock || hcs.blacklistService == nil {
+		hcs.resetRecoveryCounter(key)
+		return false
+	}
+
+	blacklisted, until := hcs.blacklistService.IsBlacklisted(result.Platform, provider.Name)
+	if !blacklisted || until == nil {
+		hcs.resetRecoveryCounter(key)
+		return false
+	}
+	if !isAvailabilitySuccess(result.Status) {
+		hcs.resetRecoveryCounter(key)
+		return false
+	}
+
+	hcs.mu.Lock()
+	counter := hcs.recoveryCounters[key]
+	if counter == nil || !counter.BlacklistedUntil.Equal(*until) {
+		counter = &availabilityRecoveryCounter{BlacklistedUntil: *until}
+		hcs.recoveryCounters[key] = counter
+	}
+	counter.ConsecutiveSuccesses++
+	successes := counter.ConsecutiveSuccesses
+	hcs.mu.Unlock()
+
+	log.Printf("[HealthCheck] Provider %s 黑名单恢复检测成功: %d/%d", provider.Name, successes, AvailabilityRecoveryThreshold)
+	if successes < AvailabilityRecoveryThreshold {
+		return false
+	}
+
+	recovered, err := hcs.blacklistService.AutoUnblockOnAvailabilitySuccess(result.Platform, provider.Name)
+	if err != nil {
+		log.Printf("[HealthCheck] Provider %s 自动解禁失败: %v", provider.Name, err)
+		return false
+	}
+	hcs.resetRecoveryCounter(key)
+	return recovered
+}
+
 // handleBlacklistIntegration 处理与拉黑服务的联动
 func (hcs *HealthCheckService) handleBlacklistIntegration(provider *Provider, result *HealthCheckResult) {
+	if provider == nil || result == nil {
+		return
+	}
+	autoRecovered := hcs.handleAvailabilityAutoUnblock(provider, result)
+
 	// 未启用自动拉黑则跳过
 	if !provider.ConnectivityAutoBlacklist {
 		return
@@ -975,7 +1165,7 @@ func (hcs *HealthCheckService) handleBlacklistIntegration(provider *Provider, re
 	}
 
 	// 获取或创建失败计数器
-	counterKey := fmt.Sprintf("%s:%s", result.Platform, provider.Name)
+	counterKey := availabilityRecoveryKey(result.Platform, provider.Name)
 	hcs.mu.Lock()
 	counter, exists := hcs.failCounters[counterKey]
 	if !exists {
@@ -1003,7 +1193,7 @@ func (hcs *HealthCheckService) handleBlacklistIntegration(provider *Provider, re
 		if prevFails >= failureThreshold && hcs.blacklistService != nil {
 			shouldTriggerBlacklist = true
 		}
-	} else if result.Status == HealthStatusOperational {
+	} else if isAvailabilitySuccess(result.Status) {
 		// 成功，清零失败计数
 		prevFails = counter.ConsecutiveFails
 		counter.ConsecutiveFails = 0
@@ -1014,7 +1204,7 @@ func (hcs *HealthCheckService) handleBlacklistIntegration(provider *Provider, re
 		}
 
 		// 标记需要通知拉黑服务恢复
-		if hcs.blacklistService != nil {
+		if hcs.blacklistService != nil && !autoRecovered {
 			shouldRecordSuccess = true
 		}
 	}
@@ -1036,81 +1226,75 @@ func (hcs *HealthCheckService) handleBlacklistIntegration(provider *Provider, re
 			log.Printf("[HealthCheck] RecordSuccess 失败: %v", err)
 		}
 	}
-	// degraded 状态不触发拉黑，也不清零计数
+	// validation_failed 不触发拉黑，但会在自动解禁逻辑中清零恢复计数。
 }
 
 // StartBackgroundPolling 启动后台定时巡检
 func (hcs *HealthCheckService) StartBackgroundPolling() {
 	hcs.mu.Lock()
-	defer hcs.mu.Unlock()
-
 	if hcs.running {
+		hcs.mu.Unlock()
 		return
 	}
-
-	// 获取配置的轮询间隔
-	pollIntervalSeconds := DefaultPollIntervalSeconds
-	if hcs.settingsService != nil {
-		if interval := hcs.settingsService.GetIntSetting("availability_poll_interval_seconds"); interval > 0 {
-			pollIntervalSeconds = interval
-		}
-	}
-	hcs.pollInterval = time.Duration(pollIntervalSeconds) * time.Second
-
 	hcs.stopChan = make(chan struct{})
+	hcs.schedulerDone = make(chan struct{})
 	hcs.running = true
+	stop := hcs.stopChan
+	done := hcs.schedulerDone
+	hcs.mu.Unlock()
 
-	// 以参数捕获本轮的 stop channel 与轮询间隔：
+	// 以参数捕获本轮的 stop channel：
 	// 协程内若直接读 hcs.stopChan，Stop→Start 快速切换时旧协程会读到新 channel 而永不退出，
-	// 造成双协程巡检（失败计数翻倍、历史重复写入）；且无锁读字段与 Start 持锁写构成数据竞争
-	go func(stop chan struct{}, interval time.Duration) {
+	// 造成双协程巡检（失败计数翻倍、历史重复写入）。
+	go func(stop chan struct{}, done chan struct{}) {
+		defer close(done)
 		defer RecoverAndLog("healthcheck-scheduler")
-		// 启动时延迟随机时间（0-10s），避免整点风暴。
-		// 抖动等待必须响应 stop：退出流程若落在这个窗口内，
-		// 旧写法会在 StopBackgroundPolling 之后照样拉起一轮全量巡检
-		jitter := time.Duration(rand.Intn(10000)) * time.Millisecond
-		select {
-		case <-time.After(jitter):
-		case <-stop:
-			return
-		}
-
-		// 立即执行一次
-		hcs.runAllPlatformChecks()
-
-		// 添加抖动（±10%）
-		ticker := time.NewTicker(interval)
+		ticker := time.NewTicker(availabilitySchedulerTick)
 		defer ticker.Stop()
 
 		for {
 			select {
+			case <-stop:
+				log.Println("[HealthCheck] 后台巡检已停止")
+				return
+			default:
+			}
+
+			// 调度循环只挑选已到期的 Provider，网络探测在独立协程中执行。
+			// 单 Provider 单飞状态会阻止手动检测与后台检测重叠。
+			func() {
+				defer RecoverAndLog("healthcheck-round")
+				hcs.runScheduledPlatformChecks()
+			}()
+
+			select {
 			case <-ticker.C:
-				// 逐轮兜底：单轮巡检 panic 只丢当轮，调度循环继续存活
-				func() {
-					defer RecoverAndLog("healthcheck-round")
-					hcs.runAllPlatformChecks()
-				}()
 			case <-stop:
 				log.Println("[HealthCheck] 后台巡检已停止")
 				return
 			}
 		}
-	}(hcs.stopChan, hcs.pollInterval)
+	}(stop, done)
 
-	log.Printf("[HealthCheck] 后台巡检已启动（间隔: %v）", hcs.pollInterval)
+	log.Printf("[HealthCheck] 后台巡检已启动（每 Provider 独立间隔，调度精度: %v）", availabilitySchedulerTick)
 }
 
 // StopBackgroundPolling 停止后台巡检
 func (hcs *HealthCheckService) StopBackgroundPolling() {
 	hcs.mu.Lock()
-	defer hcs.mu.Unlock()
-
 	if !hcs.running {
+		hcs.mu.Unlock()
 		return
 	}
 
 	close(hcs.stopChan)
 	hcs.running = false
+	done := hcs.schedulerDone
+	hcs.mu.Unlock()
+
+	if done != nil {
+		<-done
+	}
 }
 
 // IsPollingRunning 检查后台巡检是否运行中
@@ -1133,12 +1317,61 @@ func (hcs *HealthCheckService) SetAutoAvailabilityPolling(enabled bool) {
 	}
 }
 
-// runAllPlatformChecks 执行所有平台的检测
-func (hcs *HealthCheckService) runAllPlatformChecks() {
+func (hcs *HealthCheckService) runScheduledPlatformChecks() {
+	now := time.Now()
+	if !hcs.shouldScanProviderSchedules(now) {
+		return
+	}
 	platforms := []string{CodexPlatform}
 	for _, platform := range platforms {
-		hcs.checkAllProviders(platform, true)
+		hcs.scheduleDueProviderChecks(platform, now)
 	}
+}
+
+func (hcs *HealthCheckService) scheduleDueProviderChecks(platform string, now time.Time) {
+	providers, generation, err := hcs.providerService.LoadProvidersWithGen(platform)
+	if err != nil {
+		log.Printf("[HealthCheck] 加载 %s 供应商失败: %v", platform, err)
+		return
+	}
+
+	active := make(map[string]struct{}, len(providers))
+	for _, provider := range providers {
+		if !provider.AvailabilityMonitorEnabled {
+			continue
+		}
+		key := availabilityCheckKey(platform, provider.ID)
+		active[key] = struct{}{}
+		if !hcs.beginScheduledCheck(key, hcs.providerPollInterval(provider), now) {
+			continue
+		}
+
+		if hcs.dailyLimitService != nil {
+			blocked, blockErr := hcs.dailyLimitService.IsProviderBlocked(platform, provider)
+			if blockErr != nil {
+				log.Printf("[HealthCheck] Provider %s 每日额度状态读取失败，跳过自动检查: %v", provider.Name, blockErr)
+				blocked = provider.DailyCostLimitEnabled
+			}
+			if blocked {
+				log.Printf("[HealthCheck] Provider %s 当日额度已封禁，跳过自动检查", provider.Name)
+				hcs.finishProviderCheck(key)
+				continue
+			}
+		}
+
+		go func(p Provider, scheduleKey string) {
+			defer hcs.finishProviderCheck(scheduleKey)
+			defer RecoverAndLog("healthcheck-provider")
+			result := hcs.executeProviderCheck(p, platform)
+			if result == nil {
+				log.Printf("[HealthCheck] %s/%s: 探测未返回结果", platform, p.Name)
+				return
+			}
+			log.Printf("[HealthCheck] %s/%s: status=%s, latency=%dms", platform, p.Name, result.Status, result.LatencyMs)
+		}(provider, key)
+	}
+	hcs.pruneProviderCheckSchedules(active)
+	hcs.markScheduleConfigLoaded(generation, now)
 }
 
 // SetAvailabilityMonitorEnabled 启用/禁用指定 Provider 的可用性监控
@@ -1159,6 +1392,11 @@ func (hcs *HealthCheckService) SetAvailabilityMonitorEnabled(platform string, pr
 	})
 	if err != nil {
 		return err
+	}
+	if enabled {
+		hcs.scheduleProviderCheckNow(platform, providerID)
+	} else {
+		hcs.removeProviderCheckSchedule(platform, providerID)
 	}
 
 	log.Printf("[HealthCheck] Provider %d 可用性监控已%s", providerID, map[bool]string{true: "启用", false: "禁用"}[enabled])
@@ -1197,6 +1435,13 @@ func (hcs *HealthCheckService) SaveAvailabilityConfig(platform string, providerI
 	if err := requireCodexPlatform(platform); err != nil {
 		return err
 	}
+	if config == nil {
+		config = &AvailabilityConfig{}
+	}
+	if interval := config.PollIntervalSeconds; interval != 0 &&
+		(interval < MinAvailabilityPollIntervalSeconds || interval > MaxAvailabilityPollIntervalSeconds) {
+		return fmt.Errorf("可用性检测间隔必须在 %d-%d 秒之间", MinAvailabilityPollIntervalSeconds, MaxAvailabilityPollIntervalSeconds)
+	}
 	platform = CodexPlatform
 	err := hcs.providerService.mutateProviders(platform, func(providers []Provider) ([]Provider, error) {
 		for i := range providers {
@@ -1210,6 +1455,7 @@ func (hcs *HealthCheckService) SaveAvailabilityConfig(platform string, providerI
 	if err != nil {
 		return err
 	}
+	hcs.scheduleProviderCheckNow(platform, providerID)
 
 	log.Printf("[HealthCheck] Provider %d 高级配置已保存", providerID)
 	return nil

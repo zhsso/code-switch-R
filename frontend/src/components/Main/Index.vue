@@ -740,6 +740,20 @@
                   <span class="field-hint">{{ t('components.main.form.hints.connectivityAutoBlacklist') }}</span>
                 </div>
 
+                <div v-if="modalState.form.availabilityMonitorEnabled" class="form-field switch-field">
+                  <span>{{ t('components.main.form.labels.availabilityAutoUnblock') }}</span>
+                  <div class="switch-inline">
+                    <label class="mac-switch">
+                      <input type="checkbox" v-model="modalState.form.availabilityAutoUnblock" />
+                      <span></span>
+                    </label>
+                    <span class="switch-text">
+                      {{ modalState.form.availabilityAutoUnblock ? t('components.main.form.switch.on') : t('components.main.form.switch.off') }}
+                    </span>
+                  </div>
+                  <span class="field-hint">{{ t('components.main.form.hints.availabilityAutoUnblock') }}</span>
+                </div>
+
                 <!-- 高级配置提示 -->
                 <div v-if="modalState.form.availabilityMonitorEnabled" class="form-field">
                   <span class="field-hint" style="color: #6b7280;">
@@ -1207,11 +1221,13 @@ const serializeProviders = (providers: AutomationCard[]) =>
     // 确保可用性配置正确序列化
     availabilityMonitorEnabled: !!provider.availabilityMonitorEnabled,
     connectivityAutoBlacklist: !!provider.connectivityAutoBlacklist,
+    availabilityAutoUnblock: !!provider.availabilityAutoUnblock,
     availabilityConfig: provider.availabilityConfig
       ? {
           testModel: provider.availabilityConfig.testModel || '',
           testEndpoint: provider.availabilityConfig.testEndpoint || '',
           timeout: provider.availabilityConfig.timeout || 15000,
+          pollIntervalSeconds: provider.availabilityConfig.pollIntervalSeconds || 60,
         }
       : undefined,
     // 清除旧连通性字段（避免再次写入配置文件）
@@ -1665,6 +1681,19 @@ const handleProviderBlacklisted = (event: { data: { platform: string; providerNa
   switchToTabAndHighlight(platform, providerName)
 }
 
+const handleProviderRecovered = (event: { data: { platform: string; providerName: string } }) => {
+  const { platform, providerName } = event.data
+  console.log('[Event] provider:recovered', platform, providerName)
+  if (platform !== activeTab) return
+
+  highlightedProvider.value = providerName
+  if (highlightTimer) clearTimeout(highlightTimer)
+  highlightTimer = window.setTimeout(() => {
+    highlightedProvider.value = null
+  }, 3000)
+  void Promise.all([loadBlacklistStatus(activeTab), loadAvailabilityResults()])
+}
+
 const handleServerEventsResync = () => {
   void Promise.allSettled([
     loadProviderStats(activeTab),
@@ -1693,6 +1722,7 @@ const scrollToCard = (el: HTMLElement | null) => {
 // 事件取消订阅函数
 let unsubscribeSwitched: (() => void) | undefined
 let unsubscribeBlacklisted: (() => void) | undefined
+let unsubscribeRecovered: (() => void) | undefined
 let unsubscribeResync: (() => void) | undefined
 
 onMounted(async () => {
@@ -1754,6 +1784,7 @@ onMounted(async () => {
   // 监听供应商切换和拉黑事件
   unsubscribeSwitched = Events.On('provider:switched', handleProviderSwitched)
   unsubscribeBlacklisted = Events.On('provider:blacklisted', handleProviderBlacklisted)
+  unsubscribeRecovered = Events.On('provider:recovered', handleProviderRecovered)
   unsubscribeResync = Events.On('system:resync', handleServerEventsResync)
 })
 
@@ -1787,6 +1818,9 @@ onUnmounted(() => {
   }
   if (unsubscribeBlacklisted) {
     unsubscribeBlacklisted()
+  }
+  if (unsubscribeRecovered) {
+    unsubscribeRecovered()
   }
   if (unsubscribeResync) {
     unsubscribeResync()
@@ -1924,10 +1958,12 @@ type VendorForm = {
   // === 可用性监控配置（新） ===
   availabilityMonitorEnabled?: boolean
   connectivityAutoBlacklist?: boolean
+  availabilityAutoUnblock?: boolean
   availabilityConfig?: {
     testModel?: string
     testEndpoint?: string
     timeout?: number
+    pollIntervalSeconds?: number
   }
   // === 旧连通性字段（已废弃） ===
   /** @deprecated */
@@ -1982,10 +2018,12 @@ const defaultFormValues = (platform?: string): VendorForm => ({
   // 可用性监控配置（新）
   availabilityMonitorEnabled: false,
   connectivityAutoBlacklist: false,
+  availabilityAutoUnblock: false,
   availabilityConfig: {
     testModel: '',
     testEndpoint: getDefaultEndpoint(platform || 'codex'),
     timeout: 15000,
+    pollIntervalSeconds: 60,
   },
   // 旧连通性字段（已废弃，置空）
   connectivityCheck: false,
@@ -2224,6 +2262,7 @@ const openEditModal = (card: AutomationCard) => {
     availabilityMonitorEnabled:
       card.availabilityMonitorEnabled ?? card.connectivityCheck ?? false,
     connectivityAutoBlacklist: card.connectivityAutoBlacklist ?? false,
+    availabilityAutoUnblock: card.availabilityAutoUnblock ?? false,
     availabilityConfig: {
       testModel:
         card.availabilityConfig?.testModel || card.connectivityTestModel || '',
@@ -2232,6 +2271,7 @@ const openEditModal = (card: AutomationCard) => {
         card.connectivityTestEndpoint ||
         getDefaultEndpoint(activeTab),
       timeout: card.availabilityConfig?.timeout || 15000,
+      pollIntervalSeconds: card.availabilityConfig?.pollIntervalSeconds || 60,
     },
     // 旧连通性字段不再写入表单
     connectivityCheck: false,
@@ -2366,12 +2406,14 @@ const submitModal = async (): Promise<boolean> => {
       // 可用性监控配置（新）
       availabilityMonitorEnabled: !!modalState.form.availabilityMonitorEnabled,
       connectivityAutoBlacklist: !!modalState.form.connectivityAutoBlacklist,
+      availabilityAutoUnblock: !!modalState.form.availabilityAutoUnblock,
       availabilityConfig: {
         testModel: modalState.form.availabilityConfig?.testModel || '',
         testEndpoint:
           modalState.form.availabilityConfig?.testEndpoint ||
           getDefaultEndpoint(modalState.tabId),
         timeout: modalState.form.availabilityConfig?.timeout || 15000,
+        pollIntervalSeconds: modalState.form.availabilityConfig?.pollIntervalSeconds || 60,
       },
       // 旧连通性字段清空（避免再次写入）
       connectivityCheck: false,
@@ -2415,12 +2457,14 @@ const submitModal = async (): Promise<boolean> => {
       // 可用性监控配置（新）
       availabilityMonitorEnabled: !!modalState.form.availabilityMonitorEnabled,
       connectivityAutoBlacklist: !!modalState.form.connectivityAutoBlacklist,
+      availabilityAutoUnblock: !!modalState.form.availabilityAutoUnblock,
       availabilityConfig: {
         testModel: modalState.form.availabilityConfig?.testModel || '',
         testEndpoint:
           modalState.form.availabilityConfig?.testEndpoint ||
           getDefaultEndpoint(modalState.tabId),
         timeout: modalState.form.availabilityConfig?.timeout || 15000,
+        pollIntervalSeconds: modalState.form.availabilityConfig?.pollIntervalSeconds || 60,
       },
       // 旧连通性字段清空
       connectivityCheck: false,

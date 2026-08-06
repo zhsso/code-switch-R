@@ -32,11 +32,14 @@ export type AutomationCard = {
   availabilityMonitorEnabled?: boolean
   // 连通性自动拉黑：检测失败时是否自动拉黑该供应商
   connectivityAutoBlacklist?: boolean
-  // 可用性高级配置：测试模型、端点和超时
+  // 可用时自动解禁：普通黑名单内连续检测成功后提前恢复
+  availabilityAutoUnblock?: boolean
+  // 可用性高级配置：测试模型、端点、超时和后台检测间隔
   availabilityConfig?: {
-    testModel?: string      // 测试用模型
-    testEndpoint?: string   // 测试端点路径
-    timeout?: number        // 超时时间（毫秒）
+    testModel?: string            // 测试用模型
+    testEndpoint?: string         // 测试端点路径
+    timeout?: number              // 超时时间（毫秒）
+    pollIntervalSeconds?: number  // 后台检测间隔（秒）
   }
 
   // 跳过上游 TLS 证书验证（仅该供应商，自签名/企业代理场景；存在中间人风险）

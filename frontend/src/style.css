@@ -1448,6 +1448,24 @@ html.dark .secondary-btn:active:not(:disabled) {
   gap: 10px;
 }
 
+@media (max-width: 640px) {
+  .switch-field {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 12px;
+    row-gap: 6px;
+  }
+
+  .switch-field > .switch-inline {
+    justify-self: end;
+  }
+
+  .switch-field > .field-hint {
+    grid-column: 1 / -1;
+  }
+}
+
 .switch-text {
   font-size: 0.85rem;
   color: var(--mac-text-secondary);

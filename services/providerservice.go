@@ -18,9 +18,10 @@ var ErrProviderConfigConflict = errors.New("provider configuration changed")
 // AvailabilityConfig 可用性监控高级配置
 // 在可用性页面的"高级配置"弹窗中设置，可选
 type AvailabilityConfig struct {
-	TestModel    string `json:"testModel,omitempty"`    // 覆盖默认测试模型
-	TestEndpoint string `json:"testEndpoint,omitempty"` // 覆盖默认测试端点
-	Timeout      int    `json:"timeout,omitempty"`      // 覆盖默认超时（毫秒）
+	TestModel           string `json:"testModel,omitempty"`           // 覆盖默认测试模型
+	TestEndpoint        string `json:"testEndpoint,omitempty"`        // 覆盖默认测试端点
+	Timeout             int    `json:"timeout,omitempty"`             // 覆盖默认超时（毫秒）
+	PollIntervalSeconds int    `json:"pollIntervalSeconds,omitempty"` // 后台检测间隔（秒）
 }
 
 // SanitizeConfig 请求清理高级配置（黑名单模式）。
@@ -96,6 +97,10 @@ type Provider struct {
 	// 启用后，健康检查连续失败达到阈值时向拉黑服务上报失败计数，
 	// 由拉黑服务按其自身失败阈值决定何时真正拉黑
 	ConnectivityAutoBlacklist bool `json:"connectivityAutoBlacklist,omitempty"`
+
+	// 可用时自动解禁 - 与自动拉黑相互独立；普通黑名单内连续两次探测成功后提前恢复。
+	// 每日额度封禁由独立服务管理，不受该开关影响。
+	AvailabilityAutoUnblock bool `json:"availabilityAutoUnblock,omitempty"`
 
 	// 可用性高级配置 - 可选，在可用性页面的"高级配置"中设置
 	AvailabilityConfig *AvailabilityConfig `json:"availabilityConfig,omitempty"`
@@ -563,6 +568,7 @@ func (ps *ProviderService) DuplicateProvider(kind string, sourceID int64) (*Prov
 		// 可用性监控配置
 		AvailabilityMonitorEnabled: source.AvailabilityMonitorEnabled,
 		ConnectivityAutoBlacklist:  false, // 副本默认关闭自动拉黑
+		AvailabilityAutoUnblock:    false, // 副本默认关闭自动解禁
 	}
 
 	// 深拷贝 SanitizeConfig（指针三态列表逐个复制，避免副本与源共享底层数组）
@@ -584,9 +590,10 @@ func (ps *ProviderService) DuplicateProvider(kind string, sourceID int64) (*Prov
 	// 深拷贝 AvailabilityConfig
 	if source.AvailabilityConfig != nil {
 		cloned.AvailabilityConfig = &AvailabilityConfig{
-			TestModel:    source.AvailabilityConfig.TestModel,
-			TestEndpoint: source.AvailabilityConfig.TestEndpoint,
-			Timeout:      source.AvailabilityConfig.Timeout,
+			TestModel:           source.AvailabilityConfig.TestModel,
+			TestEndpoint:        source.AvailabilityConfig.TestEndpoint,
+			Timeout:             source.AvailabilityConfig.Timeout,
+			PollIntervalSeconds: source.AvailabilityConfig.PollIntervalSeconds,
 		}
 	}
 
@@ -778,8 +785,28 @@ func (p *Provider) ValidateConfiguration() []string {
 	} else if p.DailyCostLimitEnabled && p.DailyCostLimitMicros <= 0 {
 		errors = append(errors, "启用每日费用限额时，限额必须大于 0")
 	}
+	if p.AvailabilityConfig != nil {
+		interval := p.AvailabilityConfig.PollIntervalSeconds
+		if interval != 0 && (interval < MinAvailabilityPollIntervalSeconds || interval > MaxAvailabilityPollIntervalSeconds) {
+			errors = append(errors, fmt.Sprintf("可用性检测间隔必须在 %d-%d 秒之间", MinAvailabilityPollIntervalSeconds, MaxAvailabilityPollIntervalSeconds))
+		}
+	}
 	p.configErrors = errors
 	return errors
+}
+
+// EffectiveAvailabilityPollIntervalSeconds preserves Provider files created
+// before per-provider polling was introduced. Invalid hand-edited values fall
+// back to the default instead of creating a tight scheduler loop.
+func (p Provider) EffectiveAvailabilityPollIntervalSeconds() int {
+	if p.AvailabilityConfig == nil {
+		return DefaultAvailabilityPollIntervalSeconds
+	}
+	interval := p.AvailabilityConfig.PollIntervalSeconds
+	if interval < MinAvailabilityPollIntervalSeconds || interval > MaxAvailabilityPollIntervalSeconds {
+		return DefaultAvailabilityPollIntervalSeconds
+	}
+	return interval
 }
 
 func validateCostMultiplier(multiplier float64) error {

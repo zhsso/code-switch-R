@@ -47,20 +47,24 @@
     "field": {
       "testModel": "Test Model",
       "testEndpoint": "Test Endpoint",
-      "timeout": "Timeout (ms)"
+      "timeout": "Timeout (ms)",
+      "pollInterval": "Check Interval (seconds)"
     },
     "placeholder": {
       "testModel": "Leave blank to use platform default model",
       "testEndpoint": "Leave blank to use platform default endpoint",
-      "timeout": "Default 15000"
+      "timeout": "Default 15000",
+      "pollInterval": "Default 60"
     },
     "hint": {
-      "timeout": "Milliseconds; blank or 0 will use default 15000"
+      "timeout": "Milliseconds; blank or 0 will use default 15000",
+      "pollInterval": "Configured per provider, from 15 to 86400 seconds; changes trigger a new check"
     },
     "default": "default",
     "currentModel": "Current Model",
     "currentEndpoint": "Current Endpoint",
     "currentTimeout": "Current Timeout",
+    "currentPollInterval": "Check Interval (seconds)",
     "defaultModel": "Platform default model",
     "defaultEndpoint": "Platform default endpoint",
     "advancedConfig": {
@@ -223,6 +227,7 @@
           "level": "Priority Level",
           "availabilityMonitor": "Availability Monitoring",
           "connectivityAutoBlacklist": "Auto-Blacklist on Failure",
+          "availabilityAutoUnblock": "Auto-Unblock When Available",
           "availabilityTestModel": "Test Model (optional)",
           "availabilityTestEndpoint": "Test Endpoint (optional)",
           "availabilityTimeout": "Timeout (ms)",
@@ -260,7 +265,8 @@
           "requestSanitize": "When enabled, non-standard fields and unsupported headers are removed before forwarding, fixing compatibility issues with LiteLLM and similar proxies",
           "availabilityMonitor": "Enable background health checks for this provider. Checks are performed periodically to monitor availability.",
           "connectivityAutoBlacklist": "Automatically blacklist this provider if health checks fail repeatedly",
-          "availabilityAdvancedConfig": "Advanced configuration (test model, endpoint, timeout) can be edited on the Availability page",
+          "availabilityAutoUnblock": "Automatically remove an ordinary blacklist after two consecutive successful checks; daily-limit blocking is unaffected",
+          "availabilityAdvancedConfig": "Advanced configuration (test model, endpoint, timeout, check interval) can be edited on the Availability page",
           "availabilityTestModel": "Model to use for health checks. Leave empty to use platform default.",
           "availabilityTestEndpoint": "API endpoint for health checks. Leave empty to use platform default.",
           "availabilityTimeout": "Timeout for health check requests in milliseconds (default: 15000)",

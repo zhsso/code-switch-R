@@ -156,3 +156,17 @@ func (ns *NotificationService) NotifyProviderBlacklisted(platform, providerName 
 		})
 	}
 }
+
+func (ns *NotificationService) NotifyProviderRecovered(platform, providerName, reason string) {
+	if requireCodexPlatform(platform) != nil || !ns.isEnabled() {
+		return
+	}
+	if emitter := ns.currentEmitter(); emitter != nil {
+		emitter.Emit("provider:recovered", map[string]any{
+			"platform":     CodexPlatform,
+			"providerName": providerName,
+			"reason":       reason,
+			"timestamp":    time.Now().UnixMilli(),
+		})
+	}
+}

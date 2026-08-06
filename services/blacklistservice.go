@@ -645,6 +645,63 @@ func (bs *BlacklistService) ManualUnblock(platform string, providerName string) 
 	return bs.ManualUnblockAndReset(platform, providerName)
 }
 
+// AutoUnblockOnAvailabilitySuccess atomically clears an active ordinary
+// blacklist after health-check recovery. It preserves the L1-L5 level, resets
+// failure state, and starts a fresh degradation timer. Daily-limit blocking is
+// stored outside provider_blacklist and cannot be changed by this method.
+func (bs *BlacklistService) AutoUnblockOnAvailabilitySuccess(platform string, providerName string) (bool, error) {
+	if err := requireCodexPlatform(platform); err != nil {
+		return false, err
+	}
+	platform = CodexPlatform
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	providerName = ResolveProviderAlias(platform, providerName)
+
+	db, err := xdb.DB("default")
+	if err != nil {
+		return false, fmt.Errorf("获取数据库连接失败: %w", err)
+	}
+
+	var blacklistedUntil sql.NullTime
+	err = db.QueryRow(`
+		SELECT blacklisted_until
+		FROM provider_blacklist
+		WHERE platform = ? AND provider_name = ?
+	`, platform, providerName).Scan(&blacklistedUntil)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("查询黑名单记录失败: %w", err)
+	}
+
+	now := time.Now()
+	if !blacklistedUntil.Valid || !blacklistedUntil.Time.After(now) {
+		return false, nil
+	}
+
+	if err := GlobalDBQueue.Exec(`
+		UPDATE provider_blacklist
+		SET blacklisted_at = NULL,
+			blacklisted_until = NULL,
+			failure_count = 0,
+			last_recovered_at = ?,
+			last_degrade_hour = 0,
+			last_failure_window_start = NULL,
+			auto_recovered = 1
+		WHERE platform = ? AND provider_name = ?
+	`, now, platform, providerName); err != nil {
+		return false, fmt.Errorf("可用性检测自动解禁失败: %w", err)
+	}
+
+	log.Printf("[Blacklist] 可用性检测确认恢复，已自动解禁 %s/%s（等级保留）", platform, providerName)
+	if bs.notificationService != nil {
+		bs.notificationService.NotifyProviderRecovered(platform, providerName, "availability_check")
+	}
+	return true, nil
+}
+
 // ManualResetLevel 手动清零等级（不解除拉黑，仅重置等级）
 func (bs *BlacklistService) ManualResetLevel(platform string, providerName string) error {
 	if err := requireCodexPlatform(platform); err != nil {
