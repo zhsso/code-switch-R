@@ -405,6 +405,13 @@ func ensureRequestEventTable() error {
 			AND failed_event.event_type = 'request_error'
 			AND failed_event.outcome = 'failed'
 		 )`,
+		`DELETE FROM request_event_log
+		 WHERE event_type = 'request_completed' AND outcome = 'success'
+		 AND NOT EXISTS (
+			SELECT 1 FROM request_event_log AS incident
+			WHERE incident.request_id = request_event_log.request_id
+			AND incident.event_type IN ('request_error', 'provider_switch')
+		 )`,
 	}
 	for _, correction := range corrections {
 		if _, err := db.Exec(correction); err != nil {

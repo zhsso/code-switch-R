@@ -489,6 +489,8 @@
       },
       "event": {
         "error": "Request error",
+        "clientAborted": "Client disconnected",
+        "clientAbortedMessage": "The client disconnected before the request completed",
         "switch": "Provider switch",
         "completed": "Request completed"
       },

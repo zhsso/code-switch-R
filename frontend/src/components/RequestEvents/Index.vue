@@ -142,6 +142,10 @@
                   <path d="M12 3 2.8 19h18.4L12 3Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
                   <path d="M12 9v4M12 16.5v.1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
                 </svg>
+                <svg v-else-if="eventKind(event) === 'abort'" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6" />
+                  <path d="m8.7 8.7 6.6 6.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+                </svg>
                 <svg v-else-if="eventKind(event) === 'switch'" viewBox="0 0 24 24">
                   <path d="M4 7h13l-3-3M20 17H7l3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
                   <path d="m17 4 3 3-3 3M7 14l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -184,7 +188,7 @@
               <div v-else class="event-provider-line">
                 <strong>{{ event.provider || t('components.requestEvents.unknownProvider') }}</strong>
                 <span v-if="event.model" class="event-model">{{ event.model }}</span>
-                <span v-if="event.message" class="event-message">{{ event.message }}</span>
+                <span v-if="eventMessage(event)" class="event-message">{{ eventMessage(event) }}</span>
               </div>
 
               <div class="event-meta-line">
@@ -274,7 +278,7 @@ const eventTypeOptions = computed(() => [
 const summary = computed(() => {
   const requestIds = new Set(events.value.map((event) => event.request_id).filter(Boolean))
   return {
-    errors: events.value.filter((event) => event.event_type === 'request_error').length,
+    errors: events.value.filter((event) => event.event_type === 'request_error' && event.error_type !== 'client_aborted').length,
     switches: events.value.filter((event) => event.event_type === 'provider_switch').length,
     requests: requestIds.size,
   }
@@ -317,7 +321,8 @@ const shortRequestId = (value: string): string => {
   return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value
 }
 
-const eventKind = (event: RequestEvent): 'error' | 'switch' | 'complete' => {
+const eventKind = (event: RequestEvent): 'error' | 'abort' | 'switch' | 'complete' => {
+  if (event.error_type === 'client_aborted') return 'abort'
   if (event.event_type === 'provider_switch') return 'switch'
   if (event.event_type === 'request_completed') return 'complete'
   return 'error'
@@ -325,9 +330,17 @@ const eventKind = (event: RequestEvent): 'error' | 'switch' | 'complete' => {
 
 const eventLabel = (event: RequestEvent): string => {
   const kind = eventKind(event)
+  if (kind === 'abort') return t('components.requestEvents.event.clientAborted')
   if (kind === 'switch') return t('components.requestEvents.event.switch')
   if (kind === 'complete') return t('components.requestEvents.event.completed')
   return t('components.requestEvents.event.error')
+}
+
+const eventMessage = (event: RequestEvent): string => {
+  if (event.error_type === 'client_aborted') {
+    return t('components.requestEvents.event.clientAbortedMessage')
+  }
+  return event.message
 }
 
 const outcomeLabel = (outcome: string): string => {
@@ -339,6 +352,7 @@ const outcomeLabel = (outcome: string): string => {
 
 const httpClass = (code: number): string => {
   if (code >= 200 && code < 300) return 'event-http--success'
+  if (code === 499) return 'event-http--client'
   if (code >= 500) return 'event-http--server'
   return 'event-http--error'
 }
@@ -773,6 +787,7 @@ onUnmounted(() => {
 
 .event-marker svg { width: 15px; height: 15px; }
 .event-row--error { color: #ef4444; }
+.event-row--abort { color: #64748b; }
 .event-row--switch { color: #d97706; }
 .event-row--complete { color: #0891b2; }
 
@@ -852,6 +867,7 @@ onUnmounted(() => {
 
 .event-code { color: #b45309; }
 .event-http--success { color: #059669; }
+.event-http--client { color: #64748b; }
 .event-http--server,
 .event-http--error { color: #dc2626; }
 .event-outcome--success { color: #059669; }

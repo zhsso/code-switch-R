@@ -100,7 +100,10 @@ func TestEnsureRequestEventTableNormalizesTerminalOutcomes(t *testing.T) {
 			('client-abort', 'codex', 'request_error', 'primary', 1, 'client_aborted', 'continued'),
 			('client-abort', 'codex', 'request_completed', 'primary', 1, '', 'success'),
 			('stream-abort', 'codex', 'request_error', 'primary', 1, 'stream_aborted', 'continued'),
-			('stream-abort', 'codex', 'request_completed', 'primary', 1, '', 'success')
+			('stream-abort', 'codex', 'request_completed', 'primary', 1, '', 'success'),
+			('routine-success', 'codex', 'request_completed', 'primary', 1, '', 'success'),
+			('fallback-success', 'codex', 'request_error', 'primary', 1, 'provider_error', 'continued'),
+			('fallback-success', 'codex', 'request_completed', 'backup', 2, '', 'success')
 	`); err != nil {
 		t.Fatalf("seed legacy outcomes: %v", err)
 	}
@@ -126,6 +129,21 @@ func TestEnsureRequestEventTableNormalizesTerminalOutcomes(t *testing.T) {
 		if count != 2 {
 			t.Fatalf("normalized rows for %s = %d, want 2", testCase.requestID, count)
 		}
+	}
+
+	var routineCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM request_event_log WHERE request_id = 'routine-success'`).Scan(&routineCount); err != nil {
+		t.Fatalf("count routine success events: %v", err)
+	}
+	if routineCount != 0 {
+		t.Fatalf("routine success events = %d, want 0", routineCount)
+	}
+	var fallbackCompletionCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM request_event_log WHERE request_id = 'fallback-success' AND event_type = 'request_completed'`).Scan(&fallbackCompletionCount); err != nil {
+		t.Fatalf("count fallback completion events: %v", err)
+	}
+	if fallbackCompletionCount != 1 {
+		t.Fatalf("fallback completion events = %d, want 1", fallbackCompletionCount)
 	}
 }
 
@@ -176,6 +194,67 @@ func TestRelayRequestTraceCorrelatesFailureSwitchAndCompletion(t *testing.T) {
 	}
 	if count != 3 {
 		t.Fatalf("trace events = %d, want error + switch + completion", count)
+	}
+}
+
+func TestRelayRequestTraceSkipsRoutineSuccessCompletion(t *testing.T) {
+	setupRenameTestEnv(t)
+	db, err := xdb.DB("default")
+	if err != nil {
+		t.Fatalf("get test database: %v", err)
+	}
+	if err := ensureRequestEventTable(); err != nil {
+		t.Fatalf("create request event table: %v", err)
+	}
+	oldQueue := GlobalDBQueue
+	GlobalDBQueue = NewDBWriteQueue(db, 100, false)
+	t.Cleanup(func() {
+		_ = GlobalDBQueue.Shutdown(2 * time.Second)
+		GlobalDBQueue = oldQueue
+	})
+
+	trace := newRelayRequestTrace(NewRequestEventService(), CodexPlatform)
+	trace.SetModel("gpt-5.6")
+	trace.BeforeAttempt("primary")
+	trace.Finish(http.StatusOK, false)
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM request_event_log WHERE request_id = ?`, trace.RequestID()).Scan(&count); err != nil {
+		t.Fatalf("count routine success events: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("routine success events = %d, want 0", count)
+	}
+}
+
+func TestRelayRequestTraceKeepsCompletionAfterFallback(t *testing.T) {
+	setupRenameTestEnv(t)
+	db, err := xdb.DB("default")
+	if err != nil {
+		t.Fatalf("get test database: %v", err)
+	}
+	if err := ensureRequestEventTable(); err != nil {
+		t.Fatalf("create request event table: %v", err)
+	}
+	oldQueue := GlobalDBQueue
+	GlobalDBQueue = NewDBWriteQueue(db, 100, false)
+	t.Cleanup(func() {
+		_ = GlobalDBQueue.Shutdown(2 * time.Second)
+		GlobalDBQueue = oldQueue
+	})
+
+	trace := newRelayRequestTrace(NewRequestEventService(), CodexPlatform)
+	firstAttempt := trace.BeforeAttempt("primary")
+	trace.RecordForwardError("primary", newUpstreamStatusError(nil, 503, "upstream status 503"), firstAttempt, 1, time.Second)
+	trace.BeforeAttempt("backup")
+	trace.Finish(http.StatusOK, false)
+
+	var outcome string
+	if err := db.QueryRow(`SELECT outcome FROM request_event_log WHERE request_id = ? AND event_type = ?`, trace.RequestID(), RequestEventCompleted).Scan(&outcome); err != nil {
+		t.Fatalf("read fallback completion: %v", err)
+	}
+	if outcome != "success" {
+		t.Fatalf("fallback completion outcome = %q, want success", outcome)
 	}
 }
 

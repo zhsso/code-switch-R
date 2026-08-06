@@ -490,6 +490,8 @@
       },
       "event": {
         "error": "请求错误",
+        "clientAborted": "客户端中断",
+        "clientAbortedMessage": "客户端在请求完成前断开",
         "switch": "Provider 切换",
         "completed": "请求完成"
       },

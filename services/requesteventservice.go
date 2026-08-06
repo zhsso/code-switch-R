@@ -143,6 +143,7 @@ type relayRequestTrace struct {
 	lastProvider   string
 	clientAborted  bool
 	terminalFailed bool
+	hasIncident    bool
 	completed      bool
 }
 
@@ -174,6 +175,7 @@ func (trace *relayRequestTrace) BeforeAttempt(provider string) int {
 	trace.attempt++
 	provider = strings.TrimSpace(provider)
 	if trace.current != "" && provider != "" && trace.current != provider {
+		trace.hasIncident = true
 		_ = trace.record(RequestEventInput{
 			RequestID:    trace.requestID,
 			Platform:     trace.platform,
@@ -198,6 +200,7 @@ func (trace *relayRequestTrace) RecordForwardError(provider string, err error, a
 	}
 	trace.lastError = err
 	trace.lastProvider = strings.TrimSpace(provider)
+	trace.hasIncident = true
 	outcome := "continued"
 	if errors.Is(err, errClientAbort) {
 		trace.clientAborted = true
@@ -240,6 +243,7 @@ func (trace *relayRequestTrace) recordLocalSummary(provider, errorType, message,
 	message = strings.TrimSpace(message)
 	trace.lastError = errors.New(message)
 	trace.lastProvider = provider
+	trace.hasIncident = true
 	if outcome == "failed" {
 		trace.terminalFailed = true
 	}
@@ -261,6 +265,7 @@ func (trace *relayRequestTrace) MarkFailed(err error) {
 	if trace != nil {
 		trace.lastError = err
 		trace.terminalFailed = true
+		trace.hasIncident = true
 	}
 }
 
@@ -275,6 +280,9 @@ func (trace *relayRequestTrace) Finish(status int, clientAborted bool) {
 		outcome = "client_aborted"
 	} else if !trace.terminalFailed && status >= 200 && status < 300 {
 		outcome = "success"
+	}
+	if outcome == "success" && !trace.hasIncident {
+		return
 	}
 	errorType, errorCode, message, httpCode := requestEventErrorDetails(trace.lastError)
 	if outcome == "success" {
