@@ -111,7 +111,21 @@ func isBufferedSSEPrelude(event []byte) bool {
 		eventName = strings.ToLower(gjson.GetBytes(data, "type").String())
 	}
 	switch eventName {
-	case "response.queued", "response.created", "response.in_progress":
+	case "response.queued",
+		"response.created",
+		"response.in_progress",
+		// Responses emits these metadata-only events before the first text or
+		// tool-argument delta. Keep them buffered so an immediate capacity
+		// failure can still switch providers without committing a stream.
+		"response.output_item.added",
+		"response.content_part.added",
+		"response.reasoning_summary_part.added",
+		"response.output_text.done",
+		"response.content_part.done",
+		"response.output_item.done",
+		"response.reasoning_summary_part.done",
+		"response.completed",
+		"response.done":
 		return true
 	default:
 		return false

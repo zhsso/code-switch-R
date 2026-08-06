@@ -80,6 +80,10 @@ func TestRelayResponseDetectsModelCapacityBeforeSSECommit(t *testing.T) {
 
 	body := "event: response.created\n" +
 		`data: {"type":"response.created","response":{"status":"in_progress"}}` + "\n\n" +
+		"event: response.output_item.added\n" +
+		`data: {"type":"response.output_item.added","item":{"type":"message","content":[]}}` + "\n\n" +
+		"event: response.content_part.added\n" +
+		`data: {"type":"response.content_part.added","part":{"type":"output_text","text":""}}` + "\n\n" +
 		"event: response.in_progress\n" +
 		`data: {"type":"response.in_progress","response":{"status":"in_progress"}}` + "\n\n" +
 		"event: response.failed\n" +
@@ -172,6 +176,12 @@ func TestForwardRequestFallsBackFromCapacitySSEToSecondAddress(t *testing.T) {
 		_, _ = io.WriteString(w, "event: response.created\n")
 		_, _ = io.WriteString(w,
 			`data: {"type":"response.created","response":{"status":"in_progress"}}`+"\n\n")
+		_, _ = io.WriteString(w, "event: response.output_item.added\n")
+		_, _ = io.WriteString(w,
+			`data: {"type":"response.output_item.added","item":{"type":"message","content":[]}}`+"\n\n")
+		_, _ = io.WriteString(w, "event: response.content_part.added\n")
+		_, _ = io.WriteString(w,
+			`data: {"type":"response.content_part.added","part":{"type":"output_text","text":""}}`+"\n\n")
 		_, _ = io.WriteString(w, "event: response.in_progress\n")
 		_, _ = io.WriteString(w,
 			`data: {"type":"response.in_progress","response":{"status":"in_progress"}}`+"\n\n")
