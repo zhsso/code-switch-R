@@ -29,6 +29,7 @@ RUN apk add --no-cache ca-certificates tzdata \
 COPY --from=backend --chown=10001:10001 /out/codeswitch /usr/local/bin/codeswitch
 ENV HOME=/data \
     GIN_MODE=release \
+    CODESWITCH_BIND_HOST=0.0.0.0 \
     CODESWITCH_WEB_PORT=8080 \
     CODESWITCH_RELAY_PORT=18100
 USER 10001:10001

@@ -2,7 +2,7 @@
 
 Codex++ 是面向 Linux 的 Codex Responses API 转发服务与 WebUI。它管理 OpenAI Responses 兼容供应商、路由与故障切换、健康检查、黑名单、请求统计、费用和按需完整抓包。项目仅以本地构建的 Docker Compose 服务交付，不包含桌面应用、托盘、Wails 或其他 CLI 平台集成。
 
-WebUI 固定绑定宿主回环地址 `http://127.0.0.1:8080`，Codex relay 固定绑定 `http://127.0.0.1:18100`。Compose 使用 host 网络，但服务不会监听公网地址，也不提供登录认证，因此不要另行转发或暴露这些端口。
+WebUI 固定发布到宿主回环地址 `http://127.0.0.1:8080`，Codex relay 固定发布到 `http://127.0.0.1:18100`。Compose 使用桥接网络，进程在容器内监听所有接口，但两个端口只映射到宿主回环地址。服务不提供登录认证，因此不要另行转发或暴露这些端口。
 
 ## 启动
 
@@ -21,6 +21,8 @@ docker compose down
 ```
 
 `docker compose down` 不会删除数据。Compose 固定使用命名卷 `code-switch-r_codeswitch-data`，容器内 `HOME=/data`，进程以 UID/GID `10001:10001` 运行，重启策略为 `unless-stopped`。
+
+如果上游 API 运行在宿主机，供应商地址应使用 `http://host.docker.internal:<端口>`，不要使用 `127.0.0.1`；桥接网络下的 `127.0.0.1` 指向容器自身。Compose 已通过 `host-gateway` 提供该名称。宿主上游还必须监听 Docker 网关可达的地址；仅监听宿主 `127.0.0.1` 时，容器仍无法连接。
 
 ## 配置 Codex
 

@@ -28,20 +28,26 @@ func TestRepositoryHasNoDesktopRuntimeSurface(t *testing.T) {
 	}
 }
 
-func TestComposeUsesHostNetworkAndNamedDataVolume(t *testing.T) {
+func TestComposePublishesLoopbackPortsAndUsesNamedDataVolume(t *testing.T) {
 	data, err := os.ReadFile("compose.yaml")
 	if err != nil {
 		t.Fatalf("read compose.yaml: %v", err)
 	}
 	compose := string(data)
 	for _, required := range []string{
-		"network_mode: host",
+		`"127.0.0.1:8080:8080"`,
+		`"127.0.0.1:18100:18100"`,
+		`"host.docker.internal:host-gateway"`,
+		`CODESWITCH_BIND_HOST: "0.0.0.0"`,
 		"codeswitch-data:/data",
 		"codeswitch-data:",
 	} {
 		if !strings.Contains(compose, required) {
 			t.Fatalf("compose.yaml must contain %q", required)
 		}
+	}
+	if strings.Contains(compose, "network_mode: host") {
+		t.Fatal("compose.yaml must use port publishing instead of host networking")
 	}
 	if strings.Contains(compose, "./:/data") || strings.Contains(compose, filepath.Clean(os.Getenv("HOME"))) {
 		t.Fatal("compose.yaml must not bind-mount a host directory into /data")

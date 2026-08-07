@@ -8,6 +8,7 @@ import (
 )
 
 func TestLoadServerConfigDefaultsToLoopback(t *testing.T) {
+	t.Setenv("CODESWITCH_BIND_HOST", "")
 	t.Setenv("CODESWITCH_WEB_PORT", "")
 	t.Setenv("CODESWITCH_RELAY_PORT", "")
 
@@ -33,6 +34,7 @@ func TestLoadServerConfigDefaultsToLoopback(t *testing.T) {
 }
 
 func TestLoadServerConfigUsesEnvironmentPorts(t *testing.T) {
+	t.Setenv("CODESWITCH_BIND_HOST", "127.0.0.1")
 	t.Setenv("CODESWITCH_WEB_PORT", "9080")
 	t.Setenv("CODESWITCH_RELAY_PORT", "19100")
 
@@ -45,7 +47,29 @@ func TestLoadServerConfigUsesEnvironmentPorts(t *testing.T) {
 	}
 }
 
+func TestLoadServerConfigUsesEnvironmentBindHost(t *testing.T) {
+	t.Setenv("CODESWITCH_BIND_HOST", "0.0.0.0")
+	t.Setenv("CODESWITCH_WEB_PORT", "9080")
+	t.Setenv("CODESWITCH_RELAY_PORT", "19100")
+
+	config, err := loadServerConfig()
+	if err != nil {
+		t.Fatalf("load environment bind host: %v", err)
+	}
+	if config.WebAddr() != "0.0.0.0:9080" || config.RelayAddr() != "0.0.0.0:19100" {
+		t.Fatalf("unexpected addresses: web=%s relay=%s", config.WebAddr(), config.RelayAddr())
+	}
+}
+
+func TestLoadServerConfigRejectsInvalidBindHost(t *testing.T) {
+	t.Setenv("CODESWITCH_BIND_HOST", "not-an-ip")
+	if _, err := loadServerConfig(); err == nil || !strings.Contains(err.Error(), "CODESWITCH_BIND_HOST") {
+		t.Fatalf("expected a bind host validation error, got %v", err)
+	}
+}
+
 func TestLoadServerConfigRejectsInvalidPorts(t *testing.T) {
+	t.Setenv("CODESWITCH_BIND_HOST", "127.0.0.1")
 	for _, value := range []string{"abc", "0", "65536", "-1"} {
 		t.Run(value, func(t *testing.T) {
 			t.Setenv("CODESWITCH_WEB_PORT", value)
@@ -58,6 +82,7 @@ func TestLoadServerConfigRejectsInvalidPorts(t *testing.T) {
 }
 
 func TestLoadServerConfigRejectsSharedPort(t *testing.T) {
+	t.Setenv("CODESWITCH_BIND_HOST", "127.0.0.1")
 	t.Setenv("CODESWITCH_WEB_PORT", "18080")
 	t.Setenv("CODESWITCH_RELAY_PORT", "18080")
 	if _, err := loadServerConfig(); err == nil {

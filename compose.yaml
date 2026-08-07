@@ -9,7 +9,11 @@ services:
       dockerfile: Dockerfile
       args:
         VERSION: v2.6.44-codexplus.2
-    network_mode: host
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:18100:18100"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     user: "10001:10001"
     init: true
     restart: unless-stopped
@@ -23,6 +27,7 @@ services:
       HOME: /data
       TZ: Asia/Shanghai
       GIN_MODE: release
+      CODESWITCH_BIND_HOST: "0.0.0.0"
       CODESWITCH_WEB_PORT: "8080"
       CODESWITCH_RELAY_PORT: "18100"
     volumes:
