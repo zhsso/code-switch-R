@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,9 +44,11 @@ func warnUnknownTier(tier string) {
 // LastUsedProvider 最后使用的供应商信息
 // @author sm
 type LastUsedProvider struct {
-	Platform     string `json:"platform"`
-	ProviderName string `json:"provider_name"` // 供应商名称
-	UpdatedAt    int64  `json:"updated_at"`    // 更新时间（毫秒）
+	Platform       string `json:"platform"`
+	ProviderName   string `json:"provider_name"` // 供应商名称
+	UpdatedAt      int64  `json:"updated_at"`    // 更新时间（毫秒）
+	ModelGroupID   int64  `json:"model_group_id,omitempty"`
+	ModelGroupName string `json:"model_group_name,omitempty"`
 }
 
 type ProviderRelayService struct {
@@ -56,7 +57,6 @@ type ProviderRelayService struct {
 	dailyLimitService   *DailyCostLimitService
 	notificationService *NotificationService
 	requestEventService *RequestEventService
-	appSettings         *AppSettingsService // 应用设置服务（用于获取轮询开关状态）
 	server              *http.Server
 	serverMu            sync.Mutex // 保护 server：Start/Stop 均可从前端 RPC 触发
 	requestMu           sync.Mutex
@@ -66,15 +66,12 @@ type ProviderRelayService struct {
 	// boundAddrs 本次启动实际绑定成功的地址。监听地址在启动时就已冻结，
 	// 之后改设置不会重绑，所以任何"这个地址能不能连"的判断都必须以它为准，
 	// 不能拿磁盘上的设置去推断。
-	boundAddrs  []string
-	lastUsed    map[string]*LastUsedProvider // 各平台最后使用的供应商
-	lastUsedMu  sync.RWMutex                 // 保护 lastUsed 的锁
-	rrMu        sync.Mutex                   // 轮询状态锁
-	rrLastStart map[string]string            // 轮询状态：key="platform:level" → value=上次起始 Provider Name
+	boundAddrs      []string
+	lastUsed        map[string]*LastUsedProvider // 各平台最后使用的供应商
+	lastUsedByGroup map[int64]*LastUsedProvider
+	lastUsedMu      sync.RWMutex // 保护 lastUsed 的锁
 	// endpointCooldowns 多地址供应商的地址冷却状态（进程内，issue #27）
 	endpointCooldowns *endpointCooldownStore
-	// concurrency 按供应商并发配额（进程内，issue #21）
-	concurrency *concurrencyLimiter
 	// captureRequests 抓包模式开关（进程内状态，重启即关，issue #5）
 	captureRequests atomic.Bool
 	// captureClearGen "清除抓包数据"的代次。采集时记在 requestLog 上，落库前
@@ -301,19 +298,14 @@ func checkNonStreamTruncated(resp *xrequest.Response, written int64) error {
 }
 
 // respondNoEligibleProviders 初筛后无可用供应商的 404 终态。
-// 把"为什么被跳过"按原因拆开讲清并给排查指引：白名单不匹配、临时拉黑与
-// 未启用是三种完全不同的处置方式，混在一个计数里用户无从下手（issue #29）。
+// 把"为什么被跳过"按原因拆开讲清并给排查指引。
 // 多种原因并存时全部列出，不做"选一个当代表"的省略
-func respondNoEligibleProviders(c *gin.Context, requestedModel string, skippedModel, skippedBlacklist, skippedInvalid int, dailySkipped ...int) {
+func respondNoEligibleProviders(c *gin.Context, requestedModel string, skippedBlacklist, skippedInvalid int, dailySkipped ...int) {
 	skippedDaily := 0
 	if len(dailySkipped) > 0 {
 		skippedDaily = dailySkipped[0]
 	}
 	var reasons, hints []string
-	if skippedModel > 0 {
-		reasons = append(reasons, fmt.Sprintf("%d 个供应商的模型白名单/映射不包含该模型", skippedModel))
-		hints = append(hints, "在主页打开对应供应商，确认\"支持的模型\"包含该模型或留空（留空=支持所有模型），\"模型映射\"的目标模型名必须在白名单内")
-	}
 	if skippedBlacklist > 0 {
 		reasons = append(reasons, fmt.Sprintf("%d 个正被临时拉黑", skippedBlacklist))
 		hints = append(hints, "被拉黑的供应商可等待自动恢复，或到黑名单页手动解除")
@@ -324,7 +316,7 @@ func respondNoEligibleProviders(c *gin.Context, requestedModel string, skippedMo
 	}
 	if skippedInvalid > 0 {
 		reasons = append(reasons, fmt.Sprintf("%d 个配置校验失败（详见控制台日志）", skippedInvalid))
-		hints = append(hints, "配置校验失败的常见原因是模型映射的目标不在白名单内")
+		hints = append(hints, "请在主页检查对应 Provider 的地址、映射和高级配置")
 	}
 
 	var msg string
@@ -362,21 +354,6 @@ func respondAllProvidersFailed(c *gin.Context, lastError error, allClientErrors 
 	c.JSON(status, payload)
 }
 
-// respondAllBusy 纯并发满载终态：503 + Retry-After，带稳定机器码
-// provider_concurrency_exhausted。Codex 的 Responses API 使用 OpenAI 错误结构；
-// 不用 502（那表示已联系上游失败）也不用 504（不是上游超时）。
-func respondAllBusy(c *gin.Context, kind string) {
-	c.Header("Retry-After", "1")
-	msg := "所有可用供应商均已达到并发上限，请稍后重试"
-	c.JSON(http.StatusServiceUnavailable, gin.H{
-		"error": gin.H{
-			"type":    "server_error",
-			"code":    "provider_concurrency_exhausted",
-			"message": msg,
-		},
-	})
-}
-
 // isClientSideUpstreamStatus 判定上游 4xx 是否属于"请求内容本身有问题"。
 // 这类失败换供应商也一样，不应计入供应商失败次数；
 // 401/403/404/408/429 仍属供应商侧问题（密钥失效、路径配错、限流），保持计入。
@@ -393,6 +370,7 @@ func isClientSideUpstreamStatus(status int) bool {
 
 // NewProviderRelayService 构造代理服务。
 func NewProviderRelayService(providerService *ProviderService, blacklistService *BlacklistService, notificationService *NotificationService, appSettings *AppSettingsService, addr string, eventServices ...*RequestEventService) *ProviderRelayService {
+	_ = appSettings // retained in the constructor signature for source compatibility
 	if addr == "" {
 		addr = "127.0.0.1:18100" // 【安全修复】仅监听本地回环地址，防止 API Key 暴露到局域网
 	}
@@ -407,15 +385,13 @@ func NewProviderRelayService(providerService *ProviderService, blacklistService 
 		blacklistService:    blacklistService,
 		notificationService: notificationService,
 		requestEventService: requestEventService,
-		appSettings:         appSettings,
 		acceptingRequests:   true,
 		addr:                addr,
 		lastUsed: map[string]*LastUsedProvider{
 			CodexPlatform: nil,
 		},
-		rrLastStart:            make(map[string]string),
+		lastUsedByGroup:        make(map[int64]*LastUsedProvider),
 		endpointCooldowns:      newEndpointCooldownStore(),
-		concurrency:            newConcurrencyLimiter(),
 		captureDeletedSessions: make(map[int64]struct{}),
 	}
 }
@@ -444,17 +420,22 @@ func (prs *ProviderRelayService) isDailyCostBlocked(kind string, provider Provid
 
 // setLastUsedProvider 记录最后使用的供应商
 // @author sm
-func (prs *ProviderRelayService) setLastUsedProvider(platform, providerName string) {
+func (prs *ProviderRelayService) setLastUsedProvider(platform string, group ModelGroup, providerName string) {
 	if requireCodexPlatform(platform) != nil {
 		return
 	}
 	prs.lastUsedMu.Lock()
 	defer prs.lastUsedMu.Unlock()
-	prs.lastUsed[CodexPlatform] = &LastUsedProvider{
-		Platform:     CodexPlatform,
-		ProviderName: providerName,
-		UpdatedAt:    time.Now().UnixMilli(),
+	lastUsed := &LastUsedProvider{
+		Platform:       CodexPlatform,
+		ProviderName:   providerName,
+		UpdatedAt:      time.Now().UnixMilli(),
+		ModelGroupID:   group.ID,
+		ModelGroupName: group.Name,
 	}
+	prs.lastUsed[CodexPlatform] = lastUsed
+	copyForGroup := *lastUsed
+	prs.lastUsedByGroup[group.ID] = &copyForGroup
 }
 
 // GetLastUsedProvider 获取指定平台最后使用的供应商
@@ -476,82 +457,18 @@ func (prs *ProviderRelayService) GetAllLastUsedProviders() map[string]*LastUsedP
 	return map[string]*LastUsedProvider{CodexPlatform: prs.lastUsed[CodexPlatform]}
 }
 
-// isRoundRobinSettingEnabled 检查轮询设置是否启用（纯读取 AppSettings，不受 Fixed Mode 影响）
-// 用于在 Fixed Mode 分支内也支持轮询排序
-func (prs *ProviderRelayService) isRoundRobinSettingEnabled() bool {
-	if prs.appSettings == nil {
-		return false
-	}
-	settings, err := prs.appSettings.GetAppSettings()
-	if err != nil {
-		return false
-	}
-	return settings.EnableRoundRobin
-}
-
-// isRoundRobinEnabled 检查轮询功能是否启用（仅在降级模式下使用）
-// 条件：1. 应用设置开关启用 2. 拉黑模式关闭（Fixed Mode 走单独分支处理轮询）
-func (prs *ProviderRelayService) isRoundRobinEnabled() bool {
-	// Fixed Mode 分支内有独立的轮询处理逻辑，此处返回 false 走降级模式
-	if prs.blacklistService.ShouldUseFixedMode() {
-		return false
-	}
-	return prs.isRoundRobinSettingEnabled()
-}
-
-// roundRobinOrder 对同 Level 的 providers 进行轮询排序
-// 算法：基于 name 追踪，将上次起始 provider 移到末尾，实现轮询效果
-// 参数：
-//   - platform: 平台标识
-//   - level: 当前 Level
-//   - providers: 同 Level 的 providers 列表（已过滤、按用户排序）
-//
-// 返回：轮询排序后的 providers 列表（新切片，不修改原切片）
-func (prs *ProviderRelayService) roundRobinOrder(platform string, level int, providers []Provider) []Provider {
-	if len(providers) <= 1 {
-		return providers
-	}
-
-	// 构建 key: "platform:level"
-	key := fmt.Sprintf("%s:%d", platform, level)
-
-	prs.rrMu.Lock()
-	defer prs.rrMu.Unlock()
-
-	lastStart := prs.rrLastStart[key]
-
-	// 记录本次起始 provider 名称（更新状态）
-	prs.rrLastStart[key] = providers[0].Name
-
-	// 如果没有历史记录，返回原顺序
-	if lastStart == "" {
-		return providers
-	}
-
-	// 查找上次起始 provider 在当前列表中的位置
-	lastIdx := -1
-	for i, p := range providers {
-		if p.Name == lastStart {
-			lastIdx = i
-			break
+func (prs *ProviderRelayService) GetLastUsedProvidersByGroup() map[int64]*LastUsedProvider {
+	prs.lastUsedMu.RLock()
+	defer prs.lastUsedMu.RUnlock()
+	result := make(map[int64]*LastUsedProvider, len(prs.lastUsedByGroup))
+	for id, provider := range prs.lastUsedByGroup {
+		if provider == nil {
+			result[id] = nil
+			continue
 		}
+		cloned := *provider
+		result[id] = &cloned
 	}
-
-	// 上次起始 provider 不在当前列表（可能被禁用/黑名单），返回原顺序
-	if lastIdx == -1 {
-		return providers
-	}
-
-	// 构建轮询顺序：从 lastIdx+1 开始，环形遍历
-	result := make([]Provider, len(providers))
-	for i := 0; i < len(providers); i++ {
-		idx := (lastIdx + 1 + i) % len(providers)
-		result[i] = providers[idx]
-	}
-
-	// 更新本次起始 provider 名称
-	prs.rrLastStart[key] = result[0].Name
-
 	return result
 }
 
@@ -644,6 +561,8 @@ type RequestLog struct {
 	Platform        string  `json:"platform"`
 	Model           string  `json:"model"`
 	Provider        string  `json:"provider"`
+	ModelGroupID    int64   `json:"model_group_id"`
+	ModelGroupName  string  `json:"model_group_name"`
 	HttpCode        int     `json:"http_code"`
 	InputTokens     int     `json:"input_tokens"`
 	OutputTokens    int     `json:"output_tokens"`
@@ -715,19 +634,20 @@ func (prs *ProviderRelayService) stripStaleCapture(requestLog *RequestLog) {
 // requestLogInsertSQL 两条写入路径共用的列清单，避免写入结构分叉。
 const requestLogInsertSQL = `
 	INSERT INTO request_log (
-		platform, model, provider, http_code,
+		platform, model, provider, model_group_id, model_group_name, http_code,
 		input_tokens, output_tokens, cache_read_tokens,
 		reasoning_tokens, is_stream, duration_sec,
 		service_tier,
 		request_url, request_headers, request_body, body_truncated, body_bytes,
 		response_headers, response_body, response_truncated, response_bytes, budget_skipped,
 		capture_session_id
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 func requestLogInsertArgs(requestLog *RequestLog) []interface{} {
 	return []interface{}{
-		requestLog.Platform, requestLog.Model, requestLog.Provider, requestLog.HttpCode,
+		requestLog.Platform, requestLog.Model, requestLog.Provider,
+		requestLog.ModelGroupID, requestLog.ModelGroupName, requestLog.HttpCode,
 		requestLog.InputTokens, requestLog.OutputTokens, requestLog.CacheReadTokens,
 		requestLog.ReasoningTokens,
 		boolToInt(requestLog.IsStream), requestLog.DurationSec,
@@ -778,7 +698,7 @@ func (prs *ProviderRelayService) validateConfig() []string {
 	warnings := make([]string, 0)
 
 	for _, kind := range []string{CodexPlatform} {
-		providers, err := prs.providerService.LoadProviders(kind)
+		providers, groups, _, err := prs.providerService.LoadConfigurationWithGen(kind)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("[%s] 加载配置失败: %v", kind, err))
 			continue
@@ -798,24 +718,24 @@ func (prs *ProviderRelayService) validateConfig() []string {
 				}
 			}
 
-			// 检查是否配置了模型白名单或映射
-			if (p.SupportedModels == nil || len(p.SupportedModels) == 0) &&
-				(p.ModelMapping == nil || len(p.ModelMapping) == 0) {
-				warnings = append(warnings, fmt.Sprintf(
-					"[%s/%s] 未配置 supportedModels 或 modelMapping，将假设支持所有模型（可能导致降级失败）",
-					kind, p.Name))
-			}
-
-			// 检查是否只配置了映射但没有白名单
-			if len(p.ModelMapping) > 0 && len(p.SupportedModels) == 0 {
-				warnings = append(warnings, fmt.Sprintf(
-					"[%s/%s] 配置了 modelMapping 但未配置 supportedModels，映射目标将不做校验，请确认目标模型在供应商处可用",
-					kind, p.Name))
-			}
 		}
 
 		if enabledCount == 0 {
 			warnings = append(warnings, fmt.Sprintf("[%s] 没有启用的 provider", kind))
+		}
+		validGroups := 0
+		for _, group := range groups {
+			if !group.Enabled {
+				continue
+			}
+			if !group.IsComplete() {
+				warnings = append(warnings, fmt.Sprintf("[%s/%s] 模型分组配置不完整，路由时将忽略", kind, group.Name))
+				continue
+			}
+			validGroups++
+		}
+		if validGroups == 0 {
+			warnings = append(warnings, fmt.Sprintf("[%s] 没有启用且完整的模型分组", kind))
 		}
 	}
 
@@ -938,18 +858,29 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 			fmt.Printf("[WARN] 请求未指定模型名，无法执行模型智能降级\n")
 		}
 
-		// (providers, 配置代数) 配对装载：容量热更新以更高代数为准，
-		// 分两步读取会让旧配置带上新代数、降容被来回覆盖
-		providers, configGen, err := prs.providerService.LoadProvidersWithGen(kind)
+		providers, modelGroups, _, err := prs.providerService.LoadConfigurationWithGen(kind)
 		if err != nil {
 			trace.RecordSummary("relay_error", "provider configuration could not be loaded")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load providers"})
 			return
 		}
+		selectedGroup := SelectModelGroup(modelGroups, requestedModel)
+		if selectedGroup == nil {
+			trace.RecordSummary("no_matching_model_group", "no model group matched the requested model")
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "no model group matches requested model",
+				"model": requestedModel,
+			})
+			return
+		}
+		trace.SetModelGroup(*selectedGroup)
+		c.Set("model_group_id", selectedGroup.ID)
+		c.Set("model_group_name", selectedGroup.Name)
+		providers = ProvidersForModelGroup(providers, *selectedGroup)
 
 		active := make([]Provider, 0, len(providers))
 		skippedCount := 0
-		skippedModel, skippedBlacklist, skippedInvalid, skippedDaily := 0, 0, 0, 0
+		skippedBlacklist, skippedInvalid, skippedDaily := 0, 0, 0
 		for _, provider := range providers {
 			// 基础过滤：enabled、URL、APIKey
 			if !provider.Enabled || provider.APIURL == "" || provider.APIKey == "" {
@@ -961,14 +892,6 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 				fmt.Printf("[WARN] Provider %s 配置验证失败，已自动跳过: %v\n", provider.Name, errs)
 				skippedCount++
 				skippedInvalid++
-				continue
-			}
-
-			// 核心过滤：只保留支持请求模型的 provider
-			if requestedModel != "" && !provider.IsModelSupported(requestedModel) {
-				fmt.Printf("[INFO] Provider %s 不支持模型 %s，已跳过\n", provider.Name, requestedModel)
-				skippedCount++
-				skippedModel++
 				continue
 			}
 
@@ -991,7 +914,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 
 		if len(active) == 0 {
 			trace.RecordSummary("no_eligible_provider", "no eligible provider was available")
-			respondNoEligibleProviders(c, requestedModel, skippedModel, skippedBlacklist, skippedInvalid, skippedDaily)
+			respondNoEligibleProviders(c, requestedModel, skippedBlacklist, skippedInvalid, skippedDaily)
 			return
 		}
 
@@ -1001,24 +924,10 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 		}
 		fmt.Println()
 
-		// 按 Level 分组
-		levelGroups := make(map[int][]Provider)
-		for _, provider := range active {
-			level := provider.Level
-			if level <= 0 {
-				level = 1 // 未配置或零值时默认为 Level 1
-			}
-			levelGroups[level] = append(levelGroups[level], provider)
-		}
-
-		// 获取所有 level 并升序排序
-		levels := make([]int, 0, len(levelGroups))
-		for level := range levelGroups {
-			levels = append(levels, level)
-		}
-		sort.Ints(levels)
-
-		fmt.Printf("[INFO] 共 %d 个 Level 分组：%v\n", len(levels), levels)
+		// The selected group is bound once. Its ProviderIDs are already in the
+		// exact manual fallback order.
+		fmt.Printf("[INFO] 命中模型分组 %s（优先级 %d），按配置顺序尝试 %d 个 Provider\n",
+			selectedGroup.Name, selectedGroup.Priority, len(active))
 
 		query := flattenQuery(c.Request.URL.Query())
 		clientHeaders := cloneHeaders(c.Request.Header)
@@ -1030,13 +939,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 		// 单次客户端请求的重试次数可能低于拉黑阈值，
 		// 通过内部重试机制，在单次请求中累积足够失败次数触发拉黑
 		if blacklistEnabled {
-			// 缓存轮询设置（单次请求级别，避免重复读取配置文件）
-			roundRobinSettingEnabled := prs.isRoundRobinSettingEnabled()
-			if roundRobinSettingEnabled {
-				fmt.Printf("[INFO] 🔒 拉黑模式 + 轮询负载均衡\n")
-			} else {
-				fmt.Printf("[INFO] 🔒 拉黑模式（顺序调度）\n")
-			}
+			fmt.Printf("[INFO] 🔒 拉黑模式（分组内顺序调度）\n")
 
 			// 获取重试配置
 			retryConfig := prs.blacklistService.GetRetryConfig()
@@ -1051,232 +954,148 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 			var lastProvider string
 			totalAttempts := 0
 
-			busyWaitDeadline := time.Time{}
-			enteredBusyWait := false
-			defer func() {
-				if enteredBusyWait {
-					prs.concurrency.leaveWaitPhase()
+			fmt.Printf("[INFO] === 尝试分组 %s（%d 个 Provider）===\n", selectedGroup.Name, len(active))
+			for _, provider := range active {
+				// 检查是否已被拉黑（跳过已拉黑的 provider）
+				if blacklisted, until := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
+					fmt.Printf("[INFO] ⏭️ 跳过已拉黑的 Provider: %s (解禁时间: %v)\n", provider.Name, until)
+					continue
 				}
-			}()
-			busySkipped := 0
-			// 已实际尝试过的供应商：等待阶段重扫不再碰它（失败已计、重试预算不重置）
-			attemptedProviders := map[string]bool{}
-			// 因并发满被跳过、尚未真实尝试的候选
-			busyPending := map[string]concurrencyBusyRef{}
-			for {
-				busySkipped = 0
-				// 每 pass 重建：上一轮候选可能已被拉黑或删除，残留会让容量门控恒真
-				busyPending = map[string]concurrencyBusyRef{}
-				// 遍历所有 Level 和 Provider
-				for _, level := range levels {
-					providersInLevel := levelGroups[level]
+				if prs.isDailyCostBlocked(kind, provider) {
+					fmt.Printf("[INFO] ⏭️ 跳过当日额度耗尽的 Provider: %s\n", provider.Name)
+					continue
+				}
 
-					// 如果启用轮询，对同 Level 的 providers 进行轮询排序
-					if roundRobinSettingEnabled {
-						providersInLevel = prs.roundRobinOrder(kind, level, providersInLevel)
+				// 获取实际模型名
+				effectiveModel := provider.GetEffectiveModel(requestedModel)
+				currentBodyBytes := bodyBytes
+				if effectiveModel != requestedModel && requestedModel != "" {
+					fmt.Printf("[INFO] Provider %s 映射模型: %s -> %s\n", provider.Name, requestedModel, effectiveModel)
+					modifiedBody, err := ReplaceModelInRequestBody(bodyBytes, effectiveModel)
+					if err != nil {
+						trace.RecordLocalSummary(provider.Name, "model_mapping_error", "provider model mapping could not be applied")
+						fmt.Printf("[ERROR] 模型映射失败: %v，跳过此 Provider\n", err)
+						continue
+					}
+					currentBodyBytes = modifiedBody
+				}
+
+				// 获取有效端点
+				effectiveEndpoint := provider.GetEffectiveEndpoint(endpoint)
+
+				// 同 Provider 内重试循环
+				for retryCount := 0; retryCount < maxRetryPerProvider; retryCount++ {
+					totalAttempts++
+
+					// 再次检查是否已被拉黑（重试过程中可能被拉黑）
+					if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
+						fmt.Printf("[INFO] 🚫 Provider %s 已被拉黑，切换到下一个\n", provider.Name)
+						break
+					}
+					if prs.isDailyCostBlocked(kind, provider) {
+						fmt.Printf("[INFO] 🚫 Provider %s 已达到当日费用限额，切换到下一个\n", provider.Name)
+						break
 					}
 
-					fmt.Printf("[INFO] === 尝试 Level %d（%d 个 provider）===\n", level, len(providersInLevel))
+					fmt.Printf("[INFO] [拉黑模式] Provider: %s | 重试 %d/%d | Model: %s\n",
+						provider.Name, retryCount+1, maxRetryPerProvider, effectiveModel)
 
-					for _, provider := range providersInLevel {
-						if attemptedProviders[strconv.FormatInt(provider.ID, 10)] {
-							continue
+					attempt := trace.BeforeAttempt(provider.Name)
+					startTime := time.Now()
+					ok, err := prs.forwardRequest(c, kind, provider, effectiveEndpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel)
+					duration := time.Since(startTime)
+					if err != nil {
+						trace.RecordForwardError(provider.Name, err, attempt, retryCount+1, duration)
+					}
+
+					if ok {
+						trace.MarkSucceeded()
+						fmt.Printf("[INFO] ✓ 成功: %s | 重试 %d 次 | 耗时: %.2fs\n",
+							provider.Name, retryCount+1, duration.Seconds())
+						if err := prs.blacklistService.RecordSuccess(kind, provider.Name); err != nil {
+							fmt.Printf("[WARN] 清零失败计数失败: %v\n", err)
 						}
-						// 检查是否已被拉黑（跳过已拉黑的 provider）
-						if blacklisted, until := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
-							fmt.Printf("[INFO] ⏭️ 跳过已拉黑的 Provider: %s (解禁时间: %v)\n", provider.Name, until)
-							continue
+						prs.setLastUsedProvider(kind, *selectedGroup, provider.Name)
+						return
+					}
+
+					// 失败处理
+					lastError = err
+					lastProvider = provider.Name
+
+					errorMsg := safeRelayError(err)
+					fmt.Printf("[WARN] ✗ 失败: %s | 重试 %d/%d | 错误: %s | 耗时: %.2fs\n",
+						provider.Name, retryCount+1, maxRetryPerProvider, errorMsg, duration.Seconds())
+
+					// 客户端中断不计入失败次数，直接返回
+					if errors.Is(err, errClientAbort) {
+						fmt.Printf("[INFO] 客户端中断，停止重试\n")
+						return
+					}
+
+					// 上游 2xx 后中途断流：响应已部分写出，不能再换供应商（会写出两段响应），
+					// 但必须计入失败，否则半死的供应商永远不会被拉黑
+					if errors.Is(err, errUpstreamStreamAborted) {
+						trace.MarkFailed(err)
+						if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
+							fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
 						}
-						if prs.isDailyCostBlocked(kind, provider) {
-							fmt.Printf("[INFO] ⏭️ 跳过当日额度耗尽的 Provider: %s\n", provider.Name)
-							continue
-						}
+						return
+					}
 
-						// 获取实际模型名
-						effectiveModel := provider.GetEffectiveModel(requestedModel)
-						currentBodyBytes := bodyBytes
-						if effectiveModel != requestedModel && requestedModel != "" {
-							fmt.Printf("[INFO] Provider %s 映射模型: %s -> %s\n", provider.Name, requestedModel, effectiveModel)
-							modifiedBody, err := ReplaceModelInRequestBody(bodyBytes, effectiveModel)
-							if err != nil {
-								trace.RecordLocalSummary(provider.Name, "model_mapping_error", "provider model mapping could not be applied")
-								fmt.Printf("[ERROR] 模型映射失败: %v，跳过此 Provider\n", err)
-								continue
-							}
-							currentBodyBytes = modifiedBody
-						}
+					// 上游判定"请求内容本身有问题"：换供应商也一样失败，
+					// 不计入失败次数（否则一个坏请求能把全部供应商拉黑），直接换下一个供应商
+					if errors.Is(err, errUpstreamClientError) {
+						fmt.Printf("[INFO] 上游拒绝请求内容，不计供应商失败，切换到下一个\n")
+						break
+					}
 
-						// 获取有效端点
-						effectiveEndpoint := provider.GetEffectiveEndpoint(endpoint)
+					sawNonClientError = true
 
-						// 同 Provider 内重试循环
-						for retryCount := 0; retryCount < maxRetryPerProvider; retryCount++ {
-							totalAttempts++
+					// 记录失败次数（可能触发拉黑）
+					if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
+						fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
+					}
+					if errors.Is(err, errUpstreamModelCapacity) {
+						fmt.Printf("[INFO] Provider %s 模型容量不足，立即切换到下一个 Provider\n", provider.Name)
+						break
+					}
 
-							// 再次检查是否已被拉黑（重试过程中可能被拉黑）
-							if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
-								fmt.Printf("[INFO] 🚫 Provider %s 已被拉黑，切换到下一个\n", provider.Name)
-								break
-							}
-							if prs.isDailyCostBlocked(kind, provider) {
-								fmt.Printf("[INFO] 🚫 Provider %s 已达到当日费用限额，切换到下一个\n", provider.Name)
-								break
-							}
+					// 检查是否刚被拉黑
+					if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
+						fmt.Printf("[INFO] 🚫 Provider %s 达到失败阈值，已被拉黑，切换到下一个\n", provider.Name)
+						break
+					}
+					if prs.isDailyCostBlocked(kind, provider) {
+						fmt.Printf("[INFO] 🚫 Provider %s 已达到当日费用限额，切换到下一个\n", provider.Name)
+						break
+					}
 
-							fmt.Printf("[INFO] [拉黑模式] Provider: %s (Level %d) | 重试 %d/%d | Model: %s\n",
-								provider.Name, level, retryCount+1, maxRetryPerProvider, effectiveModel)
+					// 多地址池已在本次请求内整轮试过：不再按拉黑阈值原地重试
+					// （那会放大成 阈值×地址数 次网络发送），失败已计一次，
+					// 直接切下一供应商
+					if errors.Is(err, errEndpointPoolExhausted) {
+						fmt.Printf("[INFO] Provider %s 地址池耗尽，切换下一供应商\n", provider.Name)
+						break
+					}
 
-							attempt := trace.BeforeAttempt(provider.Name)
-							startTime := time.Now()
-							ok, err := prs.forwardRequest(c, kind, provider, effectiveEndpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel, configGen)
-							duration := time.Since(startTime)
-							if err != nil {
-								trace.RecordForwardError(provider.Name, err, attempt, retryCount+1, duration)
-							}
-
-							if ok {
-								trace.MarkSucceeded()
-								fmt.Printf("[INFO] ✓ 成功: %s | 重试 %d 次 | 耗时: %.2fs\n",
-									provider.Name, retryCount+1, duration.Seconds())
-								if err := prs.blacklistService.RecordSuccess(kind, provider.Name); err != nil {
-									fmt.Printf("[WARN] 清零失败计数失败: %v\n", err)
-								}
-								prs.setLastUsedProvider(kind, provider.Name)
-								return
-							}
-
-							// 并发满载：不算尝试、不计失败，换下一个供应商
-							if errors.Is(err, errProviderBusy) {
-								totalAttempts--
-								// 已真实失败过的供应商重试遇忙不再进等待候选：
-								// 下一 pass 必然跳过它，等它只会把失败聚合错改成 503
-								if pk := strconv.FormatInt(provider.ID, 10); !attemptedProviders[pk] {
-									busySkipped++
-									busyPending[pk] = concurrencyBusyRef{Key: pk, Limit: provider.MaxConcurrency, Gen: configGen}
-								}
-								fmt.Printf("[INFO] Provider %s 并发已满，跳过\n", provider.Name)
-								break
-							}
-							// 实际尝试过：等待阶段重扫不再碰它
-							attemptedProviders[strconv.FormatInt(provider.ID, 10)] = true
-							delete(busyPending, strconv.FormatInt(provider.ID, 10))
-
-							// 失败处理
-							lastError = err
-							lastProvider = provider.Name
-
-							errorMsg := safeRelayError(err)
-							fmt.Printf("[WARN] ✗ 失败: %s | 重试 %d/%d | 错误: %s | 耗时: %.2fs\n",
-								provider.Name, retryCount+1, maxRetryPerProvider, errorMsg, duration.Seconds())
-
-							// 客户端中断不计入失败次数，直接返回
-							if errors.Is(err, errClientAbort) {
-								fmt.Printf("[INFO] 客户端中断，停止重试\n")
-								return
-							}
-
-							// 上游 2xx 后中途断流：响应已部分写出，不能再换供应商（会写出两段响应），
-							// 但必须计入失败，否则半死的供应商永远不会被拉黑
-							if errors.Is(err, errUpstreamStreamAborted) {
-								trace.MarkFailed(err)
-								if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
-									fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
-								}
-								return
-							}
-
-							// 上游判定"请求内容本身有问题"：换供应商也一样失败，
-							// 不计入失败次数（否则一个坏请求能把全部供应商拉黑），直接换下一个供应商
-							if errors.Is(err, errUpstreamClientError) {
-								fmt.Printf("[INFO] 上游拒绝请求内容，不计供应商失败，切换到下一个\n")
-								break
-							}
-
-							sawNonClientError = true
-
-							// 记录失败次数（可能触发拉黑）
-							if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
-								fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
-							}
-							if errors.Is(err, errUpstreamModelCapacity) {
-								fmt.Printf("[INFO] Provider %s 模型容量不足，立即切换到下一个 Provider\n", provider.Name)
-								break
-							}
-
-							// 检查是否刚被拉黑
-							if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
-								fmt.Printf("[INFO] 🚫 Provider %s 达到失败阈值，已被拉黑，切换到下一个\n", provider.Name)
-								break
-							}
-							if prs.isDailyCostBlocked(kind, provider) {
-								fmt.Printf("[INFO] 🚫 Provider %s 已达到当日费用限额，切换到下一个\n", provider.Name)
-								break
-							}
-
-							// 多地址池已在本次请求内整轮试过：不再按拉黑阈值原地重试
-							// （那会放大成 阈值×地址数 次网络发送），失败已计一次，
-							// 直接切下一供应商
-							if errors.Is(err, errEndpointPoolExhausted) {
-								fmt.Printf("[INFO] Provider %s 地址池耗尽，切换下一供应商\n", provider.Name)
-								break
-							}
-
-							// 等待后重试（除非是最后一次）；等待期间客户端可能已经离开，
-							// 此时继续重试只是白烧上游额度
-							if retryCount < maxRetryPerProvider-1 {
-								fmt.Printf("[INFO] ⏳ 等待 %d 秒后重试...\n", retryWaitSeconds)
-								select {
-								case <-time.After(time.Duration(retryWaitSeconds) * time.Second):
-								case <-c.Request.Context().Done():
-									fmt.Printf("[INFO] 等待重试期间客户端已断开，停止尝试\n")
-									return
-								}
-							}
-						}
-
-						if c.Request.Context().Err() != nil {
-							fmt.Printf("[INFO] 客户端已断开，停止尝试后续 Provider\n")
+					// 等待后重试（除非是最后一次）；等待期间客户端可能已经离开，
+					// 此时继续重试只是白烧上游额度
+					if retryCount < maxRetryPerProvider-1 {
+						fmt.Printf("[INFO] ⏳ 等待 %d 秒后重试...\n", retryWaitSeconds)
+						select {
+						case <-time.After(time.Duration(retryWaitSeconds) * time.Second):
+						case <-c.Request.Context().Done():
+							fmt.Printf("[INFO] 等待重试期间客户端已断开，停止尝试\n")
 							return
 						}
 					}
 				}
 
-				// 一整遍下来只要还有因并发满被跳过的供应商，就进入有界等待
-				if busySkipped == 0 {
-					break
-				}
-				if busyWaitDeadline.IsZero() {
-					busyWaitDeadline = time.Now().Add(prs.concurrency.waitBudget)
-					if !prs.concurrency.enterWaitPhase() {
-						respondAllBusy(c, kind)
-						return
-					}
-					enteredBusyWait = true
-				}
-				// 唤醒以"忙候选真的有空位"为门控：本轮实际尝试供应商的正常释放
-				// 也会触发全局信号，不加门控直接重扫会形成自唤醒重试风暴
-				woke := false
-				for {
-					capSignal := prs.concurrency.releaseSignal()
-					if prs.concurrency.anyCapacity(kind, busyPending) {
-						woke = true
-						break
-					}
-					if !prs.concurrency.waitForRelease(c.Request.Context(), busyWaitDeadline, capSignal) {
-						break
-					}
-				}
-				if !woke {
-					respondAllBusy(c, kind)
+				if c.Request.Context().Err() != nil {
+					fmt.Printf("[INFO] 客户端已断开，停止尝试后续 Provider\n")
 					return
 				}
-				// 容量门控可能被"释放后立刻又被占走"的候选反复触发，
-				// 重扫前硬校验总预算与客户端 context，防止空转越过 deadline
-				if c.Request.Context().Err() != nil || time.Now().After(busyWaitDeadline) {
-					respondAllBusy(c, kind)
-					return
-				}
-				fmt.Printf("[INFO] 并发配额有释放，重扫供应商\n")
 			}
 
 			// 所有 Provider 都失败或被拉黑
@@ -1297,12 +1116,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 		}
 
 		// 【降级模式】：拉黑功能关闭，失败自动尝试下一个 provider
-		roundRobinEnabled := prs.isRoundRobinEnabled()
-		if roundRobinEnabled {
-			fmt.Printf("[INFO] 🔄 降级模式 + 轮询负载均衡\n")
-		} else {
-			fmt.Printf("[INFO] 🔄 降级模式（顺序降级）\n")
-		}
+		fmt.Printf("[INFO] 🔄 降级模式（分组内顺序降级）\n")
 
 		var lastError error
 		// 只要有过一次真正的供应商故障，终态就必须维持 502 让 SDK 退避重试
@@ -1311,209 +1125,121 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 		var lastDuration time.Duration
 		totalAttempts := 0
 
-		busyWaitDeadline := time.Time{}
-		enteredBusyWait := false
-		defer func() {
-			if enteredBusyWait {
-				prs.concurrency.leaveWaitPhase()
+		fmt.Printf("[INFO] === 尝试分组 %s（%d 个 Provider）===\n", selectedGroup.Name, len(active))
+		for i, provider := range active {
+			if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
+				continue
 			}
-		}()
-		busySkipped := 0
-		// 已实际尝试过的供应商：等待阶段重扫不再碰它（失败已计、重试预算不重置）
-		attemptedProviders := map[string]bool{}
-		// 因并发满被跳过、尚未真实尝试的候选
-		busyPending := map[string]concurrencyBusyRef{}
-		for {
-			busySkipped = 0
-			// 每 pass 重建：上一轮候选可能已被拉黑或删除，残留会让容量门控恒真
-			busyPending = map[string]concurrencyBusyRef{}
-			for _, level := range levels {
-				providersInLevel := levelGroups[level]
+			if prs.isDailyCostBlocked(kind, provider) {
+				fmt.Printf("[INFO] ⏭️ 跳过当日额度耗尽的 Provider: %s\n", provider.Name)
+				continue
+			}
+			totalAttempts++
 
-				// 如果启用轮询，对同 Level 的 providers 进行轮询排序
-				if roundRobinEnabled {
-					providersInLevel = prs.roundRobinOrder(kind, level, providersInLevel)
+			// 获取实际应该使用的模型名
+			effectiveModel := provider.GetEffectiveModel(requestedModel)
+
+			// 如果需要映射，修改请求体
+			currentBodyBytes := bodyBytes
+			if effectiveModel != requestedModel && requestedModel != "" {
+				fmt.Printf("[INFO] Provider %s 映射模型: %s -> %s\n", provider.Name, requestedModel, effectiveModel)
+
+				modifiedBody, err := ReplaceModelInRequestBody(bodyBytes, effectiveModel)
+				if err != nil {
+					trace.RecordLocalSummary(provider.Name, "model_mapping_error", "provider model mapping could not be applied")
+					fmt.Printf("[ERROR] 替换模型名失败: %v\n", err)
+					// 映射失败不应阻止尝试其他 provider
+					continue
 				}
-
-				fmt.Printf("[INFO] === 尝试 Level %d（%d 个 provider）===\n", level, len(providersInLevel))
-
-				for i, provider := range providersInLevel {
-					if attemptedProviders[strconv.FormatInt(provider.ID, 10)] {
-						continue
-					}
-					if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
-						continue
-					}
-					if prs.isDailyCostBlocked(kind, provider) {
-						fmt.Printf("[INFO] ⏭️ 跳过当日额度耗尽的 Provider: %s\n", provider.Name)
-						continue
-					}
-					totalAttempts++
-
-					// 获取实际应该使用的模型名
-					effectiveModel := provider.GetEffectiveModel(requestedModel)
-
-					// 如果需要映射，修改请求体
-					currentBodyBytes := bodyBytes
-					if effectiveModel != requestedModel && requestedModel != "" {
-						fmt.Printf("[INFO] Provider %s 映射模型: %s -> %s\n", provider.Name, requestedModel, effectiveModel)
-
-						modifiedBody, err := ReplaceModelInRequestBody(bodyBytes, effectiveModel)
-						if err != nil {
-							trace.RecordLocalSummary(provider.Name, "model_mapping_error", "provider model mapping could not be applied")
-							fmt.Printf("[ERROR] 替换模型名失败: %v\n", err)
-							// 映射失败不应阻止尝试其他 provider
-							continue
-						}
-						currentBodyBytes = modifiedBody
-					}
-
-					fmt.Printf("[INFO]   [%d/%d] Provider: %s | Model: %s\n", i+1, len(providersInLevel), provider.Name, effectiveModel)
-
-					// 尝试发送请求
-					// 获取有效的端点（用户配置优先）
-					effectiveEndpoint := provider.GetEffectiveEndpoint(endpoint)
-					attempt := trace.BeforeAttempt(provider.Name)
-					startTime := time.Now()
-					ok, err := prs.forwardRequest(c, kind, provider, effectiveEndpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel, configGen)
-					duration := time.Since(startTime)
-					if err != nil {
-						trace.RecordForwardError(provider.Name, err, attempt, i+1, duration)
-					}
-
-					if ok {
-						trace.MarkSucceeded()
-						fmt.Printf("[INFO]   ✓ Level %d 成功: %s | 耗时: %.2fs\n", level, provider.Name, duration.Seconds())
-
-						// 成功：清零连续失败计数
-						if err := prs.blacklistService.RecordSuccess(kind, provider.Name); err != nil {
-							fmt.Printf("[WARN] 清零失败计数失败: %v\n", err)
-						}
-
-						// 记录最后使用的供应商
-						prs.setLastUsedProvider(kind, provider.Name)
-
-						return // 成功，立即返回
-					}
-
-					// 并发满载：不算尝试、不计失败，换下一个供应商
-					if errors.Is(err, errProviderBusy) {
-						totalAttempts--
-						busySkipped++
-						pk := strconv.FormatInt(provider.ID, 10)
-						busyPending[pk] = concurrencyBusyRef{Key: pk, Limit: provider.MaxConcurrency, Gen: configGen}
-						fmt.Printf("[INFO] Provider %s 并发已满，跳过\n", provider.Name)
-						continue
-					}
-					// 实际尝试过：等待阶段重扫不再碰它
-					attemptedProviders[strconv.FormatInt(provider.ID, 10)] = true
-					delete(busyPending, strconv.FormatInt(provider.ID, 10))
-
-					// 失败：记录错误并尝试下一个
-					lastError = err
-					lastProvider = provider.Name
-					lastDuration = duration
-
-					errorMsg := safeRelayError(err)
-					fmt.Printf("[WARN]   ✗ Level %d 失败: %s | 错误: %s | 耗时: %.2fs\n",
-						level, provider.Name, errorMsg, duration.Seconds())
-
-					// 客户端中断不计入失败次数，且没必要再换供应商
-					if errors.Is(err, errClientAbort) {
-						fmt.Printf("[INFO] 客户端中断，跳过失败计数: %s\n", provider.Name)
-						return
-					}
-
-					// 上游 2xx 后中途断流：响应已部分写出，不能再降级，但必须计入失败
-					if errors.Is(err, errUpstreamStreamAborted) {
-						trace.MarkFailed(err)
-						if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
-							fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
-						}
-						return
-					}
-
-					// 上游判定"请求内容本身有问题"：不计入供应商失败，继续尝试下一个
-					if errors.Is(err, errUpstreamClientError) {
-						fmt.Printf("[INFO] 上游拒绝请求内容，不计供应商失败\n")
-					} else {
-						sawNonClientError = true
-						if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
-							fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
-						}
-					}
-
-					if c.Request.Context().Err() != nil {
-						fmt.Printf("[INFO] 客户端已断开，停止尝试后续 Provider\n")
-						return
-					}
-
-					// 发送切换通知：检查是否有下一个可用的 provider
-					if prs.notificationService != nil {
-						nextProvider := ""
-						// 先查找同级别的下一个
-						if i+1 < len(providersInLevel) {
-							nextProvider = providersInLevel[i+1].Name
-						} else {
-							// 查找下一个 level 的第一个 provider
-							for _, nextLevel := range levels {
-								if nextLevel > level && len(levelGroups[nextLevel]) > 0 {
-									nextProvider = levelGroups[nextLevel][0].Name
-									break
-								}
-							}
-						}
-						if nextProvider != "" {
-							prs.notificationService.NotifyProviderSwitch(SwitchNotification{
-								FromProvider: provider.Name,
-								ToProvider:   nextProvider,
-								Reason:       errorMsg,
-								Platform:     kind,
-							})
-						}
-					}
-				}
-
-				fmt.Printf("[WARN] Level %d 的所有 %d 个 provider 均失败，尝试下一 Level\n", level, len(providersInLevel))
+				currentBodyBytes = modifiedBody
 			}
 
-			// 一整遍下来只要还有因并发满被跳过的供应商，就进入有界等待
-			if busySkipped == 0 {
-				break
+			fmt.Printf("[INFO]   [%d/%d] Provider: %s | Model: %s\n", i+1, len(active), provider.Name, effectiveModel)
+
+			// 尝试发送请求
+			// 获取有效的端点（用户配置优先）
+			effectiveEndpoint := provider.GetEffectiveEndpoint(endpoint)
+			attempt := trace.BeforeAttempt(provider.Name)
+			startTime := time.Now()
+			ok, err := prs.forwardRequest(c, kind, provider, effectiveEndpoint, query, clientHeaders, currentBodyBytes, isStream, effectiveModel)
+			duration := time.Since(startTime)
+			if err != nil {
+				trace.RecordForwardError(provider.Name, err, attempt, i+1, duration)
 			}
-			if busyWaitDeadline.IsZero() {
-				busyWaitDeadline = time.Now().Add(prs.concurrency.waitBudget)
-				if !prs.concurrency.enterWaitPhase() {
-					respondAllBusy(c, kind)
-					return
+
+			if ok {
+				trace.MarkSucceeded()
+				fmt.Printf("[INFO]   ✓ 分组 %s 成功: %s | 耗时: %.2fs\n", selectedGroup.Name, provider.Name, duration.Seconds())
+
+				// 成功：清零连续失败计数
+				if err := prs.blacklistService.RecordSuccess(kind, provider.Name); err != nil {
+					fmt.Printf("[WARN] 清零失败计数失败: %v\n", err)
 				}
-				enteredBusyWait = true
+
+				// 记录最后使用的供应商
+				prs.setLastUsedProvider(kind, *selectedGroup, provider.Name)
+
+				return // 成功，立即返回
 			}
-			// 唤醒以"忙候选真的有空位"为门控：本轮实际尝试供应商的正常释放
-			// 也会触发全局信号，不加门控直接重扫会形成自唤醒重试风暴
-			woke := false
-			for {
-				capSignal := prs.concurrency.releaseSignal()
-				if prs.concurrency.anyCapacity(kind, busyPending) {
-					woke = true
-					break
-				}
-				if !prs.concurrency.waitForRelease(c.Request.Context(), busyWaitDeadline, capSignal) {
-					break
-				}
-			}
-			if !woke {
-				respondAllBusy(c, kind)
+
+			// 失败：记录错误并尝试下一个
+			lastError = err
+			lastProvider = provider.Name
+			lastDuration = duration
+
+			errorMsg := safeRelayError(err)
+			fmt.Printf("[WARN]   ✗ 分组 %s 失败: %s | 错误: %s | 耗时: %.2fs\n",
+				selectedGroup.Name, provider.Name, errorMsg, duration.Seconds())
+
+			// 客户端中断不计入失败次数，且没必要再换供应商
+			if errors.Is(err, errClientAbort) {
+				fmt.Printf("[INFO] 客户端中断，跳过失败计数: %s\n", provider.Name)
 				return
 			}
-			// 容量门控可能被"释放后立刻又被占走"的候选反复触发，
-			// 重扫前硬校验总预算与客户端 context，防止空转越过 deadline
-			if c.Request.Context().Err() != nil || time.Now().After(busyWaitDeadline) {
-				respondAllBusy(c, kind)
+
+			// 上游 2xx 后中途断流：响应已部分写出，不能再降级，但必须计入失败
+			if errors.Is(err, errUpstreamStreamAborted) {
+				trace.MarkFailed(err)
+				if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
+					fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
+				}
 				return
 			}
-			fmt.Printf("[INFO] 并发配额有释放，重扫供应商\n")
+
+			// 上游判定"请求内容本身有问题"：不计入供应商失败，继续尝试下一个
+			if errors.Is(err, errUpstreamClientError) {
+				fmt.Printf("[INFO] 上游拒绝请求内容，不计供应商失败\n")
+			} else {
+				sawNonClientError = true
+				if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
+					fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
+				}
+			}
+
+			if c.Request.Context().Err() != nil {
+				fmt.Printf("[INFO] 客户端已断开，停止尝试后续 Provider\n")
+				return
+			}
+
+			// 发送切换通知：检查是否有下一个可用的 provider
+			if prs.notificationService != nil {
+				nextProvider := ""
+				if i+1 < len(active) {
+					nextProvider = active[i+1].Name
+				}
+				if nextProvider != "" {
+					prs.notificationService.NotifyProviderSwitch(SwitchNotification{
+						FromProvider:   provider.Name,
+						ToProvider:     nextProvider,
+						Reason:         errorMsg,
+						Platform:       kind,
+						ModelGroupID:   selectedGroup.ID,
+						ModelGroupName: selectedGroup.Name,
+					})
+				}
+			}
 		}
+		fmt.Printf("[WARN] 分组 %s 的所有 %d 个 Provider 均失败\n", selectedGroup.Name, len(active))
 
 		// 所有 provider 都失败，返回 502
 		errorMsg := safeRelayError(lastError)
@@ -1539,7 +1265,6 @@ func (prs *ProviderRelayService) forwardRequest(
 	bodyBytes []byte,
 	isStream bool,
 	model string,
-	configGen int64,
 ) (bool, error) {
 	if err := requireCodexPlatform(kind); err != nil {
 		return false, err
@@ -1583,20 +1308,17 @@ func (prs *ProviderRelayService) forwardRequest(
 		}
 	}
 
-	// 并发配额：在本地校验/协议转换之后获取——满载时不能把本应确定
-	// 返回的 400 客户端错误变成"忙"。占用覆盖地址池遍历与 SSE 转发全程
-	// （本函数同步转发到流结束才返回），defer 释放即为流结束时机。
-	concurrencyProviderKey := strconv.FormatInt(provider.ID, 10)
-	if !prs.concurrency.TryAcquire(kind, concurrencyProviderKey, provider.MaxConcurrency, configGen) {
-		return false, errProviderBusy
-	}
-	defer prs.concurrency.Release(kind, concurrencyProviderKey)
-
 	requestLog := &RequestLog{
 		Platform: kind,
 		Provider: provider.Name,
 		Model:    model,
 		IsStream: isStream,
+	}
+	if groupID, exists := c.Get("model_group_id"); exists {
+		requestLog.ModelGroupID, _ = groupID.(int64)
+	}
+	if groupName, exists := c.Get("model_group_name"); exists {
+		requestLog.ModelGroupName, _ = groupName.(string)
 	}
 	// 抓包模式（全量不脱敏）：录制终态出站 headers/body（映射/清理/认证注入均已
 	// 完成，即实际进 transport 前的应用层形态），并在转发时补 URL 与响应。
@@ -2078,12 +1800,17 @@ func (prs *ProviderRelayService) forwardModelsRequest(
 	}
 	fmt.Printf("[%s] 收到 /v1/models 请求, kind=%s\n", logPrefix, kind)
 
-	// 加载 providers
-	providers, err := prs.providerService.LoadProviders(kind)
+	providers, groups, _, err := prs.providerService.LoadConfigurationWithGen(kind)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load providers"})
 		return fmt.Errorf("failed to load providers: %w", err)
 	}
+	selectedGroup := SelectModelGroup(groups, "*")
+	if selectedGroup == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no model group matches *"})
+		return fmt.Errorf("no model group matches *")
+	}
+	providers = ProvidersForModelGroup(providers, *selectedGroup)
 
 	// 过滤可用的 providers（启用 + URL + APIKey）
 	var activeProviders []Provider
@@ -2091,10 +1818,18 @@ func (prs *ProviderRelayService) forwardModelsRequest(
 		if !provider.Enabled || provider.APIURL == "" || provider.APIKey == "" {
 			continue
 		}
+		if errs := provider.ValidateConfiguration(); len(errs) > 0 {
+			fmt.Printf("[%s] Provider %s 配置验证失败，已跳过: %v\n", logPrefix, provider.Name, errs)
+			continue
+		}
 
 		// 黑名单检查：跳过已拉黑的 provider
 		if isBlacklisted, until := prs.blacklistService.IsBlacklisted(kind, provider.Name); isBlacklisted {
 			fmt.Printf("[%s] ⛔ Provider %s 已拉黑，过期时间: %v\n", logPrefix, provider.Name, until.Format("15:04:05"))
+			continue
+		}
+		if prs.isDailyCostBlocked(kind, provider) {
+			fmt.Printf("[%s] ⛔ Provider %s 已达到当日费用限额\n", logPrefix, provider.Name)
 			continue
 		}
 
@@ -2106,28 +1841,7 @@ func (prs *ProviderRelayService) forwardModelsRequest(
 		return fmt.Errorf("no providers available")
 	}
 
-	// 按 Level 分组并排序
-	levelGroups := make(map[int][]Provider)
-	for _, provider := range activeProviders {
-		level := provider.Level
-		if level <= 0 {
-			level = 1
-		}
-		levelGroups[level] = append(levelGroups[level], provider)
-	}
-
-	levels := make([]int, 0, len(levelGroups))
-	for level := range levelGroups {
-		levels = append(levels, level)
-	}
-	sort.Ints(levels)
-
-	// 展平候选（Level 升序、组内保持用户顺序），逐个尝试直到成功——
-	// 与聊天转发一致的多 Provider 容错，避免首个供应商临时故障导致整体失败
-	ordered := make([]Provider, 0, len(activeProviders))
-	for _, level := range levels {
-		ordered = append(ordered, levelGroups[level]...)
-	}
+	ordered := activeProviders
 
 	// 复用共享连接池；client 级 Timeout 32h 不适合模型列表这类短请求，
 	// 这里用 30s 的轻量包装挂到同一个 Transport 上，按供应商选择验证策略

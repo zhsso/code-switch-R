@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
   { path: '/', component: () => import('../components/Main/Index.vue') },
+  { path: '/model-groups', component: () => import('../components/ModelGroups/Index.vue') },
   { path: '/availability', component: () => import('../components/Availability/Index.vue') },
   { path: '/speedtest', component: () => import('../components/SpeedTest/Index.vue') },
   { path: '/logs', component: () => import('../components/Logs/Index.vue') },

@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,21 +63,16 @@ type Provider struct {
 	// 全部失败才算该供应商一次失败。
 	FallbackAPIURLs []string `json:"fallbackApiUrls,omitempty"`
 
-	// 最大并发请求数（0=不限）- 仅约束代理转发的推理请求，
-	// /v1/models、健康检查等内部请求不占配额；为单进程内限制
-	MaxConcurrency int `json:"maxConcurrency,omitempty"`
-
-	// 模型白名单 - Provider 原生支持的模型名
-	// 使用 map 实现 O(1) 查找，向后兼容（omitempty）
-	SupportedModels map[string]bool `json:"supportedModels,omitempty"`
+	// 已废弃的路由字段只保留源码兼容性。模型归属、顺序和并发策略均由
+	// ModelGroup 决定；旧配置中的这些字段会在下次保存时被丢弃。
+	MaxConcurrency  int             `json:"-"`
+	SupportedModels map[string]bool `json:"-"`
 
 	// 模型映射 - 外部模型名 -> Provider 内部模型名
 	// 支持精确匹配和通配符（如 "gpt-*" -> "gateway/gpt-*"）。
 	ModelMapping map[string]string `json:"modelMapping,omitempty"`
 
-	// 优先级分组 - 数字越小优先级越高（1-10，默认 1）
-	// 使用 omitempty 确保零值不序列化，向后兼容
-	Level int `json:"level,omitempty"`
+	Level int `json:"-"`
 
 	// 费用倍率 - 影响 WebUI 费用统计和每日费用限额，0 表示旧配置的默认倍率 1。
 	CostMultiplier float64 `json:"costMultiplier,omitempty"`
@@ -134,14 +130,167 @@ type Provider struct {
 	configErrors []string `json:"-"`
 }
 
+type ModelGroup struct {
+	ID          int64    `json:"id"`
+	Name        string   `json:"name"`
+	Enabled     bool     `json:"enabled"`
+	Priority    int      `json:"priority"`
+	Models      []string `json:"models"`
+	ProviderIDs []int64  `json:"providerIds"`
+}
+
 type providerEnvelope struct {
 	Providers []Provider `json:"providers"`
+	// nil means the file predates model groups; a non-nil empty slice means the
+	// user deliberately deleted every group.
+	ModelGroups []ModelGroup `json:"modelGroups"`
+
+	// removedRoutingFields is set while decoding legacy Provider routing
+	// fields so the normalized configuration can be persisted immediately.
+	removedRoutingFields bool `json:"-"`
+}
+
+const defaultModelGroupName = "Default"
+
+func defaultModelGroup(providers []Provider) ModelGroup {
+	providerIDs := make([]int64, 0, len(providers))
+	for _, provider := range providers {
+		providerIDs = append(providerIDs, provider.ID)
+	}
+	return ModelGroup{
+		ID:          1,
+		Name:        defaultModelGroupName,
+		Enabled:     true,
+		Priority:    100,
+		Models:      []string{"*"},
+		ProviderIDs: providerIDs,
+	}
+}
+
+func ensureModelGroups(groups []ModelGroup, providers []Provider) ([]ModelGroup, bool) {
+	if groups != nil {
+		return groups, false
+	}
+	return []ModelGroup{defaultModelGroup(providers)}, true
+}
+
+func normalizeModelGroups(groups []ModelGroup, providers []Provider) []ModelGroup {
+	providerIDs := make(map[int64]struct{}, len(providers))
+	for _, provider := range providers {
+		providerIDs[provider.ID] = struct{}{}
+	}
+	normalized := make([]ModelGroup, len(groups))
+	for index, group := range groups {
+		group.Name = strings.TrimSpace(group.Name)
+		models := make([]string, 0, len(group.Models))
+		for _, model := range group.Models {
+			model = strings.TrimSpace(model)
+			if model != "" {
+				models = append(models, model)
+			}
+		}
+		group.Models = models
+		seen := make(map[int64]struct{}, len(group.ProviderIDs))
+		ids := make([]int64, 0, len(group.ProviderIDs))
+		for _, id := range group.ProviderIDs {
+			if _, exists := providerIDs[id]; !exists {
+				continue
+			}
+			if _, duplicate := seen[id]; duplicate {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+		group.ProviderIDs = ids
+		normalized[index] = group
+	}
+	return normalized
+}
+
+func validateModelGroups(groups []ModelGroup) error {
+	ids := make(map[int64]struct{}, len(groups))
+	names := make(map[string]struct{}, len(groups))
+	for _, group := range groups {
+		if group.ID <= 0 {
+			return fmt.Errorf("模型分组 ID 必须大于 0")
+		}
+		if _, exists := ids[group.ID]; exists {
+			return fmt.Errorf("模型分组 ID %d 重复", group.ID)
+		}
+		ids[group.ID] = struct{}{}
+		name := strings.TrimSpace(group.Name)
+		if name == "" {
+			return fmt.Errorf("模型分组名称不能为空")
+		}
+		nameKey := strings.ToLower(name)
+		if _, exists := names[nameKey]; exists {
+			return fmt.Errorf("模型分组名称 %q 重复", name)
+		}
+		names[nameKey] = struct{}{}
+		if group.Priority < 1 || group.Priority > 100 {
+			return fmt.Errorf("模型分组 %q 的优先级必须在 1-100 之间", name)
+		}
+		for _, pattern := range group.Models {
+			if strings.Count(pattern, "*") > 1 {
+				return fmt.Errorf("模型分组 %q 的规则 %q 最多只能包含一个 *", name, pattern)
+			}
+		}
+	}
+	return nil
+}
+
+func (group ModelGroup) IsComplete() bool {
+	return strings.TrimSpace(group.Name) != "" && len(group.Models) > 0 && len(group.ProviderIDs) > 0
+}
+
+func (group ModelGroup) MatchesModel(model string) bool {
+	for _, pattern := range group.Models {
+		if matchWildcard(pattern, model) {
+			return true
+		}
+	}
+	return false
+}
+
+// OrderedModelGroups applies routing priority while preserving the stored
+// order for ties. The stored order is the manual drag order from the WebUI.
+func OrderedModelGroups(groups []ModelGroup) []ModelGroup {
+	ordered := append([]ModelGroup(nil), groups...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].Priority < ordered[j].Priority
+	})
+	return ordered
+}
+
+func SelectModelGroup(groups []ModelGroup, model string) *ModelGroup {
+	for _, group := range OrderedModelGroups(groups) {
+		if group.Enabled && group.IsComplete() && group.MatchesModel(model) {
+			selected := group
+			return &selected
+		}
+	}
+	return nil
+}
+
+func ProvidersForModelGroup(providers []Provider, group ModelGroup) []Provider {
+	byID := make(map[int64]Provider, len(providers))
+	for _, provider := range providers {
+		byID[provider.ID] = provider
+	}
+	ordered := make([]Provider, 0, len(group.ProviderIDs))
+	for _, id := range group.ProviderIDs {
+		if provider, exists := byID[id]; exists {
+			ordered = append(ordered, provider)
+		}
+	}
+	return ordered
 }
 
 type ProviderService struct {
 	mu sync.Mutex
-	// configGen 配置代数：每次成功落盘递增。并发限流的容量热更新
-	// 以它为准，在途请求携带的旧 Provider 副本不得把容量改回旧值
+	// configGen 配置代数：每次成功落盘递增，供 WebUI 乐观并发控制
+	// 和后台健康检查感知配置刷新。
 	configGen atomic.Int64
 }
 
@@ -188,7 +337,7 @@ func (ps *ProviderService) UpdateProviders(
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
-	providers, err := ps.loadProvidersNoLock(kind)
+	providers, groups, groupsInitialized, err := ps.loadConfigurationNoLock(kind)
 	if err != nil {
 		return nil, ps.configGen.Load(), err
 	}
@@ -206,10 +355,39 @@ func (ps *ProviderService) UpdateProviders(
 	if err != nil {
 		return nil, currentGeneration, err
 	}
-	if err := ps.saveProvidersLocked(kind, updated); err != nil {
+	if !groupsInitialized {
+		groups = []ModelGroup{defaultModelGroup(updated)}
+	}
+	if err := ps.saveConfigurationLocked(kind, updated, groups); err != nil {
 		return nil, currentGeneration, err
 	}
 	return updated, ps.configGen.Load(), nil
+}
+
+func (ps *ProviderService) UpdateModelGroups(kind string, expectedGeneration int64, groups []ModelGroup) (int64, error) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	providers, _, _, err := ps.loadConfigurationNoLock(kind)
+	if err != nil {
+		return ps.configGen.Load(), err
+	}
+	currentGeneration := ps.configGen.Load()
+	if currentGeneration != expectedGeneration {
+		return currentGeneration, fmt.Errorf(
+			"%w: expected generation %d, current generation %d",
+			ErrProviderConfigConflict,
+			expectedGeneration,
+			currentGeneration,
+		)
+	}
+	if groups == nil {
+		groups = []ModelGroup{}
+	}
+	if err := ps.saveConfigurationLocked(kind, providers, groups); err != nil {
+		return currentGeneration, err
+	}
+	return ps.configGen.Load(), nil
 }
 
 // mutateProviders 在锁内完成"加载→修改→保存"的整段读改写。
@@ -218,52 +396,82 @@ func (ps *ProviderService) UpdateProviders(
 func (ps *ProviderService) mutateProviders(kind string, mutate func(providers []Provider) ([]Provider, error)) error {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
-	providers, err := ps.loadProvidersRaw(kind)
+	providers, groups, groupsInitialized, err := ps.loadConfigurationNoLock(kind)
 	if err != nil {
 		return err
-	}
-	// 原样读取不含旧字段迁移,而 saveProvidersLocked 会清除旧字段;
-	// 必须先迁移再修改,否则旧配置里的连通性设置会在保存时丢失
-	for i := range providers {
-		providers[i].migrateFromLegacy()
 	}
 	updated, err := mutate(providers)
 	if err != nil {
 		return err
 	}
-	return ps.saveProvidersLocked(kind, updated)
+	if !groupsInitialized {
+		groups = []ModelGroup{defaultModelGroup(updated)}
+	}
+	return ps.saveConfigurationLocked(kind, updated, groups)
 }
 
-// loadProvidersRaw 原样读取配置文件（不迁移、不保存）
-// 用于内部需要读取现有配置但不触发迁移的场景（如名称校验）
-func (ps *ProviderService) loadProvidersRaw(kind string) ([]Provider, error) {
+func (ps *ProviderService) loadEnvelopeRaw(kind string) (providerEnvelope, error) {
 	path, err := providerFilePath(kind)
 	if err != nil {
-		return nil, err
+		return providerEnvelope{}, err
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return providerEnvelope{}, nil
 		}
-		return nil, err
+		return providerEnvelope{}, err
 	}
 
 	var envelope providerEnvelope
 	if len(data) == 0 {
-		return []Provider{}, nil
+		return envelope, nil
 	}
 
 	if err := json.Unmarshal(data, &envelope); err != nil {
-		return nil, err
+		return providerEnvelope{}, err
 	}
+	var raw struct {
+		Providers []map[string]json.RawMessage `json:"providers"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return providerEnvelope{}, err
+	}
+	for _, provider := range raw.Providers {
+		for _, field := range []string{"level", "supportedModels", "maxConcurrency"} {
+			if _, exists := provider[field]; exists {
+				envelope.removedRoutingFields = true
+				break
+			}
+		}
+		if envelope.removedRoutingFields {
+			break
+		}
+	}
+	return envelope, nil
+}
 
-	return envelope.Providers, nil
+// loadProvidersRaw 原样读取配置文件（不迁移、不保存）。
+func (ps *ProviderService) loadProvidersRaw(kind string) ([]Provider, error) {
+	envelope, err := ps.loadEnvelopeRaw(kind)
+	return envelope.Providers, err
 }
 
 // saveProvidersLocked 内部保存方法，调用方必须已持有锁
 func (ps *ProviderService) saveProvidersLocked(kind string, providers []Provider) error {
+	existing, err := ps.loadEnvelopeRaw(kind)
+	if err != nil {
+		return err
+	}
+	groups, _ := ensureModelGroups(existing.ModelGroups, providers)
+	return ps.saveConfigurationLocked(kind, providers, groups)
+}
+
+// saveConfigurationLocked is the single writer for providers and model groups.
+// Keeping both collections in one envelope makes provider deletion and group
+// reference pruning atomic.
+func (ps *ProviderService) saveConfigurationLocked(kind string, providers []Provider, groups []ModelGroup) error {
 	path, err := providerFilePath(kind)
 	if err != nil {
 		return err
@@ -271,10 +479,11 @@ func (ps *ProviderService) saveProvidersLocked(kind string, providers []Provider
 
 	// 加载现有配置，用于检查 name 是否被修改
 	// 使用原样读取，避免触发迁移导致死锁
-	existingProviders, err := ps.loadProvidersRaw(kind)
+	existing, err := ps.loadEnvelopeRaw(kind)
 	if err != nil {
 		return err
 	}
+	existingProviders := existing.Providers
 	nameByID := make(map[int64]string, len(existingProviders))
 	for _, p := range existingProviders {
 		nameByID[p.ID] = p.Name
@@ -302,7 +511,7 @@ func (ps *ProviderService) saveProvidersLocked(kind string, providers []Provider
 			return fmt.Errorf("provider id %d 的 name 不可修改(请使用 RenameProvider)", p.ID)
 		}
 
-		// 验证模型配置
+		// 验证 Provider 自身配置。模型归属由分组校验负责。
 		if errs := p.ValidateConfiguration(); len(errs) > 0 {
 			for _, errMsg := range errs {
 				validationErrors = append(validationErrors, fmt.Sprintf("[%s] %s", p.Name, errMsg))
@@ -318,7 +527,14 @@ func (ps *ProviderService) saveProvidersLocked(kind string, providers []Provider
 		return fmt.Errorf("配置验证失败：\n  - %s", strings.Join(validationErrors, "\n  - "))
 	}
 
-	data, err := json.MarshalIndent(providerEnvelope{Providers: providers}, "", "  ")
+	groups = normalizeModelGroups(groups, providers)
+	if err := validateModelGroups(groups); err != nil {
+		return err
+	}
+	if groups == nil {
+		groups = []ModelGroup{}
+	}
+	data, err := json.MarshalIndent(providerEnvelope{Providers: providers, ModelGroups: groups}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -326,130 +542,62 @@ func (ps *ProviderService) saveProvidersLocked(kind string, providers []Provider
 	if err := atomicWriteFile(path, data, 0o600); err != nil {
 		return err
 	}
-	// 配置代数递增：并发限流按代数接受容量热更新
+	// 配置代数递增，供 WebUI 的乐观并发控制使用。
 	ps.configGen.Add(1)
 	return nil
 }
 
 // LoadProvidersWithGen 返回配对一致的 (providers, 配置代数)。
-// 并发限流的容量热更新依赖两者配对。必须与写入方共用 ps.mu：
+// 必须与写入方共用 ps.mu：
 // 写入方"改名文件→递增代数"两步之间存在窗口，锁外读取可能拿到
-// (新配置, 旧代数)，与在途旧副本同代后容量会被来回覆盖。
+// (新配置, 旧代数)。
 // 锁内用 loadProvidersNoLock（其迁移保存不再加锁），无递归死锁。
 func (ps *ProviderService) LoadProvidersWithGen(kind string) ([]Provider, int64, error) {
+	providers, _, generation, err := ps.LoadConfigurationWithGen(kind)
+	return providers, generation, err
+}
+
+func (ps *ProviderService) LoadConfigurationWithGen(kind string) ([]Provider, []ModelGroup, int64, error) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
-	providers, err := ps.loadProvidersNoLock(kind)
+	providers, groups, _, err := ps.loadConfigurationNoLock(kind)
 	gen := ps.configGen.Load()
-	return providers, gen, err
+	return providers, groups, gen, err
 }
 
 func (ps *ProviderService) LoadProviders(kind string) ([]Provider, error) {
-	path, err := providerFilePath(kind)
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	var envelope providerEnvelope
-	if len(data) == 0 {
-		return []Provider{}, nil
-	}
-
-	if err := json.Unmarshal(data, &envelope); err != nil {
-		return nil, err
-	}
-
-	// 执行字段迁移：将旧字段值迁移到新字段
-	migrated := false
-	for i := range envelope.Providers {
-		if envelope.Providers[i].migrateFromLegacy() {
-			migrated = true
-		}
-	}
-
-	// 如果有迁移，记录日志并持久化到磁盘
-	if migrated {
-		fmt.Printf("[ProviderService] 已从旧配置迁移可用性字段 (kind=%s)\n", kind)
-		// 锁内重新读取+迁移+保存：锁外读到的快照可能已被并发保存覆盖，
-		// 直接回写会静默丢弃期间的用户修改（新增供应商消失、字段回滚）
-		ps.mu.Lock()
-		fresh, freshErr := ps.loadProvidersRaw(kind)
-		if freshErr == nil {
-			stillMigrated := false
-			for i := range fresh {
-				if fresh[i].migrateFromLegacy() {
-					stillMigrated = true
-				}
-			}
-			// 若并发保存已清除旧字段则无需再写盘，直接返回最新快照
-			if stillMigrated {
-				if saveErr := ps.saveProvidersLocked(kind, fresh); saveErr != nil {
-					log.Printf("[ProviderService] 迁移后写入失败: %v\n", saveErr)
-				} else {
-					fmt.Printf("[ProviderService] 迁移后的配置已保存到磁盘 (kind=%s)\n", kind)
-				}
-			}
-			envelope.Providers = fresh
-		} else {
-			log.Printf("[ProviderService] 迁移后重新加载失败: %v\n", freshErr)
-		}
-		ps.mu.Unlock()
-	}
-
-	return envelope.Providers, nil
+	providers, _, _, err := ps.LoadConfigurationWithGen(kind)
+	return providers, err
 }
 
-// loadProvidersNoLock 内部加载方法，在持有锁的情况下调用（避免递归加锁）
-// 执行配置加载和迁移，如有迁移则直接保存（不再加锁）
-// 仅在已持有 ps.mu 锁的上下文中调用（如 DuplicateProvider）
-func (ps *ProviderService) loadProvidersNoLock(kind string) ([]Provider, error) {
-	path, err := providerFilePath(kind)
+func (ps *ProviderService) loadConfigurationNoLock(kind string) ([]Provider, []ModelGroup, bool, error) {
+	envelope, err := ps.loadEnvelopeRaw(kind)
 	if err != nil {
-		return nil, err
+		return nil, nil, false, err
 	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	var envelope providerEnvelope
-	if len(data) == 0 {
-		return []Provider{}, nil
-	}
-
-	if err := json.Unmarshal(data, &envelope); err != nil {
-		return nil, err
-	}
-
-	// 执行字段迁移（但不保存，避免在持锁时再次加锁）
-	migrated := false
+	groupsInitialized := envelope.ModelGroups != nil
+	groups, groupMigrated := ensureModelGroups(envelope.ModelGroups, envelope.Providers)
+	migrated := envelope.removedRoutingFields
 	for i := range envelope.Providers {
 		if envelope.Providers[i].migrateFromLegacy() {
 			migrated = true
 		}
 	}
-
-	if migrated {
-		fmt.Printf("[ProviderService] 已从旧配置迁移可用性字段 (kind=%s, 锁内模式)\n", kind)
-		// 在锁内模式下，直接保存而不再加锁
-		if err := ps.saveProvidersLocked(kind, envelope.Providers); err != nil {
+	// Do not persist an empty fresh configuration yet: the first provider save
+	// must be able to seed the default group with that provider.
+	if migrated || (groupMigrated && len(envelope.Providers) > 0) {
+		if err := ps.saveConfigurationLocked(kind, envelope.Providers, groups); err != nil {
 			log.Printf("[ProviderService] 锁内迁移保存失败: %v\n", err)
+		} else {
+			groupsInitialized = true
 		}
 	}
+	return envelope.Providers, groups, groupsInitialized, nil
+}
 
-	return envelope.Providers, nil
+func (ps *ProviderService) loadProvidersNoLock(kind string) ([]Provider, error) {
+	providers, _, _, err := ps.loadConfigurationNoLock(kind)
+	return providers, err
 }
 
 // migrateFromLegacy 将旧连通性字段迁移到新可用性字段
@@ -557,7 +705,6 @@ func (ps *ProviderService) DuplicateProvider(kind string, sourceID int64) (*Prov
 		Tint:                  source.Tint,
 		Accent:                source.Accent,
 		Enabled:               false, // 默认禁用，避免与源供应商冲突
-		Level:                 source.Level,
 		CostMultiplier:        source.CostMultiplier,
 		DailyCostLimitEnabled: source.DailyCostLimitEnabled,
 		DailyCostLimitMicros:  source.DailyCostLimitMicros,
@@ -577,14 +724,6 @@ func (ps *ProviderService) DuplicateProvider(kind string, sourceID int64) (*Prov
 		cloned.SanitizeConfig = &SanitizeConfig{
 			BlockedBodyFields: cloneStringListPtr(source.SanitizeConfig.BlockedBodyFields),
 			BlockedHeaders:    cloneStringListPtr(source.SanitizeConfig.BlockedHeaders),
-		}
-	}
-
-	// 6. 深拷贝 map（避免共享引用）
-	if source.SupportedModels != nil {
-		cloned.SupportedModels = make(map[string]bool, len(source.SupportedModels))
-		for k, v := range source.SupportedModels {
-			cloned.SupportedModels[k] = v
 		}
 	}
 
@@ -608,8 +747,6 @@ func (ps *ProviderService) DuplicateProvider(kind string, sourceID int64) (*Prov
 	if len(source.FallbackAPIURLs) > 0 {
 		cloned.FallbackAPIURLs = append([]string(nil), source.FallbackAPIURLs...)
 	}
-
-	cloned.MaxConcurrency = source.MaxConcurrency
 
 	// 7. 添加到列表并保存（使用内部方法避免死锁）
 	providers = append(providers, *cloned)
@@ -731,9 +868,9 @@ func (p *Provider) GetEffectiveEndpoint(defaultEndpoint string) string {
 	return ep
 }
 
-// validateModelConfig 校验白名单/映射组合，返回错误列表（空表示通过）。
-// Provider.ValidateConfiguration 使用这份校验。
-func validateModelConfig(supported map[string]bool, mapping map[string]string) []string {
+// validateModelConfig 校验模型映射，返回错误列表（空表示通过）。
+// supported 参数仅为旧包内调用保留，Provider 模型归属现由 ModelGroup 决定。
+func validateModelConfig(_ map[string]bool, mapping map[string]string) []string {
 	errors := make([]string, 0)
 
 	for externalModel, internalModel := range mapping {
@@ -744,40 +881,16 @@ func validateModelConfig(supported map[string]bool, mapping map[string]string) [
 			continue
 		}
 
-		// 规则 1：ModelMapping 的 value 必须在 SupportedModels 中
-		// 仅当白名单有实际内容时才校验（空白名单不限制映射目标）
-		if len(supported) == 0 {
-			continue
-		}
-
-		// 通配符映射暂不静态验证（需要具体请求才能展开；
-		// 转发路径会对展开后的 effective model 再做白名单校验）
-		if strings.Contains(internalModel, "*") {
-			continue
-		}
-
-		if !modelInWhitelist(supported, internalModel) {
-			errors = append(errors, fmt.Sprintf(
-				"模型映射无效：'%s' -> '%s'，目标模型 '%s' 不在 supportedModels 中",
-				externalModel, internalModel, internalModel,
-			))
-		}
 	}
-
-	// 允许仅配置 modelMapping（无 supportedModels 时不阻塞保存）
-	// 用户可能只想映射模型名，不需要白名单过滤
 
 	return errors
 }
 
-// ValidateConfiguration 验证 provider 的模型配置
+// ValidateConfiguration 验证 Provider 配置
 // 返回验证错误列表（空则表示验证通过）
 func (p *Provider) ValidateConfiguration() []string {
-	errors := validateModelConfig(p.SupportedModels, p.ModelMapping)
+	errors := validateModelConfig(nil, p.ModelMapping)
 	errors = append(errors, validateFallbackURLs(p.FallbackAPIURLs)...)
-	if p.MaxConcurrency < 0 {
-		errors = append(errors, "最大并发数不能为负（0 表示不限）")
-	}
 	if err := validateCostMultiplier(p.CostMultiplier); err != nil {
 		errors = append(errors, err.Error())
 	}

@@ -97,46 +97,68 @@
       </section>
 
       <section class="automation-section">
-      <div class="section-header">
-        <div class="section-controls">
+        <div class="model-group-tabs" role="tablist" :aria-label="t('components.main.groups.ariaLabel')">
           <button
-            class="ghost-icon"
-            :data-tooltip="t('components.main.controls.addCard')"
-            @click="openCreateModal"
+            type="button"
+            role="tab"
+            :aria-selected="activeModelGroupId === null"
+            :class="{ active: activeModelGroupId === null }"
+            @click="activeModelGroupId = null"
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M12 5v14M5 12h14"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                fill="none"
-              />
-            </svg>
+            {{ t('components.main.groups.allProviders') }}
+            <span>{{ cards.length }}</span>
           </button>
           <button
-            class="ghost-icon"
-            :class="{ 'rotating': refreshing }"
-            :data-tooltip="t('components.main.controls.refresh')"
-            @click="refreshAllData"
-            :disabled="refreshing"
+            v-for="group in validModelGroups"
+            :key="group.id"
+            type="button"
+            role="tab"
+            :aria-selected="activeModelGroupId === group.id"
+            :class="{ active: activeModelGroupId === group.id }"
+            @click="activeModelGroupId = group.id"
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0118.8-4.3M22 12.5a10 10 0 01-18.8 4.2"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                fill="none"
-              />
-            </svg>
+            {{ group.name }}
+            <span>{{ group.providerIds.length }}</span>
           </button>
         </div>
-      </div>
-
-
+        <div class="section-header">
+          <div class="section-controls">
+            <button
+              class="ghost-icon"
+              :data-tooltip="t('components.main.controls.addCard')"
+              @click="openCreateModal"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 5v14M5 12h14"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  fill="none"
+                />
+              </svg>
+            </button>
+            <button
+              class="ghost-icon"
+              :class="{ 'rotating': refreshing }"
+              :data-tooltip="t('components.main.controls.refresh')"
+              @click="refreshAllData"
+              :disabled="refreshing"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0118.8-4.3M22 12.5a10 10 0 01-18.8 4.2"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  fill="none"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
 
       <TransitionGroup tag="div" name="card-flip" class="automation-list">
         <article
@@ -145,17 +167,9 @@
           :ref="el => { if (card.name === highlightedProvider) scrollToCard(el as HTMLElement) }"
           :class="[
             'automation-card',
-            { dragging: draggingId === card.id },
-            { 'drop-before': dropIndicator.id === card.id && dropIndicator.before },
-            { 'drop-after': dropIndicator.id === card.id && !dropIndicator.before },
             { 'is-last-used': isLastUsedProvider(card.name) },
             { 'is-highlighted': highlightedProvider === card.name }
           ]"
-          draggable="true"
-          @dragstart="onDragStart(card.id)"
-          @dragend="onDragEnd"
-          @dragover="onCardDragOver(card, $event)"
-          @drop="onDrop(card.id, $event)"
         >
           <!-- 正在使用标签 -->
           <span v-if="isLastUsedProvider(card.name)" class="last-used-badge">
@@ -186,9 +200,6 @@
                   :class="getConnectivityIndicatorClass(card.id)"
                   :title="getConnectivityTooltip(card.id)"
                 ></span>
-                <span v-if="card.level" class="level-badge scheduling-level" :class="`level-${card.level}`">
-                  L{{ card.level }}
-                </span>
                 <!-- 黑名单等级徽章（始终显示，包括 L0） -->
                 <span
                   v-if="getProviderBlacklistStatus(card.name)"
@@ -432,19 +443,6 @@
                   <span class="field-hint">{{ t('components.main.form.hints.fallbackApiUrls') }}</span>
                 </label>
 
-                <!-- 最大并发请求数（0=不限） -->
-                <label class="form-field">
-                  <span>{{ t('components.main.form.labels.maxConcurrency') }}</span>
-                  <input
-                    v-model.number="modalState.form.maxConcurrency"
-                    type="number"
-                    min="0"
-                    class="fallback-urls-input"
-                    :placeholder="t('components.main.form.placeholders.maxConcurrency')"
-                  />
-                  <span class="field-hint">{{ t('components.main.form.hints.maxConcurrency') }}</span>
-                </label>
-
                 <label class="form-field">
                   <span class="label-row">
                     {{ t('components.main.form.labels.costMultiplier') }}
@@ -661,43 +659,6 @@
                 </div>
 
                 <div class="form-field">
-                  <span>{{ t('components.main.form.labels.level') }}</span>
-                  <Listbox v-model="modalState.form.level" v-slot="{ open }">
-                    <div class="level-select">
-                      <ListboxButton class="level-select-button">
-                        <span class="level-badge" :class="`level-${modalState.form.level || 1}`">
-                          L{{ modalState.form.level || 1 }}
-                        </span>
-                        <span class="level-label">
-                          Level {{ modalState.form.level || 1 }} - {{ getLevelDescription(modalState.form.level || 1) }}
-                        </span>
-                        <svg viewBox="0 0 20 20" aria-hidden="true">
-                          <path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none" />
-                        </svg>
-                      </ListboxButton>
-                      <ListboxOptions v-if="open" class="level-select-options">
-                        <ListboxOption
-                          v-for="lvl in 10"
-                          :key="lvl"
-                          :value="lvl"
-                          v-slot="{ active, selected }"
-                        >
-                          <div :class="['level-option', { active, selected }]">
-                            <span class="level-badge" :class="`level-${lvl}`">L{{ lvl }}</span>
-                            <span class="level-name">Level {{ lvl }} - {{ getLevelDescription(lvl) }}</span>
-                          </div>
-                        </ListboxOption>
-                      </ListboxOptions>
-                    </div>
-                  </Listbox>
-                  <span class="field-hint">{{ t('components.main.form.hints.level') }}</span>
-                </div>
-
-                <div class="form-field">
-                  <ModelWhitelistEditor v-model="modalState.form.supportedModels" />
-                </div>
-
-                <div class="form-field">
                   <ModelMappingEditor v-model="modalState.form.modelMapping" />
                 </div>
 
@@ -899,15 +860,16 @@ import lobeIcons from '../../icons/lobeIconMap'
 import BaseButton from '../common/BaseButton.vue'
 import BaseModal from '../common/BaseModal.vue'
 import BaseInput from '../common/BaseInput.vue'
-import ModelWhitelistEditor from '../common/ModelWhitelistEditor.vue'
 import ModelMappingEditor from '../common/ModelMappingEditor.vue'
 import SanitizeConfigEditor from '../common/SanitizeConfigEditor.vue'
 import {
   LoadProviders,
   SaveProviders,
+  SaveModelGroups,
   RevealProviderAPIKey,
   DuplicateProvider,
   RenameProvider,
+  type ModelGroup,
 } from '../../services/providers'
 import { fetchProviderDailyStats, type ProviderDailyStat } from '../../services/logs'
 import { fetchAppSettings, type AppSettings } from '../../services/appSettings'
@@ -991,10 +953,13 @@ interface LastUsedProvider {
   platform: string
   provider_name: string
   updated_at: number
+  model_group_id?: number
+  model_group_name?: string
 }
 const lastUsedProviders = reactive<Record<string, LastUsedProvider | null>>({
   codex: null,
 })
+const lastUsedProvidersByGroup = reactive<Record<number, LastUsedProvider | null>>({})
 // 高亮闪烁的供应商名称
 const highlightedProvider = ref<string | null>(null)
 let highlightTimer: number | undefined
@@ -1190,8 +1155,10 @@ type ProviderTab = 'codex'
 const activeTab = 'codex' as const
 
 const cards = ref(createAutomationCards(automationCardGroups.codex))
+const modelGroups = ref<ModelGroup[]>([])
+const activeModelGroupId = ref<number | null>(null)
+const pendingCreateGroupId = ref<number | null>(null)
 let providerGeneration = 0
-const draggingId = ref<number | null>(null)
 
 // 空对象转 undefined，避免写入无意义的空配置。
 const emptyRecordToUndefined = <T extends Record<string, any>>(obj?: T | null): T | undefined =>
@@ -1203,10 +1170,6 @@ const serializeProviders = (providers: AutomationCard[]) =>
     // 备用地址：空数组不落盘
     fallbackApiUrls: provider.fallbackApiUrls && provider.fallbackApiUrls.length > 0
       ? provider.fallbackApiUrls
-      : undefined,
-    // 最大并发：0 不落盘
-    maxConcurrency: provider.maxConcurrency && provider.maxConcurrency > 0
-      ? provider.maxConcurrency
       : undefined,
     // 倍率 1 使用后端兼容默认值，不写入冗余字段
     costMultiplier: provider.costMultiplier && provider.costMultiplier !== 1
@@ -1255,42 +1218,28 @@ const persistProvidersNow = async (): Promise<{ ok: boolean; error?: string }> =
   }
 }
 
-// persistProviders：所有直接保存（开关、编辑、删除等）先排到在途拖拽保存之后，
-// 避免"新的直接保存先落盘、排队中的旧拖拽快照随后覆盖"的丢改动竞态
-const persistProviders = async (): Promise<{ ok: boolean; error?: string }> => {
-  await dragPersistChain.catch(() => {})
-  return persistProvidersNow()
-}
+const persistProviders = persistProvidersNow
 
 const replaceProviders = (data: AutomationCard[]) => {
   cards.value = createAutomationCards(data)
 }
 
-const loadProvidersFromDisk = async () => {
-  // 与拖拽保存互斥到"链静止"：重载若跑在拖拽保存前面，会用旧磁盘状态替换
-  // 乐观排序；等待期间新入队的拖拽也要继续等。读盘过程中又有新拖拽入队时
-  // 整体重来（有界重试），避免 replaceProviders 吃掉刚拖出来的顺序
-  for (let attempt = 0; attempt < 3; attempt++) {
-    let settled = dragPersistChain
-    for (;;) {
-      await settled.catch(() => {})
-      if (settled === dragPersistChain) break
-      settled = dragPersistChain
-    }
-    const token = dragPersistEnqueues
-    await loadProvidersFromDiskOnce()
-    if (token === dragPersistEnqueues) return
-  }
-}
+const loadProvidersFromDisk = async () => loadProvidersFromDiskOnce()
 
 const loadProvidersFromDiskOnce = async () => {
   try {
     const snapshot = await LoadProviders<AutomationCard>('codex')
     if (snapshot.generation < providerGeneration) return
     providerGeneration = snapshot.generation
+    modelGroups.value = Array.isArray(snapshot.modelGroups) ? snapshot.modelGroups : []
+    if (activeModelGroupId.value !== null) {
+      const activeGroup = modelGroups.value.find(group => group.id === activeModelGroupId.value)
+      if (!activeGroup || !activeGroup.enabled || !activeGroup.models?.length || !activeGroup.providerIds?.length) {
+        activeModelGroupId.value = null
+      }
+    }
     if (Array.isArray(snapshot.providers)) {
       replaceProviders(snapshot.providers)
-      sortProvidersByLevel(cards.value)
     } else {
       await persistProviders()
     }
@@ -1625,12 +1574,23 @@ const stopProviderStatsTimer = () => {
 // @author sm
 const loadLastUsedProviders = async () => {
   try {
-    const result = await Call.ByName('codeswitch/services.ProviderRelayService.GetAllLastUsedProviders')
+    const [result, grouped] = await Promise.all([
+      Call.ByName('codeswitch/services.ProviderRelayService.GetAllLastUsedProviders'),
+      Call.ByName('codeswitch/services.ProviderRelayService.GetLastUsedProvidersByGroup'),
+    ])
     if (result) {
       Object.keys(result).forEach(platform => {
         if (result[platform]) {
           lastUsedProviders[platform] = result[platform]
         }
+      })
+    }
+    Object.keys(lastUsedProvidersByGroup).forEach(id => {
+      delete lastUsedProvidersByGroup[Number(id)]
+    })
+    if (grouped) {
+      Object.keys(grouped).forEach((id) => {
+        lastUsedProvidersByGroup[Number(id)] = grouped[id]
       })
     }
   } catch (err) {
@@ -1640,7 +1600,7 @@ const loadLastUsedProviders = async () => {
 
 // 切换到指定平台的 Tab 并高亮供应商
 // @author sm
-const switchToTabAndHighlight = (platform: string, providerName: string) => {
+const switchToTabAndHighlight = (platform: string, providerName: string, modelGroupId?: number, modelGroupName?: string) => {
   // 切换到对应的 Tab
   if (platform !== activeTab) return
 
@@ -1649,7 +1609,19 @@ const switchToTabAndHighlight = (platform: string, providerName: string) => {
     platform,
     provider_name: providerName,
     updated_at: Date.now(),
+    model_group_id: modelGroupId,
+    model_group_name: modelGroupName,
   }
+  if (modelGroupId) {
+    lastUsedProvidersByGroup[modelGroupId] = {
+      platform,
+      provider_name: providerName,
+      updated_at: Date.now(),
+      model_group_id: modelGroupId,
+      model_group_name: modelGroupName,
+    }
+  }
+  if (activeModelGroupId.value !== null && activeModelGroupId.value !== modelGroupId) return
 
   // 高亮闪烁供应商卡片
   highlightedProvider.value = providerName
@@ -1671,10 +1643,10 @@ const switchToTabAndHighlight = (platform: string, providerName: string) => {
 
 // 处理供应商切换事件
 // @author sm
-const handleProviderSwitched = (event: { data: { platform: string; toProvider: string } }) => {
-  const { platform, toProvider } = event.data
+const handleProviderSwitched = (event: { data: { platform: string; toProvider: string; modelGroupId?: number; modelGroupName?: string } }) => {
+  const { platform, toProvider, modelGroupId, modelGroupName } = event.data
   console.log('[Event] provider:switched', platform, toProvider)
-  switchToTabAndHighlight(platform, toProvider)
+  switchToTabAndHighlight(platform, toProvider, modelGroupId, modelGroupName)
 }
 
 // 处理供应商拉黑事件
@@ -1711,7 +1683,9 @@ const handleServerEventsResync = () => {
 // 判断供应商是否是最后使用的
 // @author sm
 const isLastUsedProvider = (providerName: string): boolean => {
-  const lastUsed = lastUsedProviders[activeTab]
+  const lastUsed = activeModelGroupId.value === null
+    ? lastUsedProviders[activeTab]
+    : lastUsedProvidersByGroup[activeModelGroupId.value]
   return lastUsed?.provider_name === providerName
 }
 
@@ -1831,7 +1805,19 @@ onUnmounted(() => {
   }
 })
 
-const activeCards = computed(() => cards.value)
+const validModelGroups = computed(() => modelGroups.value
+  .map((group, index) => ({ group, index }))
+  .filter(({ group }) => group.enabled && group.models?.length > 0 && group.providerIds?.length > 0)
+  .sort((a, b) => a.group.priority - b.group.priority || a.index - b.index)
+  .map(({ group }) => group))
+
+const activeCards = computed(() => {
+  if (activeModelGroupId.value === null) return cards.value
+  const group = modelGroups.value.find(item => item.id === activeModelGroupId.value)
+  if (!group) return []
+  const byId = new Map(cards.value.map(card => [card.id, card]))
+  return group.providerIds.map(id => byId.get(id)).filter((card): card is AutomationCard => !!card)
+})
 
 // 连通性测试端点选项
 const connectivityEndpointOptions = [
@@ -1947,14 +1933,10 @@ type VendorForm = {
   officialSite: string
   icon: string
   enabled: boolean
-  supportedModels?: Record<string, boolean>
   modelMapping?: Record<string, string>
-  level?: number
   apiEndpoint?: string
   // 备用地址编辑框原文（每行一个）
   fallbackApiUrlsText?: string
-  // 最大并发请求数（0=不限）
-  maxConcurrency?: number
   // 费用统计倍率（缺失时为 1）
   costMultiplier?: number
   dailyCostLimitEnabled?: boolean
@@ -2006,13 +1988,10 @@ const defaultFormValues = (platform?: string): VendorForm => ({
   apiKey: '',
   officialSite: '',
   icon: defaultIconKey,
-  level: 1,
   enabled: true,
-  supportedModels: {},
   modelMapping: {},
   apiEndpoint: '', // API 端点（可选）
   fallbackApiUrlsText: '',
-  maxConcurrency: 0,
   costMultiplier: 1,
   dailyCostLimitEnabled: false,
   dailyCostLimitUSD: '',
@@ -2035,51 +2014,6 @@ const defaultFormValues = (platform?: string): VendorForm => ({
   connectivityTestEndpoint: '',
   connectivityAuthType: '',
 })
-
-// Level 描述文本映射（1-10）
-const getLevelDescription = (level: number) => {
-  const descriptions: Record<number, string> = {
-    1: t('components.main.levelDesc.highest'),
-    2: t('components.main.levelDesc.high'),
-    3: t('components.main.levelDesc.mediumHigh'),
-    4: t('components.main.levelDesc.medium'),
-    5: t('components.main.levelDesc.normal'),
-    6: t('components.main.levelDesc.mediumLow'),
-    7: t('components.main.levelDesc.low'),
-    8: t('components.main.levelDesc.lower'),
-    9: t('components.main.levelDesc.veryLow'),
-    10: t('components.main.levelDesc.lowest'),
-  }
-  return descriptions[level] || t('components.main.levelDesc.normal')
-}
-
-// 归一化最大并发：空/非法/负数视为 0（不限），取整
-const normalizeMaxConcurrency = (value: number | string | undefined): number => {
-  const num = Number(value)
-  if (!Number.isFinite(num) || num <= 0) return 0
-  return Math.floor(num)
-}
-
-// 归一化 level：空/非法视为 1（最高优先级），范围限制 1-10
-const normalizeLevel = (level: number | string | undefined): number => {
-  const num = Number(level)
-  if (!Number.isFinite(num) || num < 1) return 1
-  if (num > 10) return 10
-  return Math.floor(num)  // 确保返回整数
-}
-
-// 按 enabled 和 level 排序：启用的排在前面，同启用状态下按 level 升序排序
-const sortProvidersByLevel = (list: AutomationCard[]) => {
-  if (!Array.isArray(list)) return
-  list.sort((a, b) => {
-    // 第一优先级：启用状态（enabled: true 排在前面）
-    if (a.enabled !== b.enabled) {
-      return a.enabled ? -1 : 1
-    }
-    // 第二优先级：Level 升序（1 -> 10）
-    return normalizeLevel(a.level) - normalizeLevel(b.level)
-  })
-}
 
 const modalState = reactive({
   open: false,
@@ -2220,6 +2154,7 @@ const temporaryUnblockCurrentProvider = () => runDailyLimitAction(
 )
 
 const openCreateModal = () => {
+  pendingCreateGroupId.value = activeModelGroupId.value
   modalState.tabId = activeTab
   modalState.editingId = null
   editingCard.value = null
@@ -2247,13 +2182,10 @@ const openEditModal = (card: AutomationCard) => {
     apiKey: '',
     officialSite: card.officialSite,
     icon: card.icon,
-    level: card.level || 1,
     enabled: card.enabled,
-    supportedModels: card.supportedModels || {},
     modelMapping: card.modelMapping || {},
     apiEndpoint: card.apiEndpoint || '',
     fallbackApiUrlsText: (card.fallbackApiUrls || []).join('\n'),
-    maxConcurrency: card.maxConcurrency || 0,
     costMultiplier: card.costMultiplier && card.costMultiplier > 0 ? card.costMultiplier : 1,
     dailyCostLimitEnabled: card.dailyCostLimitEnabled ?? false,
     dailyCostLimitUSD: card.dailyCostLimitMicros
@@ -2317,6 +2249,32 @@ const closeModal = () => {
 const closeConfirm = () => {
   confirmState.open = false
   confirmState.card = null
+}
+
+const attachProviderToCreateGroup = async (providerId: number) => {
+  const groupId = pendingCreateGroupId.value
+  if (groupId === null) return
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const group = modelGroups.value.find(item => item.id === groupId)
+    if (!group) break
+    if (group.providerIds.includes(providerId)) return
+    const nextGroups = modelGroups.value.map(item => ({
+      ...item,
+      models: [...item.models],
+      providerIds: item.id === groupId ? [...item.providerIds, providerId] : [...item.providerIds],
+    }))
+    try {
+      providerGeneration = await SaveModelGroups('codex', providerGeneration, nextGroups)
+      modelGroups.value = nextGroups
+      return
+    } catch (error) {
+      if (attempt === 0) {
+        await loadProvidersFromDisk()
+        continue
+      }
+      showToast(t('components.main.groups.attachFailed') + ': ' + extractErrorMessage(error), 'warning')
+    }
+  }
 }
 
 const submitModal = async (): Promise<boolean> => {
@@ -2383,9 +2341,6 @@ const submitModal = async (): Promise<boolean> => {
       }
     }
 
-    // 仅当 level 变化时才重新排序，避免破坏同级拖拽顺序
-    const prevLevel = normalizeLevel(editingCard.value.level)
-    const nextLevel = normalizeLevel(modalState.form.level)
     Object.assign(editingCard.value, {
       name: name || editingCard.value.name,
       apiUrl: apiUrl || editingCard.value.apiUrl,
@@ -2394,13 +2349,10 @@ const submitModal = async (): Promise<boolean> => {
       apiKeyChanged: apiKeyChanged.value,
       officialSite,
       icon,
-      level: nextLevel,
       enabled: modalState.form.enabled,
-      supportedModels: modalState.form.supportedModels || {},
       modelMapping: modalState.form.modelMapping || {},
       apiEndpoint: modalState.form.apiEndpoint || '',
       fallbackApiUrls,
-      maxConcurrency: normalizeMaxConcurrency(modalState.form.maxConcurrency),
       costMultiplier,
       dailyCostLimitEnabled: !!modalState.form.dailyCostLimitEnabled,
       dailyCostLimitMicros,
@@ -2425,9 +2377,6 @@ const submitModal = async (): Promise<boolean> => {
       connectivityTestEndpoint: '',
       connectivityAuthType: resolveEffectiveAuthType(),
     })
-    if (prevLevel !== nextLevel) {
-      sortProvidersByLevel(list)
-    }
     const saveResult = await persistProviders()
     if (!saveResult.ok) {
       // 保存失败，不关闭弹窗，让用户修正配置
@@ -2445,13 +2394,10 @@ const submitModal = async (): Promise<boolean> => {
       icon,
       accent: '#0a84ff',
       tint: 'rgba(15, 23, 42, 0.12)',
-      level: normalizeLevel(modalState.form.level),
       enabled: modalState.form.enabled,
-      supportedModels: modalState.form.supportedModels || {},
       modelMapping: modalState.form.modelMapping || {},
       apiEndpoint: modalState.form.apiEndpoint || '',
       fallbackApiUrls,
-      maxConcurrency: normalizeMaxConcurrency(modalState.form.maxConcurrency),
       costMultiplier,
       dailyCostLimitEnabled: !!modalState.form.dailyCostLimitEnabled,
       dailyCostLimitMicros,
@@ -2477,7 +2423,6 @@ const submitModal = async (): Promise<boolean> => {
       connectivityAuthType: resolveEffectiveAuthType(),
     }
     list.push(newCard)
-    sortProvidersByLevel(list)
     const saveResult = await persistProviders()
     if (!saveResult.ok) {
       // 保存失败，从列表中移除刚添加的卡片，不关闭弹窗
@@ -2485,6 +2430,7 @@ const submitModal = async (): Promise<boolean> => {
       if (idx !== -1) list.splice(idx, 1)
       return false
     }
+    await attachProviderToCreateGroup(newCard.id)
   }
 
   await loadProvidersFromDisk()
@@ -2510,6 +2456,11 @@ const remove = async (id: number) => {
     if (!saveResult.ok) {
       // 保存失败时把被删卡片放回原位，避免界面与磁盘状态分叉（与新建路径的失败回滚保持一致）
       list.splice(Math.min(index, list.length), 0, removed)
+    } else {
+      modelGroups.value = modelGroups.value.map(group => ({
+        ...group,
+        providerIds: group.providerIds.filter(providerId => providerId !== id),
+      }))
     }
   }
 }
@@ -2544,112 +2495,6 @@ const confirmRemove = async () => {
   closeConfirm()
 }
 
-const onDragStart = (id: number) => {
-  draggingId.value = id
-}
-
-// 拖拽指示器状态：目标卡片 + 落点在其前/后
-const dropIndicator = reactive<{ id: number | null; before: boolean }>({ id: null, before: false })
-
-// 只允许在同一调度组（启用状态 + Level 相同）内重排：跨组落点在
-// 重载后的稳定排序（启用优先、Level 升序）下必然回弹，指示器不能撒谎
-const sameDragGroup = (a: AutomationCard, b: AutomationCard) =>
-  a.enabled === b.enabled && normalizeLevel(a.level) === normalizeLevel(b.level)
-
-const onCardDragOver = (card: AutomationCard, event: DragEvent) => {
-  if (draggingId.value === null) return
-  const list = cards.value
-  const dragging = list?.find(c => c.id === draggingId.value)
-  if (!dragging || !list) return
-  if (card.id === dragging.id || !sameDragGroup(dragging, card)) {
-    // 无条件清掉指示器：从合法目标滑到非法目标时，残留的旧指示线会撒谎
-    dropIndicator.id = null
-    return
-  }
-  // 只有合法落点才 preventDefault（标记可放置）；非法落点浏览器显示禁止光标
-  event.preventDefault()
-  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  dropIndicator.id = card.id
-  dropIndicator.before = event.clientY < rect.top + rect.height / 2
-}
-
-const clearDragState = () => {
-  draggingId.value = null
-  dropIndicator.id = null
-}
-
-// 拖拽保存串行链：载荷一律在入队时刻同步定格（即拖拽刚落下的乐观状态，
-// 不受后续编辑/重载影响）；修订号按保存目标（tab / 自定义工具）分别计数，
-// 失败回滚只在"该目标没有更新的拖拽"且目标未被切换时执行。
-// 直接保存（persistProviders）与磁盘重载（loadProvidersFromDisk）都会等链静止
-let dragPersistChain: Promise<void> = Promise.resolve()
-const dragPersistRevisions = new Map<string, number>()
-// dragPersistEnqueues 全局入队计数：loadProvidersFromDisk 用它检测
-// "读盘期间又有新拖拽"并整体重来
-let dragPersistEnqueues = 0
-
-const queueDragPersist = (tabId: ProviderTab) => {
-  const targetKey = tabId
-  if (!targetKey) return
-  const revision = (dragPersistRevisions.get(targetKey) ?? 0) + 1
-  dragPersistRevisions.set(targetKey, revision)
-  dragPersistEnqueues++
-
-  const payload = JSON.parse(JSON.stringify(serializeProviders(cards.value)))
-
-  const job = async () => {
-    const nextGeneration = await SaveProviders(targetKey, providerGeneration, payload)
-    providerGeneration = Math.max(providerGeneration, nextGeneration)
-  }
-
-  dragPersistChain = dragPersistChain.then(job).catch(async (error) => {
-    console.error('Failed to persist drag order', error)
-    showToast(t('components.main.form.saveFailed') + ': ' + extractErrorMessage(error), 'error')
-    if (dragPersistRevisions.get(targetKey) !== revision) return
-    try {
-      const snapshot = await LoadProviders<AutomationCard>(targetKey)
-      if (dragPersistRevisions.get(targetKey) !== revision) return
-      if (snapshot.generation < providerGeneration) return
-      providerGeneration = snapshot.generation
-      if (Array.isArray(snapshot.providers)) {
-        cards.value = createAutomationCards(snapshot.providers)
-        sortProvidersByLevel(cards.value)
-      }
-    } catch (reloadError) {
-      console.error('Failed to restore order from disk', reloadError)
-    }
-  })
-}
-
-const onDrop = (targetId: number, event: DragEvent) => {
-  event.preventDefault()
-  if (draggingId.value === null || dropIndicator.id === null) {
-    clearDragState()
-    return
-  }
-  const currentTab = activeTab
-  const list = cards.value
-  const fromIndex = list.findIndex(card => card.id === draggingId.value)
-  const targetIndex = list.findIndex(card => card.id === (dropIndicator.id ?? targetId))
-  if (fromIndex === -1 || targetIndex === -1 || fromIndex === targetIndex) {
-    clearDragState()
-    return
-  }
-  // 显式落点插入：目标前 = 目标下标，目标后 = 目标下标 + 1；
-  // 移除拖拽项后若目标在其后方，插入点整体左移一位。
-  // （旧实现固定 toIndex-1，把"拖到下一张卡"变成无操作）
-  let insertIndex = targetIndex + (dropIndicator.before ? 0 : 1)
-  const [moved] = list.splice(fromIndex, 1)
-  if (fromIndex < insertIndex) insertIndex--
-  list.splice(insertIndex, 0, moved)
-  clearDragState()
-  queueDragPersist(currentTab)
-}
-
-const onDragEnd = () => {
-  clearDragState()
-}
-
 const iconSvg = (name: string) => {
   if (!name) return ''
   return lobeIcons[name.toLowerCase()] ?? ''
@@ -2670,6 +2515,54 @@ const vendorInitials = (name: string) => {
 </script>
 
 <style scoped>
+.model-group-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 38px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--mac-divider);
+}
+
+.model-group-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  min-height: 32px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--mac-text-secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.model-group-tabs button:hover {
+  background: var(--mac-surface-hover);
+  color: var(--mac-text);
+}
+
+.model-group-tabs button.active {
+  background: rgba(10, 132, 255, 0.12);
+  color: var(--mac-accent);
+}
+
+.model-group-tabs button span {
+  min-width: 18px;
+  border-radius: 4px;
+  padding: 1px 4px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: inherit;
+  font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: center;
+}
+
 .api-key-control {
   display: flex;
   align-items: stretch;

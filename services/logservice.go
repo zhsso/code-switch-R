@@ -189,6 +189,10 @@ func (ls *LogService) CleanupOldRecords(daysToKeep int) (int64, error) {
 }
 
 func (ls *LogService) ListRequestLogs(platform string, provider string, limit int) ([]RequestLog, error) {
+	return ls.ListRequestLogsFiltered(platform, provider, "", limit)
+}
+
+func (ls *LogService) ListRequestLogsFiltered(platform string, provider string, modelGroup string, limit int) ([]RequestLog, error) {
 	if platform != "" {
 		if err := requireCodexPlatform(platform); err != nil {
 			return nil, err
@@ -209,7 +213,7 @@ func (ls *LogService) ListRequestLogs(platform string, provider string, limit in
 		// 显式投影：绝不把抓包大字段（request/response body 等）拉进列表——
 		// 一页 200 行最坏能带出几百 MB 正文。has_capture 供前端判断可否展开详情。
 		// 谓词须与 capturesession.go 的 captureRowPredicate 覆盖同一批列
-		xdb.Field("id, platform, model, provider, http_code, input_tokens, output_tokens, " +
+		xdb.Field("id, platform, model, provider, model_group_id, model_group_name, http_code, input_tokens, output_tokens, " +
 			"cache_read_tokens, reasoning_tokens, is_stream, duration_sec, created_at, service_tier, " +
 			"(request_url != '' OR request_headers != '' OR request_body != '' OR response_headers != '' OR response_body != '' OR body_truncated != 0 OR body_bytes != 0 OR response_truncated != 0 OR response_bytes != 0 OR budget_skipped != 0) AS has_capture"),
 		xdb.WhereEq("platform", CodexPlatform),
@@ -218,6 +222,9 @@ func (ls *LogService) ListRequestLogs(platform string, provider string, limit in
 	}
 	if provider != "" {
 		options = append(options, xdb.WhereEq("provider", provider))
+	}
+	if modelGroup != "" {
+		options = append(options, xdb.WhereEq("model_group_name", modelGroup))
 	}
 	records, err := model.Selects(options...)
 	if err != nil {
@@ -230,6 +237,8 @@ func (ls *LogService) ListRequestLogs(platform string, provider string, limit in
 			Platform:        record.GetString("platform"),
 			Model:           record.GetString("model"),
 			Provider:        record.GetString("provider"),
+			ModelGroupID:    record.GetInt64("model_group_id"),
+			ModelGroupName:  record.GetString("model_group_name"),
 			HttpCode:        record.GetInt("http_code"),
 			InputTokens:     record.GetInt("input_tokens"),
 			OutputTokens:    record.GetInt("output_tokens"),
@@ -250,12 +259,14 @@ func (ls *LogService) ListRequestLogs(platform string, provider string, limit in
 // RequestLogDetail 单条日志的抓包详情（按需读取，避免列表携带大字段）。
 // 每个大字段仅返回有界预览（capturePreview），避免大正文阻塞浏览器。
 type RequestLogDetail struct {
-	ID         int64  `json:"id"`
-	Platform   string `json:"platform"`
-	Provider   string `json:"provider"`
-	Model      string `json:"model"`
-	CreatedAt  string `json:"created_at"`
-	RequestURL string `json:"request_url"`
+	ID             int64  `json:"id"`
+	Platform       string `json:"platform"`
+	Provider       string `json:"provider"`
+	Model          string `json:"model"`
+	ModelGroupID   int64  `json:"model_group_id"`
+	ModelGroupName string `json:"model_group_name"`
+	CreatedAt      string `json:"created_at"`
+	RequestURL     string `json:"request_url"`
 	// 请求
 	RequestHeaders     string `json:"request_headers"`
 	RequestBody        string `json:"request_body"`
@@ -276,7 +287,7 @@ type RequestLogDetail struct {
 func (ls *LogService) GetRequestLogDetail(id int64) (*RequestLogDetail, error) {
 	model := xdb.New("request_log")
 	records, err := model.Selects(
-		xdb.Field("id, platform, provider, model, created_at, request_url, request_headers, request_body, body_truncated, body_bytes, response_headers, response_body, response_truncated, response_bytes, budget_skipped"),
+		xdb.Field("id, platform, provider, model, model_group_id, model_group_name, created_at, request_url, request_headers, request_body, body_truncated, body_bytes, response_headers, response_body, response_truncated, response_bytes, budget_skipped"),
 		xdb.WhereEq("id", id),
 		xdb.WhereEq("platform", CodexPlatform),
 		xdb.Limit(1),
@@ -295,6 +306,8 @@ func (ls *LogService) GetRequestLogDetail(id int64) (*RequestLogDetail, error) {
 		Platform:            record.GetString("platform"),
 		Provider:            record.GetString("provider"),
 		Model:               record.GetString("model"),
+		ModelGroupID:        record.GetInt64("model_group_id"),
+		ModelGroupName:      record.GetString("model_group_name"),
 		CreatedAt:           record.GetString("created_at"),
 		RequestURL:          record.GetString("request_url"),
 		RequestHeaders:      record.GetString("request_headers"),
@@ -338,12 +351,49 @@ func (ls *LogService) ListProviders(platform string) ([]string, error) {
 	return providers, nil
 }
 
+func (ls *LogService) ListModelGroups(platform string) ([]string, error) {
+	if platform != "" {
+		if err := requireCodexPlatform(platform); err != nil {
+			return nil, err
+		}
+	}
+	records, err := xdb.New("request_log").Selects(
+		xdb.Field("DISTINCT model_group_name as model_group_name"),
+		xdb.WhereNotEq("model_group_name", ""),
+		xdb.WhereEq("platform", CodexPlatform),
+		xdb.OrderByAsc("model_group_name"),
+	)
+	if err != nil {
+		return nil, err
+	}
+	groups := make([]string, 0, len(records))
+	for _, record := range records {
+		if name := strings.TrimSpace(record.GetString("model_group_name")); name != "" {
+			groups = append(groups, name)
+		}
+	}
+	return groups, nil
+}
+
 // ListRequestEvents returns the sanitized relay timeline used by the event
 // diagnostics page. It intentionally excludes request and response payloads.
 func (ls *LogService) ListRequestEvents(
 	platform string,
 	eventType string,
 	provider string,
+	requestID string,
+	days int,
+	limit int,
+	offset int,
+) ([]RequestEvent, error) {
+	return ls.ListRequestEventsFiltered(platform, eventType, provider, "", requestID, days, limit, offset)
+}
+
+func (ls *LogService) ListRequestEventsFiltered(
+	platform string,
+	eventType string,
+	provider string,
+	modelGroup string,
 	requestID string,
 	days int,
 	limit int,
@@ -375,7 +425,7 @@ func (ls *LogService) ListRequestEvents(
 		return nil, err
 	}
 	query := `
-		SELECT id, request_id, platform, model, event_type, provider,
+		SELECT id, request_id, platform, model, model_group_id, model_group_name, event_type, provider,
 			from_provider, to_provider, attempt, retry, http_code,
 			error_type, error_code, message, duration_sec, outcome, created_at
 		FROM request_event_log
@@ -394,6 +444,10 @@ func (ls *LogService) ListRequestEvents(
 	if normalized := strings.TrimSpace(provider); normalized != "" {
 		query += " AND (provider = ? OR from_provider = ? OR to_provider = ?)"
 		args = append(args, normalized, normalized, normalized)
+	}
+	if normalized := strings.TrimSpace(modelGroup); normalized != "" {
+		query += " AND model_group_name = ?"
+		args = append(args, normalized)
 	}
 	if normalized := strings.TrimSpace(requestID); normalized != "" {
 		query += " AND request_id = ?"
@@ -419,6 +473,8 @@ func (ls *LogService) ListRequestEvents(
 			&event.RequestID,
 			&event.Platform,
 			&event.Model,
+			&event.ModelGroupID,
+			&event.ModelGroupName,
 			&event.EventType,
 			&event.Provider,
 			&event.FromProvider,

@@ -19,42 +19,46 @@ const (
 // RequestEvent is one sanitized item in an inbound request's relay timeline.
 // Payloads and credentials are deliberately absent from this structure.
 type RequestEvent struct {
-	ID           int64   `json:"id"`
-	RequestID    string  `json:"request_id"`
-	Platform     string  `json:"platform"`
-	Model        string  `json:"model"`
-	EventType    string  `json:"event_type"`
-	Provider     string  `json:"provider"`
-	FromProvider string  `json:"from_provider"`
-	ToProvider   string  `json:"to_provider"`
-	Attempt      int     `json:"attempt"`
-	Retry        int     `json:"retry"`
-	HTTPCode     int     `json:"http_code"`
-	ErrorType    string  `json:"error_type"`
-	ErrorCode    string  `json:"error_code"`
-	Message      string  `json:"message"`
-	DurationSec  float64 `json:"duration_sec"`
-	Outcome      string  `json:"outcome"`
-	CreatedAt    string  `json:"created_at"`
+	ID             int64   `json:"id"`
+	RequestID      string  `json:"request_id"`
+	Platform       string  `json:"platform"`
+	Model          string  `json:"model"`
+	ModelGroupID   int64   `json:"model_group_id"`
+	ModelGroupName string  `json:"model_group_name"`
+	EventType      string  `json:"event_type"`
+	Provider       string  `json:"provider"`
+	FromProvider   string  `json:"from_provider"`
+	ToProvider     string  `json:"to_provider"`
+	Attempt        int     `json:"attempt"`
+	Retry          int     `json:"retry"`
+	HTTPCode       int     `json:"http_code"`
+	ErrorType      string  `json:"error_type"`
+	ErrorCode      string  `json:"error_code"`
+	Message        string  `json:"message"`
+	DurationSec    float64 `json:"duration_sec"`
+	Outcome        string  `json:"outcome"`
+	CreatedAt      string  `json:"created_at"`
 }
 
 // RequestEventInput is the write-side form of RequestEvent.
 type RequestEventInput struct {
-	RequestID    string
-	Platform     string
-	Model        string
-	EventType    string
-	Provider     string
-	FromProvider string
-	ToProvider   string
-	Attempt      int
-	Retry        int
-	HTTPCode     int
-	ErrorType    string
-	ErrorCode    string
-	Message      string
-	DurationSec  float64
-	Outcome      string
+	RequestID      string
+	Platform       string
+	Model          string
+	ModelGroupID   int64
+	ModelGroupName string
+	EventType      string
+	Provider       string
+	FromProvider   string
+	ToProvider     string
+	Attempt        int
+	Retry          int
+	HTTPCode       int
+	ErrorType      string
+	ErrorCode      string
+	Message        string
+	DurationSec    float64
+	Outcome        string
 }
 
 type RequestEventService struct{}
@@ -65,10 +69,10 @@ func NewRequestEventService() *RequestEventService {
 
 const requestEventInsertSQL = `
 	INSERT INTO request_event_log (
-		request_id, platform, model, event_type, provider,
+		request_id, platform, model, model_group_id, model_group_name, event_type, provider,
 		from_provider, to_provider, attempt, retry, http_code,
 		error_type, error_code, message, duration_sec, outcome
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 func (s *RequestEventService) Record(input RequestEventInput) error {
@@ -89,6 +93,8 @@ func (s *RequestEventService) Record(input RequestEventInput) error {
 		input.RequestID,
 		CodexPlatform,
 		strings.TrimSpace(input.Model),
+		input.ModelGroupID,
+		strings.TrimSpace(input.ModelGroupName),
 		strings.TrimSpace(input.EventType),
 		strings.TrimSpace(input.Provider),
 		strings.TrimSpace(input.FromProvider),
@@ -137,6 +143,8 @@ type relayRequestTrace struct {
 	requestID      string
 	platform       string
 	model          string
+	modelGroupID   int64
+	modelGroupName string
 	attempt        int
 	current        string
 	lastError      error
@@ -167,6 +175,14 @@ func (trace *relayRequestTrace) SetModel(model string) {
 	if trace != nil {
 		trace.model = strings.TrimSpace(model)
 	}
+}
+
+func (trace *relayRequestTrace) SetModelGroup(group ModelGroup) {
+	if trace == nil {
+		return
+	}
+	trace.modelGroupID = group.ID
+	trace.modelGroupName = group.Name
 }
 
 func (trace *relayRequestTrace) BeforeAttempt(provider string) int {
@@ -318,6 +334,12 @@ func (trace *relayRequestTrace) record(input RequestEventInput) error {
 	if trace == nil || trace.service == nil {
 		return nil
 	}
+	if input.ModelGroupID == 0 {
+		input.ModelGroupID = trace.modelGroupID
+	}
+	if input.ModelGroupName == "" {
+		input.ModelGroupName = trace.modelGroupName
+	}
 	return trace.service.Record(input)
 }
 
@@ -334,8 +356,6 @@ func requestEventErrorDetails(err error) (errorType, errorCode, message string, 
 	}
 	message = safeRelayError(err)
 	switch {
-	case errors.Is(err, errProviderBusy):
-		return "provider_busy", "provider_concurrency_exhausted", message, 503
 	case errors.Is(err, errClientAbort):
 		return "client_aborted", "client_aborted", message, 499
 	case errors.Is(err, errUpstreamModelCapacity):

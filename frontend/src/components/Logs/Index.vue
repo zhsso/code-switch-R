@@ -48,6 +48,13 @@
             </option>
           </select>
         </label>
+        <label class="filter-field">
+          <span>{{ t('components.logs.filters.modelGroup') }}</span>
+          <select v-model="filters.modelGroup" class="mac-select">
+            <option value="">{{ t('components.logs.filters.allModelGroups') }}</option>
+            <option v-for="group in modelGroupOptions" :key="group" :value="group">{{ group }}</option>
+          </select>
+        </label>
       </div>
       <div class="filter-actions">
         <BaseButton type="submit" :disabled="loading">
@@ -62,6 +69,7 @@
           <tr>
             <th class="col-time">{{ t('components.logs.table.time') }}</th>
             <th class="col-provider">{{ t('components.logs.table.provider') }}</th>
+            <th class="col-group">{{ t('components.logs.table.modelGroup') }}</th>
             <th class="col-model">{{ t('components.logs.table.model') }}</th>
             <th class="col-http">{{ t('components.logs.table.httpCode') }}</th>
             <th class="col-stream">{{ t('components.logs.table.stream') }}</th>
@@ -75,6 +83,7 @@
           <tr v-for="item in pagedLogs" :key="item.id">
             <td>{{ formatTime(item.created_at) }}</td>
             <td>{{ item.provider || '—' }}</td>
+            <td><span v-if="item.model_group_name" class="group-tag">{{ item.model_group_name }}</span><span v-else>—</span></td>
             <td>{{ item.model || '—' }}</td>
             <td :class="['code', httpCodeClass(item.http_code)]">{{ item.http_code }}</td>
             <td><span :class="['stream-tag', item.is_stream ? 'on' : 'off']">{{ formatStream(item.is_stream) }}</span></td>
@@ -194,6 +203,7 @@ import CaptureDetailModal from '../common/CaptureDetailModal.vue'
 import {
   fetchRequestLogs,
   fetchLogProviders,
+  fetchLogModelGroups,
   fetchLogStats,
   fetchProviderDailyStats,
   fetchRequestLogDetail,
@@ -223,10 +233,11 @@ const { t } = useI18n()
 const logs = ref<RequestLog[]>([])
 const stats = ref<LogStats | null>(null)
 const loading = ref(false)
-const filters = reactive<{ provider: string }>({ provider: '' })
+const filters = reactive<{ provider: string; modelGroup: string }>({ provider: '', modelGroup: '' })
 const page = ref(1)
 const PAGE_SIZE = 15
 const providerOptions = ref<string[]>([])
+const modelGroupOptions = ref<string[]>([])
 const statsSeries = computed<LogStatsSeries[]>(() => stats.value?.series ?? [])
 
 // 金额明细弹窗状态
@@ -516,6 +527,7 @@ const loadLogs = async () => {
     const data = await fetchRequestLogs({
       platform: 'codex',
       provider: filters.provider,
+      modelGroup: filters.modelGroup,
       limit: 200,
     })
     logs.value = data ?? []
@@ -537,7 +549,7 @@ const loadStats = async () => {
 }
 
 const loadDashboard = async () => {
-  await Promise.all([loadLogs(), loadStats(), loadProviderOptions()])
+  await Promise.all([loadLogs(), loadStats(), loadProviderOptions(), loadModelGroupOptions()])
   syncProviderOptionsFromLogs(logs.value)
 }
 
@@ -718,6 +730,15 @@ const loadProviderOptions = async () => {
     providerOptions.value.sort((a, b) => a.localeCompare(b))
   } catch (error) {
     console.error('failed to load provider options', error)
+  }
+}
+
+const loadModelGroupOptions = async () => {
+  try {
+    const list = await fetchLogModelGroups('codex')
+    modelGroupOptions.value = (list ?? []).map(name => name.trim()).filter(Boolean)
+  } catch (error) {
+    console.error('failed to load model group options', error)
   }
 }
 

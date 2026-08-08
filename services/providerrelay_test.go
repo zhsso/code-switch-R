@@ -321,14 +321,11 @@ func TestProviderConfigValidation(t *testing.T) {
 		t.Errorf("完美配置不应有错误，但返回了: %v", errors)
 	}
 
-	// 场景 2：错误配置 - 映射目标不存在
+	// 场景 2：错误配置 - 映射目标为空
 	invalidProvider := Provider{
 		Name: "InvalidProvider",
-		SupportedModels: map[string]bool{
-			"model-a": true,
-		},
 		ModelMapping: map[string]string{
-			"external": "non-existent-model",
+			"external": "",
 		},
 	}
 

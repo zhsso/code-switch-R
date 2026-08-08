@@ -751,6 +751,7 @@ html.dark .mac-sidebar-item:hover {
 .logs-table .col-time { width: 180px; }
 .logs-table .col-platform { width: 120px; }
 .logs-table .col-provider { width: 170px; }
+.logs-table .col-group { width: 150px; }
 .logs-table .col-model { width: 150px; }
 .logs-table .col-http { width: 90px; }
 .logs-table .col-stream { width: 120px; }
@@ -826,6 +827,21 @@ html.dark .mac-sidebar-item:hover {
 .stream-tag.off {
   background: rgba(148, 163, 184, 0.35);
   color: #0f172a;
+}
+
+.group-tag {
+  display: inline-block;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid rgba(10, 132, 255, 0.22);
+  border-radius: 5px;
+  padding: 3px 7px;
+  background: rgba(10, 132, 255, 0.08);
+  color: var(--mac-accent);
+  font-size: 11px;
+  font-weight: 650;
 }
 
 .duration-tag {

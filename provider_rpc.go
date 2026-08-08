@@ -20,8 +20,9 @@ type providerRPCView struct {
 }
 
 type providerRPCSnapshot struct {
-	Providers  []providerRPCView `json:"providers"`
-	Generation int64             `json:"generation"`
+	Providers   []providerRPCView     `json:"providers"`
+	ModelGroups []services.ModelGroup `json:"modelGroups"`
+	Generation  int64                 `json:"generation"`
 }
 
 type providerRPCService struct {
@@ -33,11 +34,11 @@ func newProviderRPCService(providers *services.ProviderService) *providerRPCServ
 }
 
 func (service *providerRPCService) LoadProviders(kind string) (providerRPCSnapshot, error) {
-	providers, generation, err := service.providers.LoadProvidersWithGen(kind)
+	providers, groups, generation, err := service.providers.LoadConfigurationWithGen(kind)
 	if err != nil {
 		return providerRPCSnapshot{}, err
 	}
-	return providerRPCSnapshot{Providers: maskProviders(providers), Generation: generation}, nil
+	return providerRPCSnapshot{Providers: maskProviders(providers), ModelGroups: groups, Generation: generation}, nil
 }
 
 func (service *providerRPCService) SaveProviders(kind string, generation int64, views []providerRPCView) (int64, error) {
@@ -45,6 +46,10 @@ func (service *providerRPCService) SaveProviders(kind string, generation int64, 
 		return mergeProviderViews(current, views), nil
 	})
 	return nextGeneration, err
+}
+
+func (service *providerRPCService) SaveModelGroups(kind string, generation int64, groups []services.ModelGroup) (int64, error) {
+	return service.providers.UpdateModelGroups(kind, generation, groups)
 }
 
 func mergeProviderViews(current []services.Provider, views []providerRPCView) []services.Provider {

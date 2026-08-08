@@ -179,7 +179,7 @@ func TestForwardRequestSendsOnlyProviderCredentials(t *testing.T) {
 		ConnectivityAuthType: "x-api-key",
 	}
 	ok, ferr := prs.forwardRequest(c, CodexPlatform, provider, "/responses",
-		map[string]string{}, cloneHeaders(req.Header), []byte(`{"model":"m"}`), false, "m", 0)
+		map[string]string{}, cloneHeaders(req.Header), []byte(`{"model":"m"}`), false, "m")
 	if !ok {
 		t.Fatalf("转发应成功,实际失败: %v", ferr)
 	}
@@ -517,7 +517,7 @@ func TestForwardRequestDegradesWhenNothingWritten(t *testing.T) {
 
 	provider := Provider{Name: "p1", APIURL: upstream.URL, APIKey: "k", Enabled: true}
 	ok, err := prs.forwardRequest(c, CodexPlatform, provider, "/responses",
-		map[string]string{}, map[string]string{}, []byte(`{"model":"m"}`), true, "m", 0)
+		map[string]string{}, map[string]string{}, []byte(`{"model":"m"}`), true, "m")
 
 	if ok {
 		t.Fatalf("上游中途断开不应判为成功")
@@ -640,10 +640,10 @@ func TestBoundAddressesClearedAfterStop(t *testing.T) {
 // respondNoEligibleProviders 按跳过原因分支输出可操作的排查文案（issue #29）
 func TestRespondNoEligibleProvidersBranches(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	run := func(model string, m, b, i int) string {
+	run := func(model string, b, i int) string {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
-		respondNoEligibleProviders(c, model, m, b, i)
+		respondNoEligibleProviders(c, model, b, i)
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("应为 404, 实际 %d", w.Code)
 		}
@@ -652,21 +652,17 @@ func TestRespondNoEligibleProvidersBranches(t *testing.T) {
 		msg, _ := body["error"].(string)
 		return msg
 	}
-	if msg := run("gpt-x", 2, 1, 0); !strings.Contains(msg, "gpt-x") ||
-		!strings.Contains(msg, "白名单") || !strings.Contains(msg, "拉黑") {
-		t.Errorf("白名单分支文案缺要素: %s", msg)
-	}
-	if msg := run("", 0, 3, 0); !strings.Contains(msg, "拉黑") || !strings.Contains(msg, "黑名单页") {
+	if msg := run("", 3, 0); !strings.Contains(msg, "拉黑") || !strings.Contains(msg, "黑名单页") {
 		t.Errorf("拉黑分支文案缺要素: %s", msg)
 	}
 	// 混合原因必须全部列出，不得只挑一个当代表（否则"都被拉黑"会掩盖校验失败）
-	if msg := run("", 0, 2, 1); !strings.Contains(msg, "拉黑") || !strings.Contains(msg, "配置校验") {
+	if msg := run("", 2, 1); !strings.Contains(msg, "拉黑") || !strings.Contains(msg, "配置校验") {
 		t.Errorf("拉黑+校验失败组合应同时列出两种原因: %s", msg)
 	}
-	if msg := run("", 0, 0, 2); !strings.Contains(msg, "配置校验") {
+	if msg := run("", 0, 2); !strings.Contains(msg, "配置校验") {
 		t.Errorf("校验失败分支文案缺要素: %s", msg)
 	}
-	if msg := run("", 0, 0, 0); !strings.Contains(msg, "没有已启用的供应商") {
+	if msg := run("", 0, 0); !strings.Contains(msg, "没有已启用的供应商") {
 		t.Errorf("空供应商分支文案缺要素: %s", msg)
 	}
 }

@@ -28,7 +28,6 @@ type AppSettings struct {
 	AutoSyncModels       bool   `json:"auto_sync_models"`
 	AutoConnectivityTest bool   `json:"auto_connectivity_test"`
 	EnableSwitchNotify   bool   `json:"enable_switch_notify"`
-	EnableRoundRobin     bool   `json:"enable_round_robin"`
 	HistoryRetentionDays int    `json:"history_retention_days"`
 	Timezone             string `json:"timezone"`
 }
@@ -53,7 +52,6 @@ func (as *AppSettingsService) defaultSettings() AppSettings {
 		AutoSyncModels:       true,
 		AutoConnectivityTest: true,
 		EnableSwitchNotify:   true,
-		EnableRoundRobin:     false,
 		HistoryRetentionDays: defaultHistoryRetentionDays,
 		Timezone:             defaultAppTimezone,
 	}

@@ -80,6 +80,14 @@
             </select>
           </label>
 
+          <label class="events-filter-field">
+            <span>{{ t('components.requestEvents.filters.modelGroup') }}</span>
+            <select v-model="filters.modelGroup" class="mac-select">
+              <option value="">{{ t('components.requestEvents.filters.allModelGroups') }}</option>
+              <option v-for="group in modelGroupOptions" :key="group" :value="group">{{ group }}</option>
+            </select>
+          </label>
+
           <label class="events-filter-field events-filter-field--request">
             <span>{{ t('components.requestEvents.filters.requestId') }}</span>
             <input
@@ -192,6 +200,7 @@
               </div>
 
               <div class="event-meta-line">
+                <span v-if="event.model_group_name" class="event-group">{{ event.model_group_name }}</span>
                 <span v-if="event.error_code" class="event-code">{{ event.error_code }}</span>
                 <span v-if="event.http_code" class="event-http" :class="httpClass(event.http_code)">HTTP {{ event.http_code }}</span>
                 <span v-if="event.attempt" class="event-meta-item">{{ t('components.requestEvents.meta.attempt', { count: event.attempt }) }}</span>
@@ -238,6 +247,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   fetchLogProviders,
+  fetchLogModelGroups,
   fetchRequestEvents,
   type RequestEvent,
   type RequestEventType,
@@ -249,6 +259,7 @@ const PAGE_SIZE = 40
 const REFRESH_SECONDS = 10
 const events = ref<RequestEvent[]>([])
 const providerOptions = ref<string[]>([])
+const modelGroupOptions = ref<string[]>([])
 const loading = ref(false)
 const page = ref(1)
 const countdown = ref(REFRESH_SECONDS)
@@ -259,11 +270,13 @@ let copyTimer: number | undefined
 const filters = reactive<{
   eventType: RequestEventType
   provider: string
+  modelGroup: string
   requestId: string
   days: number
 }>({
   eventType: 'incident',
   provider: '',
+  modelGroup: '',
   requestId: '',
   days: 30,
 })
@@ -365,6 +378,14 @@ const loadProviders = async () => {
   }
 }
 
+const loadModelGroups = async () => {
+  try {
+    modelGroupOptions.value = await fetchLogModelGroups('codex')
+  } catch (error) {
+    console.error('failed to load event model groups', error)
+  }
+}
+
 const loadEvents = async () => {
   if (loading.value) return
   loading.value = true
@@ -373,6 +394,7 @@ const loadEvents = async () => {
       platform: 'codex',
       eventType: filters.eventType,
       provider: filters.provider,
+      modelGroup: filters.modelGroup,
       requestId: filters.requestId,
       days: filters.days,
       limit: PAGE_SIZE,
@@ -384,6 +406,7 @@ const loadEvents = async () => {
         platform: 'codex',
         eventType: filters.eventType,
         provider: filters.provider,
+        modelGroup: filters.modelGroup,
         requestId: filters.requestId,
         days: filters.days,
         limit: PAGE_SIZE,
@@ -442,7 +465,7 @@ const copyRequestId = async (requestId: string) => {
 }
 
 onMounted(() => {
-  void Promise.all([loadEvents(), loadProviders()])
+  void Promise.all([loadEvents(), loadProviders(), loadModelGroups()])
   refreshTimer = window.setInterval(() => {
     if (countdown.value <= 1) {
       countdown.value = REFRESH_SECONDS
@@ -851,6 +874,7 @@ onUnmounted(() => {
 .event-meta-line { margin-top: 11px; gap: 6px; }
 .event-code,
 .event-http,
+.event-group,
 .event-meta-item,
 .event-outcome {
   display: inline-flex;
@@ -866,6 +890,7 @@ onUnmounted(() => {
 }
 
 .event-code { color: #b45309; }
+.event-group { background: rgba(10, 132, 255, 0.08); color: var(--mac-accent); }
 .event-http--success { color: #059669; }
 .event-http--client { color: #64748b; }
 .event-http--server,

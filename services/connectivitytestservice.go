@@ -257,15 +257,9 @@ func (cts *ConnectivityTestService) buildTestRequest(platform string, provider *
 	if model == "" {
 		model = FallbackCodexProbeModel
 		if cts.policy != nil {
-			// 探测模型固定；供应商仍可用自己的测试模型配置显式覆盖。
+			// 探测模型固定；供应商可用自己的测试模型配置显式覆盖。
 			if candidates := cts.policy.ProbeCandidates(platform); len(candidates) > 0 {
 				model = candidates[0]
-				for _, candidate := range candidates {
-					if provider.IsModelSupported(candidate) {
-						model = candidate
-						break
-					}
-				}
 			}
 		}
 	}

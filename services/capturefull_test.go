@@ -93,7 +93,7 @@ func TestCaptureFullErrorResponseBody(t *testing.T) {
 	c.Request = req
 	// 400 是客户端类错误，forwardRequest 返回 false
 	prs.forwardRequest(c, CodexPlatform, provider, "/responses",
-		map[string]string{}, map[string]string{"Content-Type": "application/json"}, []byte(`{"model":"m"}`), false, "m", 0)
+		map[string]string{}, map[string]string{"Content-Type": "application/json"}, []byte(`{"model":"m"}`), false, "m")
 
 	var respBody string
 	var respBytes int

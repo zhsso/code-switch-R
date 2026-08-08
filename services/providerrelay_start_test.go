@@ -20,7 +20,6 @@ func TestProviderRelayStartReturnsBindError(t *testing.T) {
 	relay := &ProviderRelayService{
 		providerService: NewProviderService(),
 		addr:            listener.Addr().String(),
-		rrLastStart:     make(map[string]string),
 	}
 
 	err = relay.Start()

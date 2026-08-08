@@ -215,7 +215,7 @@ func shutdownDatabaseQueues() {
 
 func registerWebServices(registry *rpcRegistry, svc webServices) {
 	registry.Register("codeswitch/services.ProviderService", svc.providers,
-		"LoadProviders", "SaveProviders", "RevealProviderAPIKey", "DuplicateProvider", "RenameProvider")
+		"LoadProviders", "SaveProviders", "SaveModelGroups", "RevealProviderAPIKey", "DuplicateProvider", "RenameProvider")
 	registry.Register("codeswitch/services.SettingsService", svc.settings,
 		"GetBlacklistSettingsStruct", "UpdateBlacklistSettings", "GetLevelBlacklistEnabled",
 		"SetLevelBlacklistEnabled", "IsBlacklistEnabled", "UpdateBlacklistEnabled",
@@ -227,8 +227,8 @@ func registerWebServices(registry *rpcRegistry, svc webServices) {
 	registry.Register("codeswitch/services.DailyCostLimitService", svc.dailyLimits,
 		"GetStatuses", "SetActualUsage", "ManualBlock", "TemporaryUnblock")
 	registry.Register("codeswitch/services.LogService", svc.logs,
-		"CostSince", "ListRequestLogs", "GetRequestLogDetail", "ListProviders",
-		"HeatmapStats", "StatsSince", "ProviderDailyStats", "ListRequestEvents")
+		"CostSince", "ListRequestLogs", "ListRequestLogsFiltered", "GetRequestLogDetail", "ListProviders", "ListModelGroups",
+		"HeatmapStats", "StatsSince", "ProviderDailyStats", "ListRequestEvents", "ListRequestEventsFiltered")
 	registry.Register("codeswitch/services.ModelSyncService", svc.modelSync,
 		"SyncNow", "GetSyncStatus", "GetDefaultModels", "RestoreBuiltinPricing")
 	registry.Register("codeswitch/services.SpeedTestService", svc.speedTest, "TestEndpoints")
@@ -241,7 +241,7 @@ func registerWebServices(registry *rpcRegistry, svc webServices) {
 		"SetAvailabilityMonitorEnabled", "SetConnectivityAutoBlacklist", "SaveAvailabilityConfig",
 		"CleanupOldRecords")
 	registry.Register("codeswitch/services.ProviderRelayService", svc.relay,
-		"GetLastUsedProvider", "GetAllLastUsedProviders", "GetRequestCapture", "SetRequestCapture",
+		"GetLastUsedProvider", "GetAllLastUsedProviders", "GetLastUsedProvidersByGroup", "GetRequestCapture", "SetRequestCapture",
 		"ListCaptureSessions", "GetCaptureTotalBytes", "GetCaptureSessionLogs",
 		"DeleteCaptureSession", "ClearCapturedRequests")
 	registry.Register("codeswitch/services.MaintenanceService", svc.maintenance,

@@ -258,7 +258,7 @@ func TestForwardRequestSanitizesOutbound(t *testing.T) {
 		SanitizeConfig:         &SanitizeConfig{BlockedHeaders: slp("x-junk")},
 	}
 	ok, ferr := prs.forwardRequest(c, CodexPlatform, provider, "/responses",
-		map[string]string{}, cloneHeaders(req.Header), body, false, "gpt-5.6", 0)
+		map[string]string{}, cloneHeaders(req.Header), body, false, "gpt-5.6")
 	if !ok {
 		t.Fatalf("转发应成功,实际失败: %v", ferr)
 	}

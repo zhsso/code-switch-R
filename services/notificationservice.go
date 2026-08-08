@@ -14,27 +14,35 @@ type EventEmitter interface {
 // NotificationService emits browser events for relay state changes. Native
 // desktop notifications intentionally do not exist in the headless server.
 type NotificationService struct {
-	appSettings    *AppSettingsService
-	emitter        EventEmitter
-	mu             sync.Mutex
-	lastNotifyTime time.Time
-	minInterval    time.Duration
-	pendingSwitch  *SwitchNotification
-	pendingTimer   *time.Timer
-	stopped        bool
+	appSettings          *AppSettingsService
+	emitter              EventEmitter
+	mu                   sync.Mutex
+	lastNotifyTime       time.Time
+	minInterval          time.Duration
+	pendingSwitch        *SwitchNotification
+	pendingTimer         *time.Timer
+	lastNotifyByGroup    map[int64]time.Time
+	pendingSwitchByGroup map[int64]SwitchNotification
+	pendingTimerByGroup  map[int64]*time.Timer
+	stopped              bool
 }
 
 type SwitchNotification struct {
-	FromProvider string
-	ToProvider   string
-	Reason       string
-	Platform     string
+	FromProvider   string
+	ToProvider     string
+	Reason         string
+	Platform       string
+	ModelGroupID   int64
+	ModelGroupName string
 }
 
 func NewNotificationService(appSettings *AppSettingsService) *NotificationService {
 	return &NotificationService{
-		appSettings: appSettings,
-		minInterval: 3 * time.Second,
+		appSettings:          appSettings,
+		minInterval:          3 * time.Second,
+		lastNotifyByGroup:    make(map[int64]time.Time),
+		pendingSwitchByGroup: make(map[int64]SwitchNotification),
+		pendingTimerByGroup:  make(map[int64]*time.Timer),
 	}
 }
 
@@ -64,6 +72,11 @@ func (ns *NotificationService) Stop() {
 		ns.pendingTimer.Stop()
 		ns.pendingTimer = nil
 	}
+	for _, timer := range ns.pendingTimerByGroup {
+		timer.Stop()
+	}
+	ns.pendingSwitchByGroup = make(map[int64]SwitchNotification)
+	ns.pendingTimerByGroup = make(map[int64]*time.Timer)
 	ns.mu.Unlock()
 }
 
@@ -83,6 +96,10 @@ func (ns *NotificationService) NotifyProviderSwitch(info SwitchNotification) {
 		return
 	}
 	info.Platform = CodexPlatform
+	if info.ModelGroupID != 0 {
+		ns.notifyProviderSwitchForGroup(info)
+		return
+	}
 
 	ns.mu.Lock()
 	if ns.stopped {
@@ -112,6 +129,61 @@ func (ns *NotificationService) NotifyProviderSwitch(info SwitchNotification) {
 	log.Printf("[Notification] switch event coalesced after %v", sinceLast)
 }
 
+func (ns *NotificationService) notifyProviderSwitchForGroup(info SwitchNotification) {
+	ns.mu.Lock()
+	if ns.stopped {
+		ns.mu.Unlock()
+		return
+	}
+	if ns.lastNotifyByGroup == nil {
+		ns.lastNotifyByGroup = make(map[int64]time.Time)
+	}
+	if ns.pendingSwitchByGroup == nil {
+		ns.pendingSwitchByGroup = make(map[int64]SwitchNotification)
+	}
+	if ns.pendingTimerByGroup == nil {
+		ns.pendingTimerByGroup = make(map[int64]*time.Timer)
+	}
+	now := time.Now()
+	last := ns.lastNotifyByGroup[info.ModelGroupID]
+	sinceLast := now.Sub(last)
+	if last.IsZero() || ns.minInterval <= 0 || sinceLast >= ns.minInterval {
+		ns.lastNotifyByGroup[info.ModelGroupID] = now
+		delete(ns.pendingSwitchByGroup, info.ModelGroupID)
+		if timer := ns.pendingTimerByGroup[info.ModelGroupID]; timer != nil {
+			timer.Stop()
+			delete(ns.pendingTimerByGroup, info.ModelGroupID)
+		}
+		ns.mu.Unlock()
+		ns.emitProviderSwitch(info)
+		return
+	}
+	ns.pendingSwitchByGroup[info.ModelGroupID] = info
+	if ns.pendingTimerByGroup[info.ModelGroupID] == nil {
+		groupID := info.ModelGroupID
+		ns.pendingTimerByGroup[groupID] = time.AfterFunc(ns.minInterval-sinceLast, func() {
+			ns.flushPendingGroupSwitch(groupID)
+		})
+	}
+	ns.mu.Unlock()
+}
+
+func (ns *NotificationService) flushPendingGroupSwitch(groupID int64) {
+	ns.mu.Lock()
+	info, exists := ns.pendingSwitchByGroup[groupID]
+	delete(ns.pendingSwitchByGroup, groupID)
+	delete(ns.pendingTimerByGroup, groupID)
+	if ns.stopped || !exists {
+		ns.mu.Unlock()
+		return
+	}
+	ns.lastNotifyByGroup[groupID] = time.Now()
+	ns.mu.Unlock()
+	if ns.isEnabled() {
+		ns.emitProviderSwitch(info)
+	}
+}
+
 func (ns *NotificationService) flushPendingSwitch() {
 	ns.mu.Lock()
 	if ns.stopped || ns.pendingSwitch == nil {
@@ -133,11 +205,13 @@ func (ns *NotificationService) flushPendingSwitch() {
 func (ns *NotificationService) emitProviderSwitch(info SwitchNotification) {
 	if emitter := ns.currentEmitter(); emitter != nil {
 		emitter.Emit("provider:switched", map[string]any{
-			"platform":     info.Platform,
-			"fromProvider": info.FromProvider,
-			"toProvider":   info.ToProvider,
-			"reason":       info.Reason,
-			"timestamp":    time.Now().UnixMilli(),
+			"platform":       info.Platform,
+			"modelGroupId":   info.ModelGroupID,
+			"modelGroupName": info.ModelGroupName,
+			"fromProvider":   info.FromProvider,
+			"toProvider":     info.ToProvider,
+			"reason":         info.Reason,
+			"timestamp":      time.Now().UnixMilli(),
 		})
 	}
 }

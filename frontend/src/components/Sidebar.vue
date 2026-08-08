@@ -81,6 +81,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { path: '/', icon: 'home', labelKey: 'sidebar.home' },
+  { path: '/model-groups', icon: 'layers', labelKey: 'sidebar.modelGroups', isNew: true },
   { path: '/availability', icon: 'activity', labelKey: 'sidebar.availability', isNew: true },
   { path: '/speedtest', icon: 'zap', labelKey: 'sidebar.speedtest', isNew: true },
   { path: '/logs', icon: 'bar-chart', labelKey: 'sidebar.logs' },
@@ -122,6 +123,13 @@ const navigate = (path: string) => {
         <svg v-if="item.icon === 'home'" class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
           <polyline points="9 22 9 12 15 12 15 22"></polyline>
+        </svg>
+
+        <!-- Layers -->
+        <svg v-else-if="item.icon === 'layers'" class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+          <polyline points="2 12 12 17 22 12"></polyline>
+          <polyline points="2 17 12 22 22 17"></polyline>
         </svg>
 
         <!-- File Text -->

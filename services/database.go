@@ -127,6 +127,8 @@ func ensureRequestLogTableWithDB(db *sql.DB) error {
 		platform TEXT,
 		model TEXT,
 		provider TEXT,
+		model_group_id INTEGER DEFAULT 0,
+		model_group_name TEXT DEFAULT '',
 		http_code INTEGER,
 		input_tokens INTEGER DEFAULT 0,
 		output_tokens INTEGER DEFAULT 0,
@@ -165,6 +167,8 @@ func ensureRequestLogTableWithDB(db *sql.DB) error {
 		definition string
 	}{
 		{"http_code", "INTEGER"},
+		{"model_group_id", "INTEGER DEFAULT 0"},
+		{"model_group_name", "TEXT DEFAULT ''"},
 		{"input_tokens", "INTEGER DEFAULT 0"},
 		{"output_tokens", "INTEGER DEFAULT 0"},
 		{"cache_create_tokens", "INTEGER DEFAULT 0"},
@@ -339,6 +343,8 @@ func ensureRequestEventTable() error {
 		request_id TEXT NOT NULL,
 		platform TEXT NOT NULL,
 		model TEXT NOT NULL DEFAULT '',
+		model_group_id INTEGER NOT NULL DEFAULT 0,
+		model_group_name TEXT NOT NULL DEFAULT '',
 		event_type TEXT NOT NULL,
 		provider TEXT NOT NULL DEFAULT '',
 		from_provider TEXT NOT NULL DEFAULT '',
@@ -356,13 +362,39 @@ func ensureRequestEventTable() error {
 	if _, err := db.Exec(schema); err != nil {
 		return err
 	}
+	for _, migration := range []struct {
+		column     string
+		definition string
+	}{
+		{"model_group_id", "INTEGER NOT NULL DEFAULT 0"},
+		{"model_group_name", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		var count int
+		if err := db.QueryRow(
+			"SELECT COUNT(*) FROM pragma_table_info('request_event_log') WHERE name = ?",
+			migration.column,
+		).Scan(&count); err != nil {
+			return err
+		}
+		if count == 0 {
+			if _, err := db.Exec(fmt.Sprintf(
+				"ALTER TABLE request_event_log ADD COLUMN %s %s",
+				migration.column,
+				migration.definition,
+			)); err != nil {
+				return fmt.Errorf("补齐 request_event_log 列 %s 失败: %w", migration.column, err)
+			}
+		}
+	}
 	if _, err = db.Exec(`
 		CREATE INDEX IF NOT EXISTS idx_request_event_created_at
 			ON request_event_log(platform, created_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_request_event_request_id
 			ON request_event_log(platform, request_id, id);
 		CREATE INDEX IF NOT EXISTS idx_request_event_provider
-			ON request_event_log(platform, provider, created_at DESC)
+			ON request_event_log(platform, provider, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_request_event_model_group
+			ON request_event_log(platform, model_group_name, created_at DESC)
 	`); err != nil {
 		return err
 	}

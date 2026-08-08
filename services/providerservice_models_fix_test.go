@@ -75,13 +75,13 @@ func TestValidateModelConfigEmptyMappingTarget(t *testing.T) {
 		t.Fatalf("期望空目标报错，得到 %v", errs)
 	}
 
-	// 目标命中白名单里值为 false 的条目也算不在白名单
+	// Provider 白名单参数已废弃，模型归属由分组控制，不再限制映射目标。
 	errs = validateModelConfig(
 		map[string]bool{"real-model": true, "fake-model": false},
 		map[string]string{"x": "fake-model"},
 	)
-	if len(errs) != 1 || !strings.Contains(errs[0], "不在 supportedModels") {
-		t.Fatalf("期望 false 条目视为不在白名单，得到 %v", errs)
+	if len(errs) != 0 {
+		t.Fatalf("旧白名单不得再限制映射目标，得到 %v", errs)
 	}
 
 	// 合法配置不报错

@@ -858,13 +858,6 @@ func (hcs *HealthCheckService) getEffectiveModel(provider *Provider, platform st
 
 	if hcs.policy != nil {
 		candidates := hcs.policy.ProbeCandidates(platform)
-		for _, candidate := range candidates {
-			// 未声明白名单的供应商视为全支持。
-			if provider.IsModelSupported(candidate) {
-				return candidate
-			}
-		}
-		// 声明了白名单但全不支持时仍探测固定模型，模型拒绝不会误拉黑。
 		if len(candidates) > 0 {
 			return candidates[0]
 		}

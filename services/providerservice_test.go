@@ -431,20 +431,17 @@ func TestProvider_ValidateConfiguration(t *testing.T) {
 			expectErrors: false,
 		},
 
-		// 无效映射：目标模型不在白名单
+		// 无效映射：目标模型为空
 		{
-			name: "无效映射-目标不在白名单",
+			name: "无效映射-目标为空",
 			provider: Provider{
 				Name: "test-provider",
-				SupportedModels: map[string]bool{
-					"model-a": true,
-				},
 				ModelMapping: map[string]string{
-					"external": "model-b",
+					"external": "",
 				},
 			},
 			expectErrors:  true,
-			errorContains: "不在 supportedModels 中",
+			errorContains: "目标模型为空",
 		},
 
 		// 警告：只配置映射未配置白名单
@@ -677,7 +674,7 @@ func TestProviderLevelJSON(t *testing.T) {
 				Name:  "Test",
 				Level: 2,
 			},
-			expected: `"level":2`,
+			expected: "",
 		},
 		{
 			name: "Level 未设置（零值，应 omitempty）",
@@ -695,7 +692,7 @@ func TestProviderLevelJSON(t *testing.T) {
 				Name:  "Test",
 				Level: 1,
 			},
-			expected: `"level":1`,
+			expected: "",
 		},
 	}
 
@@ -742,10 +739,9 @@ func findSubstring(s, substr string) bool {
 // 在隔离的 HOME(含 USERPROFILE)+ 独立 DB 环境下验证副本命名/禁用态/Level 继承/map 复制与落盘。
 func TestDuplicateProvider(t *testing.T) {
 	tests := []struct {
-		name        string
-		source      Provider
-		expectName  string
-		expectLevel int
+		name       string
+		source     Provider
+		expectName string
 	}{
 		{
 			name: "复制基础供应商",
@@ -760,8 +756,7 @@ func TestDuplicateProvider(t *testing.T) {
 				DailyCostLimitEnabled: true,
 				DailyCostLimitMicros:  12_345_678,
 			},
-			expectName:  "Test Provider (副本)",
-			expectLevel: 2,
+			expectName: "Test Provider (副本)",
 		},
 		{
 			name: "复制带模型映射的供应商",
@@ -782,8 +777,7 @@ func TestDuplicateProvider(t *testing.T) {
 					"gpt-*":        "openai/gpt-*",
 				},
 			},
-			expectName:  "OpenRouter (副本)",
-			expectLevel: 3,
+			expectName: "OpenRouter (副本)",
 		},
 	}
 
@@ -808,9 +802,9 @@ func TestDuplicateProvider(t *testing.T) {
 				t.Errorf("期望复制后默认禁用，但实际启用了")
 			}
 
-			// 验证 Level 继承
-			if cloned.Level != tt.expectLevel {
-				t.Errorf("期望 Level %d，实际 %d", tt.expectLevel, cloned.Level)
+			// 已移除的 Provider 路由字段不得复制。
+			if cloned.Level != 0 || cloned.MaxConcurrency != 0 || len(cloned.SupportedModels) != 0 {
+				t.Errorf("副本不应继承已废弃路由字段: %+v", cloned)
 			}
 			if cloned.CostMultiplier != tt.source.CostMultiplier {
 				t.Errorf("期望费用倍率 %v，实际 %v", tt.source.CostMultiplier, cloned.CostMultiplier)
@@ -832,16 +826,7 @@ func TestDuplicateProvider(t *testing.T) {
 				t.Errorf("APIURL/APIKey 应与源一致，实际 %q/%q", cloned.APIURL, cloned.APIKey)
 			}
 
-			// 验证 map 内容完整复制
-			if len(cloned.SupportedModels) != len(tt.source.SupportedModels) {
-				t.Errorf("SupportedModels 数量不匹配：实际 %d，期望 %d",
-					len(cloned.SupportedModels), len(tt.source.SupportedModels))
-			}
-			for k, v := range tt.source.SupportedModels {
-				if cloned.SupportedModels[k] != v {
-					t.Errorf("SupportedModels[%q] 应为 %v", k, v)
-				}
-			}
+			// 模型映射仍是 Provider 的全局配置，应完整复制。
 			if len(cloned.ModelMapping) != len(tt.source.ModelMapping) {
 				t.Errorf("ModelMapping 数量不匹配：实际 %d，期望 %d",
 					len(cloned.ModelMapping), len(tt.source.ModelMapping))
@@ -872,10 +857,10 @@ func TestDuplicateProvider(t *testing.T) {
 			if diskSource == nil || diskClone == nil {
 				t.Fatalf("落盘数据缺少源或副本: %+v", providers)
 			}
-			if diskSource.Name != tt.source.Name || !diskSource.Enabled || diskSource.Level != tt.source.Level {
+			if diskSource.Name != tt.source.Name || !diskSource.Enabled || diskSource.Level != 0 || len(diskSource.SupportedModels) != 0 {
 				t.Errorf("源供应商不应被修改，实际 %+v", diskSource)
 			}
-			if diskClone.Name != tt.expectName || diskClone.Enabled || diskClone.Level != tt.expectLevel ||
+			if diskClone.Name != tt.expectName || diskClone.Enabled || diskClone.Level != 0 || len(diskClone.SupportedModels) != 0 ||
 				diskClone.CostMultiplier != tt.source.CostMultiplier {
 				t.Errorf("落盘副本字段不符，实际 %+v", diskClone)
 			}

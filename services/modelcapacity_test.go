@@ -262,7 +262,7 @@ func TestForwardRequestFallsBackFromCapacitySSEToSecondAddress(t *testing.T) {
 	}
 	ok, err := relay.forwardRequest(c, CodexPlatform, provider, "/responses",
 		map[string]string{}, map[string]string{},
-		[]byte(`{"model":"gpt-test","stream":true}`), true, "gpt-test", 0)
+		[]byte(`{"model":"gpt-test","stream":true}`), true, "gpt-test")
 
 	if !ok || err != nil {
 		t.Fatalf("fallback result = (%v, %v)", ok, err)

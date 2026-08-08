@@ -10,18 +10,12 @@ export type AutomationCard = {
   tint: string
   accent: string
   enabled: boolean
-  // 模型白名单：声明 provider 支持的模型（精确或通配符）
-  supportedModels?: Record<string, boolean>
   // 模型映射：external model -> internal model
   modelMapping?: Record<string, string>
-  // 优先级分组：数字越小优先级越高（1-10，默认 1）
-  level?: number
   // API 端点路径（可选）：覆盖平台默认端点
   apiEndpoint?: string
   // 备用 API 地址（最多 4 个）：主地址失败时同一请求内按序兜底
   fallbackApiUrls?: string[]
-  // 最大并发请求数（0=不限，仅代理转发，单进程内）
-  maxConcurrency?: number
   // 费用统计倍率（缺失时按 1）
   costMultiplier?: number
   // 每日费用限额（微美元，1 USD = 1,000,000）

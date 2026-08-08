@@ -31,7 +31,6 @@ const settings = reactive<AppSettings>({
   auto_sync_models: true,
   auto_connectivity_test: true,
   enable_switch_notify: true,
-  enable_round_robin: false,
   history_retention_days: 30,
   timezone: 'Asia/Shanghai',
 })
@@ -226,9 +225,6 @@ onUnmounted(() => {
 
       <section class="settings-section">
         <h2>{{ t('components.general.title.relay') }}</h2>
-        <ListRow :label="t('components.general.label.roundRobin')" :sub-label="t('components.general.label.roundRobinHint')">
-          <label class="mac-switch"><input v-model="settings.enable_round_robin" type="checkbox"><span /></label>
-        </ListRow>
         <ListRow :label="t('components.general.label.autoConnectivityTest')" :sub-label="t('components.general.label.autoConnectivityTestHint')">
           <label class="mac-switch"><input v-model="settings.auto_connectivity_test" type="checkbox"><span /></label>
         </ListRow>

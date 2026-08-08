@@ -393,6 +393,39 @@ func TestNotifyProviderSwitch_CoalescesLatestTrailingEvent(t *testing.T) {
 	}
 }
 
+func TestNotifyProviderSwitch_ThrottlesIndependentlyPerModelGroup(t *testing.T) {
+	emitter := &recordingEventEmitter{}
+	// A literal service also verifies lazy initialization of the per-group maps.
+	ns := &NotificationService{minInterval: time.Hour}
+	ns.SetEventEmitter(emitter)
+	t.Cleanup(ns.Stop)
+
+	ns.NotifyProviderSwitch(SwitchNotification{
+		FromProvider: "a", ToProvider: "b", Platform: CodexPlatform,
+		ModelGroupID: 11, ModelGroupName: "fast",
+	})
+	ns.NotifyProviderSwitch(SwitchNotification{
+		FromProvider: "c", ToProvider: "d", Platform: CodexPlatform,
+		ModelGroupID: 22, ModelGroupName: "fallback",
+	})
+	ns.NotifyProviderSwitch(SwitchNotification{
+		FromProvider: "b", ToProvider: "e", Platform: CodexPlatform,
+		ModelGroupID: 11, ModelGroupName: "fast",
+	})
+
+	if got := emitter.count("provider:switched"); got != 2 {
+		t.Fatalf("不同分组应各自立即发送首条事件，同组后续事件才节流: %d", got)
+	}
+	emitter.mu.Lock()
+	defer emitter.mu.Unlock()
+	first, _ := emitter.payloads[0].(map[string]any)
+	second, _ := emitter.payloads[1].(map[string]any)
+	if first["modelGroupId"] != int64(11) || first["modelGroupName"] != "fast" ||
+		second["modelGroupId"] != int64(22) || second["modelGroupName"] != "fallback" {
+		t.Fatalf("切换事件应携带分组快照: first=%v second=%v", first, second)
+	}
+}
+
 func TestSaveBlacklistLevelConfigConcurrentWritesRemainValid(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)

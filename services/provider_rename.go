@@ -92,11 +92,14 @@ func (ps *ProviderService) renameProviderLocked(kind string, id int64, newName s
 		return fmt.Errorf("清理过期 alias 失败: %w", err)
 	}
 
-	// 加载当前配置(原样读,不触发迁移保存)
-	providers, err := ps.loadProvidersRaw(kind)
+	// 加载当前配置(原样读,不触发迁移保存)。改名只更新 Provider，
+	// ModelGroup 通过稳定 ID 引用 Provider，必须原样保留。
+	envelope, err := ps.loadEnvelopeRaw(kind)
 	if err != nil {
 		return fmt.Errorf("读取配置失败: %w", err)
 	}
+	providers := envelope.Providers
+	groups, _ := ensureModelGroups(envelope.ModelGroups, providers)
 
 	var target *Provider
 	for i := range providers {
@@ -130,14 +133,14 @@ func (ps *ProviderService) renameProviderLocked(kind string, id int64, newName s
 	}
 
 	// 备份原 JSON bytes(用于 DB commit 失败时补偿)
-	originalBytes, err := serializeProviders(providers)
+	originalBytes, err := serializeConfiguration(providers, groups)
 	if err != nil {
 		return fmt.Errorf("序列化原配置失败: %w", err)
 	}
 
 	// 更新内存中的 provider.Name,序列化新配置
 	target.Name = newName
-	newBytes, err := serializeProviders(providers)
+	newBytes, err := serializeConfiguration(providers, groups)
 	if err != nil {
 		return fmt.Errorf("序列化新配置失败: %w", err)
 	}
@@ -402,5 +405,12 @@ func resolvePlatform(kind string) (string, error) {
 
 // serializeProviders 按 saveProvidersLocked 相同的 MarshalIndent 格式输出。
 func serializeProviders(providers []Provider) ([]byte, error) {
-	return json.MarshalIndent(providerEnvelope{Providers: providers}, "", "  ")
+	return serializeConfiguration(providers, []ModelGroup{defaultModelGroup(providers)})
+}
+
+func serializeConfiguration(providers []Provider, groups []ModelGroup) ([]byte, error) {
+	if groups == nil {
+		groups = []ModelGroup{}
+	}
+	return json.MarshalIndent(providerEnvelope{Providers: providers, ModelGroups: groups}, "", "  ")
 }

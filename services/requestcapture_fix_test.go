@@ -123,7 +123,7 @@ func TestForwardRequestCaptureOnOff(t *testing.T) {
 		req, _ := http.NewRequest("POST", "/responses", strings.NewReader(string(body)))
 		c.Request = req
 		ok, ferr := prs.forwardRequest(c, CodexPlatform, provider, "/responses",
-			map[string]string{}, map[string]string{"Content-Type": "application/json"}, body, false, "m", 0)
+			map[string]string{}, map[string]string{"Content-Type": "application/json"}, body, false, "m")
 		if !ok {
 			t.Fatalf("转发应成功: %v", ferr)
 		}

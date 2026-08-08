@@ -14,6 +14,8 @@ export type RequestLog = {
   platform: LogPlatform
   model: string
   provider: string
+  model_group_id: number
+  model_group_name: string
   http_code: number
   input_tokens: number
   output_tokens: number
@@ -38,6 +40,8 @@ export type RequestLogDetail = {
   platform: string
   provider: string
   model: string
+  model_group_id: number
+  model_group_name: string
   created_at: string
   request_url: string
   request_headers: string
@@ -60,18 +64,24 @@ export const fetchRequestLogDetail = async (id: number): Promise<RequestLogDetai
 type RequestLogQuery = {
   platform?: LogPlatform
   provider?: string
+  modelGroup?: string
   limit?: number
 }
 
 export const fetchRequestLogs = async (query: RequestLogQuery = {}): Promise<RequestLog[]> => {
   const platform = query.platform ?? 'codex'
   const provider = query.provider ?? ''
+  const modelGroup = query.modelGroup ?? ''
   const limit = query.limit ?? 100
-  return Call.ByName('codeswitch/services.LogService.ListRequestLogs', platform, provider, limit)
+  return Call.ByName('codeswitch/services.LogService.ListRequestLogsFiltered', platform, provider, modelGroup, limit)
 }
 
 export const fetchLogProviders = async (platform: LogPlatform = 'codex'): Promise<string[]> => {
   return Call.ByName('codeswitch/services.LogService.ListProviders', platform)
+}
+
+export const fetchLogModelGroups = async (platform: LogPlatform = 'codex'): Promise<string[]> => {
+  return Call.ByName('codeswitch/services.LogService.ListModelGroups', platform)
 }
 
 export type RequestEvent = {
@@ -79,6 +89,8 @@ export type RequestEvent = {
   request_id: string
   platform: LogPlatform
   model: string
+  model_group_id: number
+  model_group_name: string
   event_type: 'request_error' | 'provider_switch' | 'request_completed' | string
   provider: string
   from_provider: string
@@ -98,6 +110,7 @@ export type RequestEventQuery = {
   platform?: LogPlatform
   eventType?: RequestEventType
   provider?: string
+  modelGroup?: string
   requestId?: string
   days?: number
   limit?: number
@@ -108,15 +121,17 @@ export const fetchRequestEvents = async (query: RequestEventQuery = {}): Promise
   const platform = query.platform ?? 'codex'
   const eventType = query.eventType ?? 'incident'
   const provider = query.provider ?? ''
+  const modelGroup = query.modelGroup ?? ''
   const requestId = query.requestId ?? ''
   const days = query.days ?? 30
   const limit = query.limit ?? 50
   const offset = query.offset ?? 0
   return Call.ByName(
-    'codeswitch/services.LogService.ListRequestEvents',
+    'codeswitch/services.LogService.ListRequestEventsFiltered',
     platform,
     eventType,
     provider,
+    modelGroup,
     requestId,
     days,
     limit,
