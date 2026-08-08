@@ -8,7 +8,7 @@ export type ModelGroup = {
   enabled: boolean
   priority: number
   models: string[]
-  providerIds: number[]
+  providerIds: string[]
 }
 
 export type ProviderSnapshot<T = any> = {
@@ -37,14 +37,14 @@ export const SaveProviders = async (kind: string, generation: number, providers:
   return Call.ByName<number>(`${SERVICE}.SaveProviders`, kind, generation, providers)
 }
 
-export const RevealProviderAPIKey = async (kind: string, id: number): Promise<string> => {
+export const RevealProviderAPIKey = async (kind: string, id: string): Promise<string> => {
   return Call.ByName<string>(`${SERVICE}.RevealProviderAPIKey`, kind, id)
 }
 
-export const DuplicateProvider = async <T = any>(kind: string, sourceID: number): Promise<T> => {
+export const DuplicateProvider = async <T = any>(kind: string, sourceID: string): Promise<T> => {
   return Call.ByName<T>(`${SERVICE}.DuplicateProvider`, kind, sourceID)
 }
 
-export const RenameProvider = async (kind: string, id: number, name: string): Promise<number> => {
+export const RenameProvider = async (kind: string, id: string, name: string): Promise<number> => {
   return Call.ByName<number>(`${SERVICE}.RenameProvider`, kind, id, name)
 }

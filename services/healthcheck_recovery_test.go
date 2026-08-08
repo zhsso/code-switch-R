@@ -19,10 +19,10 @@ func TestHealthCheckAutoUnblockRequiresTwoConsecutiveSuccesses(t *testing.T) {
 	until := time.Now().Add(time.Hour)
 	if _, err := db.Exec(`
 		INSERT INTO provider_blacklist (
-			platform, provider_name, failure_count, blacklisted_at,
+			platform, model_group_id, model_group_name, provider_name, failure_count, blacklisted_at,
 			blacklisted_until, blacklist_level, last_failure_window_start, auto_recovered
-		) VALUES (?, ?, 4, ?, ?, 3, ?, 0)
-	`, CodexPlatform, "recover-me", time.Now(), until, time.Now()); err != nil {
+		) VALUES (?, 1, ?, ?, 4, ?, ?, 3, ?, 0)
+	`, CodexPlatform, defaultModelGroupName, "recover-me", time.Now(), until, time.Now()); err != nil {
 		t.Fatalf("seed active blacklist: %v", err)
 	}
 
@@ -30,11 +30,14 @@ func TestHealthCheckAutoUnblockRequiresTwoConsecutiveSuccesses(t *testing.T) {
 	notifications := NewNotificationService(nil)
 	notifications.SetEventEmitter(emitter)
 	blacklist := NewBlacklistService(NewSettingsService(), notifications)
-	health := NewHealthCheckService(NewProviderService(), blacklist, NewSettingsService(), nil)
+	providerService := NewProviderService()
 	provider := &Provider{
+		ID:                      "1",
 		Name:                    "recover-me",
 		AvailabilityAutoUnblock: true,
 	}
+	saveProviderFixture(t, providerService, []Provider{*provider})
+	health := NewHealthCheckService(providerService, blacklist, NewSettingsService(), nil)
 	result := func(status string) *HealthCheckResult {
 		return &HealthCheckResult{
 			Platform: CodexPlatform, ProviderName: provider.Name, Status: status, CheckedAt: time.Now(),
@@ -42,20 +45,20 @@ func TestHealthCheckAutoUnblockRequiresTwoConsecutiveSuccesses(t *testing.T) {
 	}
 
 	health.handleBlacklistIntegration(provider, result(HealthStatusOperational))
-	if blacklisted, _ := blacklist.IsBlacklisted(CodexPlatform, provider.Name); !blacklisted {
+	if blacklisted, _ := blacklist.IsGroupBlacklisted(CodexPlatform, 1, provider.Name); !blacklisted {
 		t.Fatal("one successful check must not unblock")
 	}
 
 	// A validation failure breaks the streak, so the next success starts at one.
 	health.handleBlacklistIntegration(provider, result(HealthStatusValidationError))
 	health.handleBlacklistIntegration(provider, result(HealthStatusOperational))
-	if blacklisted, _ := blacklist.IsBlacklisted(CodexPlatform, provider.Name); !blacklisted {
+	if blacklisted, _ := blacklist.IsGroupBlacklisted(CodexPlatform, 1, provider.Name); !blacklisted {
 		t.Fatal("success streak must reset after validation failure")
 	}
 
 	// Degraded is still a successful response and completes the second success.
 	health.handleBlacklistIntegration(provider, result(HealthStatusDegraded))
-	if blacklisted, _ := blacklist.IsBlacklisted(CodexPlatform, provider.Name); blacklisted {
+	if blacklisted, _ := blacklist.IsGroupBlacklisted(CodexPlatform, 1, provider.Name); blacklisted {
 		t.Fatal("two consecutive successful checks should auto-unblock")
 	}
 
@@ -65,7 +68,7 @@ func TestHealthCheckAutoUnblockRequiresTwoConsecutiveSuccesses(t *testing.T) {
 		SELECT failure_count, blacklist_level, auto_recovered, blacklisted_until,
 			last_failure_window_start, last_recovered_at
 		FROM provider_blacklist
-		WHERE platform = ? AND provider_name = ?
+		WHERE platform = ? AND model_group_id = 1 AND provider_name = ?
 	`, CodexPlatform, provider.Name).Scan(
 		&failureCount, &level, &autoRecovered, &blacklistedUntil,
 		&lastFailureWindowStart, &lastRecoveredAt,

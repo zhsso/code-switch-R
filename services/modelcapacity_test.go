@@ -257,7 +257,7 @@ func TestForwardRequestFallsBackFromCapacitySSEToSecondAddress(t *testing.T) {
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"gpt-test","stream":true}`))
 	provider := Provider{
-		ID: 1, Name: "multi-address", APIURL: primary.URL, APIKey: "key", Enabled: true,
+		ID: "1", Name: "multi-address", APIURL: primary.URL, APIKey: "key", Enabled: true,
 		FallbackAPIURLs: []string{fallback.URL},
 	}
 	ok, err := relay.forwardRequest(c, CodexPlatform, provider, "/responses",
@@ -308,8 +308,8 @@ func TestProxyHandlerSwitchesProviderOnHTTP400ModelCapacity(t *testing.T) {
 
 	providerService := NewProviderService()
 	if err := providerService.SaveProviders(CodexPlatform, []Provider{
-		{ID: 1, Name: "capacity", APIURL: capacityUpstream.URL, APIKey: "key-1", Enabled: true, Level: 1},
-		{ID: 2, Name: "healthy", APIURL: healthyUpstream.URL, APIKey: "key-2", Enabled: true, Level: 1},
+		{ID: "1", Name: "capacity", APIURL: capacityUpstream.URL, APIKey: "key-1", Enabled: true, Level: 1},
+		{ID: "2", Name: "healthy", APIURL: healthyUpstream.URL, APIKey: "key-2", Enabled: true, Level: 1},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -373,8 +373,8 @@ func TestProxyHandlerSwitchesProviderOnSSEPreludeOverload(t *testing.T) {
 
 	providerService := NewProviderService()
 	if err := providerService.SaveProviders(CodexPlatform, []Provider{
-		{ID: 1, Name: "overloaded", APIURL: overloadedUpstream.URL, APIKey: "key-1", Enabled: true, Level: 1},
-		{ID: 2, Name: "healthy", APIURL: healthyUpstream.URL, APIKey: "key-2", Enabled: true, Level: 1},
+		{ID: "1", Name: "overloaded", APIURL: overloadedUpstream.URL, APIKey: "key-1", Enabled: true, Level: 1},
+		{ID: "2", Name: "healthy", APIURL: healthyUpstream.URL, APIKey: "key-2", Enabled: true, Level: 1},
 	}); err != nil {
 		t.Fatal(err)
 	}

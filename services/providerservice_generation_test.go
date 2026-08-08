@@ -8,7 +8,7 @@ import (
 func TestUpdateProvidersRejectsStaleGeneration(t *testing.T) {
 	setupRenameTestEnv(t)
 	service := NewProviderService()
-	if err := service.SaveProviders(CodexPlatform, []Provider{{ID: 1, Name: "one", APIURL: "https://example.test"}}); err != nil {
+	if err := service.SaveProviders(CodexPlatform, []Provider{{ID: "1", Name: "one", APIURL: "https://example.test"}}); err != nil {
 		t.Fatal(err)
 	}
 

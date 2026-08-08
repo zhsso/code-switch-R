@@ -83,7 +83,7 @@ func TestModelsHandler(t *testing.T) {
 
 	// 创建测试用的 provider（使用模拟服务器的 URL）
 	testProvider := Provider{
-		ID:      1,
+		ID:      "1",
 		Name:    "TestProvider",
 		APIURL:  upstreamServer.URL,
 		APIKey:  "test-api-key",
@@ -188,7 +188,7 @@ func TestModelsHandlerUsesCodexPlatform(t *testing.T) {
 
 	// 创建测试用的 provider（使用模拟服务器的 URL）
 	testProvider := Provider{
-		ID:      1,
+		ID:      "1",
 		Name:    "CodexTestProvider",
 		APIURL:  upstreamServer.URL,
 		APIKey:  "codex-api-key",

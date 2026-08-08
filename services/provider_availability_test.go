@@ -35,7 +35,7 @@ func TestProviderAvailabilityPollIntervalDefaultsAndValidation(t *testing.T) {
 
 func TestAvailabilityCheckStatePreventsOverlapAndRunsAfterConfigChange(t *testing.T) {
 	health := NewHealthCheckService(NewProviderService(), nil, nil, nil)
-	key := availabilityCheckKey(CodexPlatform, 42)
+	key := availabilityCheckKey(CodexPlatform, "42")
 	now := time.Now()
 
 	if !health.beginScheduledCheck(key, time.Minute, now) {
@@ -79,12 +79,12 @@ func TestAvailabilitySchedulerOnlyScansWhenConfigChangesOrCheckIsDue(t *testing.
 		t.Fatal("scheduler should not reload an unchanged config before a check is due")
 	}
 
-	health.scheduleProviderCheckNow(CodexPlatform, 7)
+	health.scheduleProviderCheckNow(CodexPlatform, "7")
 	if !health.shouldScanProviderSchedules(time.Now()) {
 		t.Fatal("an explicitly scheduled check should wake the scheduler")
 	}
 
-	health.removeProviderCheckSchedule(CodexPlatform, 7)
+	health.removeProviderCheckSchedule(CodexPlatform, "7")
 	health.markScheduleConfigLoaded(providerService.configGeneration(), time.Now())
 	providerService.configGen.Add(1)
 	if !health.shouldScanProviderSchedules(time.Now()) {

@@ -112,7 +112,7 @@ func TestForwardRequestCaptureOnOff(t *testing.T) {
 
 	prs := newTestRelayService(NewProviderService())
 	provider := Provider{
-		ID: 1, Name: "cap-p", APIURL: upstream.URL, APIKey: "provider-secret",
+		ID: "1", Name: "cap-p", APIURL: upstream.URL, APIKey: "provider-secret",
 		Enabled: true, ConnectivityAuthType: "X-Secret-Auth", // 自定义认证头名
 	}
 	body := []byte(`{"model":"m","api_key":"provider-secret","messages":[{"role":"user","content":"hi"}]}`)

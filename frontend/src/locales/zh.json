@@ -287,7 +287,7 @@
         "noIconResults": "未找到匹配的图标",
         "hints": {
           "costMultiplier": "1 为模型原价，当前倍率会应用到该供应商的全部费用统计",
-          "dailyCostLimit": "达到 100%，或达到 95% 后进入普通黑名单时，停止当日新请求",
+          "dailyCostLimit": "当日费用达到 100% 时停止新请求；与分组黑名单相互独立",
           "fallbackApiUrls": "主地址失败且属可切换错误（网络失败/408/421/429/5xx）时，同一请求内按序改试备用地址；全部失败才算该供应商一次失败",
           "apiEndpoint": "覆盖 Codex 默认端点；留空使用 /responses。",
           "insecureSkipVerify": "开启后不再验证该供应商的 TLS 证书（自签名证书/企业代理场景）。存在中间人风险，请仅对信任的内网地址开启",
@@ -326,6 +326,8 @@
         "confirmDeleteTitle": "删除供应商",
         "confirmDeleteMessage": "确认删除 {name} 吗？此操作不可撤销。",
         "errors": {
+          "nameRequired": "供应商名称不能为空",
+          "duplicateName": "供应商名称不能重复（不区分大小写）",
           "invalidUrl": "请输入合法的 API 地址",
           "tooManyFallbacks": "备用地址最多 4 个",
           "invalidFallbackUrl": "备用地址必须是合法的 http/https 地址",

@@ -31,7 +31,7 @@ func TestProviderMaxConcurrencyIsIgnored(t *testing.T) {
 
 	ps := NewProviderService()
 	if err := ps.SaveProviders(CodexPlatform, []Provider{
-		{ID: 1, Name: "Unlimited", APIURL: upstream.URL, APIKey: "k", Enabled: true, MaxConcurrency: 1},
+		{ID: "1", Name: "Unlimited", APIURL: upstream.URL, APIKey: "k", Enabled: true, MaxConcurrency: 1},
 	}); err != nil {
 		t.Fatalf("预置供应商失败: %v", err)
 	}

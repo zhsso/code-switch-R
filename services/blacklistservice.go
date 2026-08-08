@@ -15,32 +15,17 @@ import (
 type BlacklistService struct {
 	settingsService     *SettingsService
 	notificationService *NotificationService
-	observerMu          sync.RWMutex
-	blacklistObserver   func(platform string, providerName string)
 	// mu 串行化"读计数→判断→写回"的整段读改写:
 	// 计数的 SELECT 与 UPDATE 之间无事务,并发失败会互相吞掉计数,
 	// 导致达到拉黑阈值的时机被推迟甚至错过
 	mu sync.Mutex
 }
 
-func (bs *BlacklistService) SetBlacklistObserver(observer func(platform string, providerName string)) {
-	bs.observerMu.Lock()
-	bs.blacklistObserver = observer
-	bs.observerMu.Unlock()
-}
-
-func (bs *BlacklistService) notifyBlacklisted(platform string, providerName string) {
-	bs.observerMu.RLock()
-	observer := bs.blacklistObserver
-	bs.observerMu.RUnlock()
-	if observer != nil {
-		observer(platform, providerName)
-	}
-}
-
 // BlacklistStatus 黑名单状态（用于前端展示）
 type BlacklistStatus struct {
 	Platform         string     `json:"platform"`
+	ModelGroupID     int64      `json:"modelGroupId"`
+	ModelGroupName   string     `json:"modelGroupName"`
 	ProviderName     string     `json:"providerName"`
 	FailureCount     int        `json:"failureCount"`
 	BlacklistedAt    *time.Time `json:"blacklistedAt"`
@@ -63,12 +48,22 @@ func NewBlacklistService(settingsService *SettingsService, notificationService *
 	}
 }
 
-// RecordSuccess 记录 provider 成功，清零连续失败计数，执行降级和宽恕逻辑
+// RecordSuccess operates on the legacy ungrouped scope. Routing code must use
+// RecordGroupSuccess so one group can never clear another group's counters.
 func (bs *BlacklistService) RecordSuccess(platform string, providerName string) error {
+	return bs.RecordGroupSuccess(platform, 0, "", providerName)
+}
+
+// RecordGroupSuccess 记录指定模型分组内的 provider 成功。
+func (bs *BlacklistService) RecordGroupSuccess(platform string, modelGroupID int64, modelGroupName, providerName string) error {
 	if err := requireCodexPlatform(platform); err != nil {
 		return err
 	}
+	if modelGroupID < 0 {
+		return fmt.Errorf("模型分组 ID 不能小于 0")
+	}
 	platform = CodexPlatform
+	modelGroupName = strings.TrimSpace(modelGroupName)
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	providerName = ResolveProviderAlias(platform, providerName)
@@ -94,8 +89,8 @@ func (bs *BlacklistService) RecordSuccess(platform string, providerName string) 
 	err = db.QueryRow(`
 		SELECT id, blacklist_level, last_recovered_at, last_degrade_hour, blacklisted_until
 		FROM provider_blacklist
-		WHERE platform = ? AND provider_name = ?
-	`, platform, providerName).Scan(&id, &blacklistLevel, &lastRecoveredAt, &lastDegradeHour, &blacklistedUntil)
+		WHERE platform = ? AND model_group_id = ? AND provider_name = ?
+	`, platform, modelGroupID, providerName).Scan(&id, &blacklistLevel, &lastRecoveredAt, &lastDegradeHour, &blacklistedUntil)
 
 	if err == sql.ErrNoRows {
 		// 没有失败记录，无需操作
@@ -118,9 +113,9 @@ func (bs *BlacklistService) RecordSuccess(platform string, providerName string) 
 	if !levelConfig.EnableLevelBlacklist {
 		err = GlobalDBQueue.Exec(`
 			UPDATE provider_blacklist
-			SET failure_count = 0
+			SET failure_count = 0, model_group_name = ?
 			WHERE id = ?
-		`, id)
+		`, modelGroupName, id)
 
 		if err != nil {
 			return fmt.Errorf("清零失败计数失败: %w", err)
@@ -172,6 +167,7 @@ func (bs *BlacklistService) RecordSuccess(platform string, providerName string) 
 	updateSQL := `
 		UPDATE provider_blacklist
 		SET failure_count = 0,
+			model_group_name = ?,
 			blacklist_level = ?,
 			last_recovered_at = ?,
 			last_degrade_hour = ?
@@ -185,7 +181,7 @@ func (bs *BlacklistService) RecordSuccess(platform string, providerName string) 
 		lastRecoveredTime = nil
 	}
 
-	err = GlobalDBQueue.Exec(updateSQL, newLevel, lastRecoveredTime, newLastDegradeHour, id)
+	err = GlobalDBQueue.Exec(updateSQL, modelGroupName, newLevel, lastRecoveredTime, newLastDegradeHour, id)
 
 	if err != nil {
 		return fmt.Errorf("更新成功记录失败: %w", err)
@@ -204,15 +200,28 @@ func (bs *BlacklistService) RecordSuccess(platform string, providerName string) 
 
 // RecordFailure 记录 provider 失败，连续失败次数达到阈值时自动拉黑（支持等级拉黑）。
 func (bs *BlacklistService) RecordFailure(platform string, providerName string) error {
-	return bs.RecordFailureWithReason(platform, providerName, "")
+	return bs.RecordGroupFailureWithReason(platform, 0, "", providerName, "")
 }
 
 // RecordFailureWithReason 记录失败及一个不含请求/响应正文的错误摘要。
 func (bs *BlacklistService) RecordFailureWithReason(platform string, providerName string, reason string) error {
+	return bs.RecordGroupFailureWithReason(platform, 0, "", providerName, reason)
+}
+
+func (bs *BlacklistService) RecordGroupFailure(platform string, modelGroupID int64, modelGroupName, providerName string) error {
+	return bs.RecordGroupFailureWithReason(platform, modelGroupID, modelGroupName, providerName, "")
+}
+
+// RecordGroupFailureWithReason records failure state only within one model group.
+func (bs *BlacklistService) RecordGroupFailureWithReason(platform string, modelGroupID int64, modelGroupName, providerName, reason string) error {
 	if err := requireCodexPlatform(platform); err != nil {
 		return err
 	}
+	if modelGroupID < 0 {
+		return fmt.Errorf("模型分组 ID 不能小于 0")
+	}
 	platform = CodexPlatform
+	modelGroupName = strings.TrimSpace(modelGroupName)
 	reason = sanitizeBlacklistReason(reason)
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -244,7 +253,7 @@ func (bs *BlacklistService) RecordFailureWithReason(platform string, providerNam
 			threshold = levelConfig.FailureThreshold
 			duration = levelConfig.FallbackDurationMinutes
 		}
-		return bs.recordFailureFixedMode(platform, providerName, levelConfig.FallbackMode, duration, threshold, reason)
+		return bs.recordFailureFixedMode(platform, modelGroupID, modelGroupName, providerName, levelConfig.FallbackMode, duration, threshold, reason)
 	}
 
 	now := time.Now()
@@ -260,8 +269,8 @@ func (bs *BlacklistService) RecordFailureWithReason(platform string, providerNam
 	err = db.QueryRow(`
 		SELECT id, failure_count, blacklisted_until, blacklist_level, last_recovered_at, last_failure_window_start
 		FROM provider_blacklist
-		WHERE platform = ? AND provider_name = ?
-	`, platform, providerName).Scan(&id, &failureCount, &blacklistedUntil, &blacklistLevel, &lastRecoveredAt, &lastFailureWindowStart)
+		WHERE platform = ? AND model_group_id = ? AND provider_name = ?
+	`, platform, modelGroupID, providerName).Scan(&id, &failureCount, &blacklistedUntil, &blacklistLevel, &lastRecoveredAt, &lastFailureWindowStart)
 
 	if err == sql.ErrNoRows {
 		// 阈值 <= 1 时首次失败即达标，直接插入拉黑记录（否则实际表现为阈值 2）
@@ -272,9 +281,9 @@ func (bs *BlacklistService) RecordFailureWithReason(platform string, providerNam
 
 			err = GlobalDBQueue.Exec(`
 				INSERT INTO provider_blacklist
-					(platform, provider_name, failure_count, last_failure_at, last_failure_reason, blacklisted_at, blacklisted_until, blacklist_level, last_failure_window_start, auto_recovered)
-				VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, 0)
-			`, platform, providerName, now, reason, now, blacklistedUntil, newLevel, now)
+					(platform, model_group_id, model_group_name, provider_name, failure_count, last_failure_at, last_failure_reason, blacklisted_at, blacklisted_until, blacklist_level, last_failure_window_start, auto_recovered)
+				VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0)
+			`, platform, modelGroupID, modelGroupName, providerName, now, reason, now, blacklistedUntil, newLevel, now)
 
 			if err != nil {
 				return fmt.Errorf("插入拉黑记录失败: %w", err)
@@ -283,10 +292,9 @@ func (bs *BlacklistService) RecordFailureWithReason(platform string, providerNam
 			log.Printf("⛔ Provider %s/%s 已拉黑（L0 → L%d，%d 分钟），过期时间: %s",
 				platform, providerName, newLevel, duration, blacklistedUntil.Format("15:04:05"))
 
-			bs.notifyBlacklisted(platform, providerName)
 			// 发送拉黑通知
 			if bs.notificationService != nil {
-				bs.notificationService.NotifyProviderBlacklisted(platform, providerName, newLevel, duration)
+				bs.notificationService.NotifyGroupProviderBlacklisted(platform, modelGroupID, modelGroupName, providerName, newLevel, duration)
 			}
 			return nil
 		}
@@ -294,9 +302,9 @@ func (bs *BlacklistService) RecordFailureWithReason(platform string, providerNam
 		// 首次失败，插入新记录
 		err = GlobalDBQueue.Exec(`
 			INSERT INTO provider_blacklist
-				(platform, provider_name, failure_count, last_failure_at, last_failure_reason, last_failure_window_start, blacklist_level)
-			VALUES (?, ?, 1, ?, ?, ?, 0)
-		`, platform, providerName, now, reason, now)
+				(platform, model_group_id, model_group_name, provider_name, failure_count, last_failure_at, last_failure_reason, last_failure_window_start, blacklist_level)
+			VALUES (?, ?, ?, ?, 1, ?, ?, ?, 0)
+		`, platform, modelGroupID, modelGroupName, providerName, now, reason, now)
 
 		if err != nil {
 			return fmt.Errorf("插入失败记录失败: %w", err)
@@ -368,6 +376,7 @@ func (bs *BlacklistService) RecordFailureWithReason(platform string, providerNam
 		err = GlobalDBQueue.Exec(`
 			UPDATE provider_blacklist
 			SET failure_count = 0,
+				model_group_name = ?,
 				last_failure_at = ?,
 				last_failure_reason = ?,
 				blacklisted_at = ?,
@@ -378,7 +387,7 @@ func (bs *BlacklistService) RecordFailureWithReason(platform string, providerNam
 				last_recovered_at = NULL,
 				last_degrade_hour = 0
 			WHERE id = ?
-		`, now, reason, blacklistedAt, blacklistedUntil, newLevel, now, id)
+		`, modelGroupName, now, reason, blacklistedAt, blacklistedUntil, newLevel, now, id)
 
 		if err != nil {
 			return fmt.Errorf("更新拉黑状态失败: %w", err)
@@ -387,19 +396,18 @@ func (bs *BlacklistService) RecordFailureWithReason(platform string, providerNam
 		log.Printf("⛔ Provider %s/%s 已拉黑（L%d → L%d，%d 分钟），过期时间: %s",
 			platform, providerName, blacklistLevel, newLevel, duration, blacklistedUntil.Format("15:04:05"))
 
-		bs.notifyBlacklisted(platform, providerName)
 		// 发送拉黑通知
 		if bs.notificationService != nil {
-			bs.notificationService.NotifyProviderBlacklisted(platform, providerName, newLevel, duration)
+			bs.notificationService.NotifyGroupProviderBlacklisted(platform, modelGroupID, modelGroupName, providerName, newLevel, duration)
 		}
 
 	} else {
 		// 未达到阈值，仅更新失败计数和窗口起始时间
 		err = GlobalDBQueue.Exec(`
 			UPDATE provider_blacklist
-			SET failure_count = ?, last_failure_at = ?, last_failure_reason = ?, last_failure_window_start = ?
+			SET failure_count = ?, model_group_name = ?, last_failure_at = ?, last_failure_reason = ?, last_failure_window_start = ?
 			WHERE id = ?
-		`, failureCount, now, reason, now, id)
+		`, failureCount, modelGroupName, now, reason, now, id)
 
 		if err != nil {
 			return fmt.Errorf("更新失败计数失败: %w", err)
@@ -413,7 +421,7 @@ func (bs *BlacklistService) RecordFailureWithReason(platform string, providerNam
 }
 
 // recordFailureFixedMode 固定拉黑模式（向后兼容）
-func (bs *BlacklistService) recordFailureFixedMode(platform string, providerName string, fallbackMode string, fallbackDuration int, failureThreshold int, reason string) error {
+func (bs *BlacklistService) recordFailureFixedMode(platform string, modelGroupID int64, modelGroupName, providerName string, fallbackMode string, fallbackDuration int, failureThreshold int, reason string) error {
 	if fallbackMode == "none" {
 		log.Printf("🚫 Provider %s/%s 失败，但等级拉黑已关闭且 fallbackMode=none，不拉黑", platform, providerName)
 		return nil
@@ -435,8 +443,8 @@ func (bs *BlacklistService) recordFailureFixedMode(platform string, providerName
 	err = db.QueryRow(`
 		SELECT id, failure_count, blacklisted_until
 		FROM provider_blacklist
-		WHERE platform = ? AND provider_name = ?
-	`, platform, providerName).Scan(&id, &failureCount, &blacklistedUntil)
+		WHERE platform = ? AND model_group_id = ? AND provider_name = ?
+	`, platform, modelGroupID, providerName).Scan(&id, &failureCount, &blacklistedUntil)
 
 	if err == sql.ErrNoRows {
 		// 阈值 <= 1 时首次失败即达标，直接插入拉黑记录（否则实际表现为阈值 2）
@@ -445,9 +453,9 @@ func (bs *BlacklistService) recordFailureFixedMode(platform string, providerName
 
 			err = GlobalDBQueue.Exec(`
 				INSERT INTO provider_blacklist
-					(platform, provider_name, failure_count, last_failure_at, last_failure_reason, blacklisted_at, blacklisted_until, auto_recovered)
-				VALUES (?, ?, 0, ?, ?, ?, ?, 0)
-			`, platform, providerName, now, reason, now, blacklistedUntil)
+					(platform, model_group_id, model_group_name, provider_name, failure_count, last_failure_at, last_failure_reason, blacklisted_at, blacklisted_until, auto_recovered)
+				VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, 0)
+			`, platform, modelGroupID, modelGroupName, providerName, now, reason, now, blacklistedUntil)
 
 			if err != nil {
 				return fmt.Errorf("插入拉黑记录失败: %w", err)
@@ -456,10 +464,9 @@ func (bs *BlacklistService) recordFailureFixedMode(platform string, providerName
 			log.Printf("⛔ Provider %s/%s 已拉黑 %d 分钟（固定模式，失败 1 次），过期时间: %s",
 				platform, providerName, fallbackDuration, blacklistedUntil.Format("15:04:05"))
 
-			bs.notifyBlacklisted(platform, providerName)
 			// 发送拉黑通知（固定模式无等级，level 传 0）
 			if bs.notificationService != nil {
-				bs.notificationService.NotifyProviderBlacklisted(platform, providerName, 0, fallbackDuration)
+				bs.notificationService.NotifyGroupProviderBlacklisted(platform, modelGroupID, modelGroupName, providerName, 0, fallbackDuration)
 			}
 			return nil
 		}
@@ -467,9 +474,9 @@ func (bs *BlacklistService) recordFailureFixedMode(platform string, providerName
 		// 首次失败，插入新记录
 		err = GlobalDBQueue.Exec(`
 			INSERT INTO provider_blacklist
-				(platform, provider_name, failure_count, last_failure_at, last_failure_reason)
-			VALUES (?, ?, 1, ?, ?)
-		`, platform, providerName, now, reason)
+				(platform, model_group_id, model_group_name, provider_name, failure_count, last_failure_at, last_failure_reason)
+			VALUES (?, ?, ?, ?, 1, ?, ?)
+		`, platform, modelGroupID, modelGroupName, providerName, now, reason)
 
 		if err != nil {
 			return fmt.Errorf("插入失败记录失败: %w", err)
@@ -500,13 +507,14 @@ func (bs *BlacklistService) recordFailureFixedMode(platform string, providerName
 		err = GlobalDBQueue.Exec(`
 			UPDATE provider_blacklist
 			SET failure_count = 0,
+				model_group_name = ?,
 				last_failure_at = ?,
 				last_failure_reason = ?,
 				blacklisted_at = ?,
 				blacklisted_until = ?,
 				auto_recovered = 0
 			WHERE id = ?
-		`, now, reason, blacklistedAt, blacklistedUntil, id)
+		`, modelGroupName, now, reason, blacklistedAt, blacklistedUntil, id)
 
 		if err != nil {
 			return fmt.Errorf("更新拉黑状态失败: %w", err)
@@ -515,19 +523,18 @@ func (bs *BlacklistService) recordFailureFixedMode(platform string, providerName
 		log.Printf("⛔ Provider %s/%s 已拉黑 %d 分钟（固定模式，失败 %d 次），过期时间: %s",
 			platform, providerName, fallbackDuration, failureCount, blacklistedUntil.Format("15:04:05"))
 
-		bs.notifyBlacklisted(platform, providerName)
 		// 发送拉黑通知（固定模式无等级，level 传 0）
 		if bs.notificationService != nil {
-			bs.notificationService.NotifyProviderBlacklisted(platform, providerName, 0, fallbackDuration)
+			bs.notificationService.NotifyGroupProviderBlacklisted(platform, modelGroupID, modelGroupName, providerName, 0, fallbackDuration)
 		}
 
 	} else {
 		// 更新失败计数
 		err = GlobalDBQueue.Exec(`
 			UPDATE provider_blacklist
-			SET failure_count = ?, last_failure_at = ?, last_failure_reason = ?
+			SET failure_count = ?, model_group_name = ?, last_failure_at = ?, last_failure_reason = ?
 			WHERE id = ?
-		`, failureCount, now, reason, id)
+		`, failureCount, modelGroupName, now, reason, id)
 
 		if err != nil {
 			return fmt.Errorf("更新失败计数失败: %w", err)
@@ -557,9 +564,17 @@ func (bs *BlacklistService) getLevelDuration(level int, config *BlacklistLevelCo
 	}
 }
 
-// IsBlacklisted 检查 provider 是否在黑名单中
+// IsBlacklisted checks only the legacy ungrouped scope.
 func (bs *BlacklistService) IsBlacklisted(platform string, providerName string) (bool, *time.Time) {
+	return bs.IsGroupBlacklisted(platform, 0, providerName)
+}
+
+// IsGroupBlacklisted 检查 provider 是否在指定模型分组的黑名单中。
+func (bs *BlacklistService) IsGroupBlacklisted(platform string, modelGroupID int64, providerName string) (bool, *time.Time) {
 	if requireCodexPlatform(platform) != nil {
+		return false, nil
+	}
+	if modelGroupID < 0 {
 		return false, nil
 	}
 	platform = CodexPlatform
@@ -581,8 +596,8 @@ func (bs *BlacklistService) IsBlacklisted(platform string, providerName string) 
 	err = db.QueryRow(`
 		SELECT blacklisted_until
 		FROM provider_blacklist
-		WHERE platform = ? AND provider_name = ? AND blacklisted_until IS NOT NULL
-	`, platform, providerName).Scan(&blacklistedUntil)
+		WHERE platform = ? AND model_group_id = ? AND provider_name = ? AND blacklisted_until IS NOT NULL
+	`, platform, modelGroupID, providerName).Scan(&blacklistedUntil)
 
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -603,8 +618,15 @@ func (bs *BlacklistService) IsBlacklisted(platform string, providerName string) 
 
 // ManualUnblockAndReset 手动解除拉黑（保留等级，如需清零请调用 ManualResetLevel）
 func (bs *BlacklistService) ManualUnblockAndReset(platform string, providerName string) error {
+	return bs.ManualUnblockGroupAndReset(platform, 0, providerName)
+}
+
+func (bs *BlacklistService) ManualUnblockGroupAndReset(platform string, modelGroupID int64, providerName string) error {
 	if err := requireCodexPlatform(platform); err != nil {
 		return err
+	}
+	if modelGroupID < 0 {
+		return fmt.Errorf("模型分组 ID 不能小于 0")
 	}
 	platform = CodexPlatform
 	bs.mu.Lock()
@@ -621,8 +643,8 @@ func (bs *BlacklistService) ManualUnblockAndReset(platform string, providerName 
 	var exists int
 	err = db.QueryRow(`
 		SELECT 1 FROM provider_blacklist
-		WHERE platform = ? AND provider_name = ?
-	`, platform, providerName).Scan(&exists)
+		WHERE platform = ? AND model_group_id = ? AND provider_name = ?
+	`, platform, modelGroupID, providerName).Scan(&exists)
 
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("provider %s/%s 不在黑名单中", platform, providerName)
@@ -639,8 +661,8 @@ func (bs *BlacklistService) ManualUnblockAndReset(platform string, providerName 
 			last_recovered_at = ?,
 			last_degrade_hour = 0,
 			auto_recovered = 0
-		WHERE platform = ? AND provider_name = ?
-	`, now, platform, providerName)
+		WHERE platform = ? AND model_group_id = ? AND provider_name = ?
+	`, now, platform, modelGroupID, providerName)
 
 	if err != nil {
 		return fmt.Errorf("手动解除拉黑失败: %w", err)
@@ -660,8 +682,15 @@ func (bs *BlacklistService) ManualUnblock(platform string, providerName string) 
 // failure state, and starts a fresh degradation timer. Daily-limit blocking is
 // stored outside provider_blacklist and cannot be changed by this method.
 func (bs *BlacklistService) AutoUnblockOnAvailabilitySuccess(platform string, providerName string) (bool, error) {
+	return bs.AutoUnblockGroupOnAvailabilitySuccess(platform, 0, "", providerName)
+}
+
+func (bs *BlacklistService) AutoUnblockGroupOnAvailabilitySuccess(platform string, modelGroupID int64, modelGroupName, providerName string) (bool, error) {
 	if err := requireCodexPlatform(platform); err != nil {
 		return false, err
+	}
+	if modelGroupID < 0 {
+		return false, fmt.Errorf("模型分组 ID 不能小于 0")
 	}
 	platform = CodexPlatform
 	bs.mu.Lock()
@@ -677,8 +706,8 @@ func (bs *BlacklistService) AutoUnblockOnAvailabilitySuccess(platform string, pr
 	err = db.QueryRow(`
 		SELECT blacklisted_until
 		FROM provider_blacklist
-		WHERE platform = ? AND provider_name = ?
-	`, platform, providerName).Scan(&blacklistedUntil)
+		WHERE platform = ? AND model_group_id = ? AND provider_name = ?
+	`, platform, modelGroupID, providerName).Scan(&blacklistedUntil)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -700,22 +729,29 @@ func (bs *BlacklistService) AutoUnblockOnAvailabilitySuccess(platform string, pr
 			last_degrade_hour = 0,
 			last_failure_window_start = NULL,
 			auto_recovered = 1
-		WHERE platform = ? AND provider_name = ?
-	`, now, platform, providerName); err != nil {
+		WHERE platform = ? AND model_group_id = ? AND provider_name = ?
+	`, now, platform, modelGroupID, providerName); err != nil {
 		return false, fmt.Errorf("可用性检测自动解禁失败: %w", err)
 	}
 
 	log.Printf("[Blacklist] 可用性检测确认恢复，已自动解禁 %s/%s（等级保留）", platform, providerName)
 	if bs.notificationService != nil {
-		bs.notificationService.NotifyProviderRecovered(platform, providerName, "availability_check")
+		bs.notificationService.NotifyGroupProviderRecovered(platform, modelGroupID, modelGroupName, providerName, "availability_check")
 	}
 	return true, nil
 }
 
 // ManualResetLevel 手动清零等级（不解除拉黑，仅重置等级）
 func (bs *BlacklistService) ManualResetLevel(platform string, providerName string) error {
+	return bs.ManualResetGroupLevel(platform, 0, providerName)
+}
+
+func (bs *BlacklistService) ManualResetGroupLevel(platform string, modelGroupID int64, providerName string) error {
 	if err := requireCodexPlatform(platform); err != nil {
 		return err
+	}
+	if modelGroupID < 0 {
+		return fmt.Errorf("模型分组 ID 不能小于 0")
 	}
 	platform = CodexPlatform
 	bs.mu.Lock()
@@ -730,8 +766,8 @@ func (bs *BlacklistService) ManualResetLevel(platform string, providerName strin
 	var exists int
 	err = db.QueryRow(`
 		SELECT 1 FROM provider_blacklist
-		WHERE platform = ? AND provider_name = ?
-	`, platform, providerName).Scan(&exists)
+		WHERE platform = ? AND model_group_id = ? AND provider_name = ?
+	`, platform, modelGroupID, providerName).Scan(&exists)
 
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("provider %s/%s 不存在", platform, providerName)
@@ -743,8 +779,8 @@ func (bs *BlacklistService) ManualResetLevel(platform string, providerName strin
 		UPDATE provider_blacklist
 		SET blacklist_level = 0,
 			last_degrade_hour = 0
-		WHERE platform = ? AND provider_name = ?
-	`, platform, providerName)
+		WHERE platform = ? AND model_group_id = ? AND provider_name = ?
+	`, platform, modelGroupID, providerName)
 
 	if err != nil {
 		return fmt.Errorf("手动清零等级失败: %w", err)
@@ -766,7 +802,7 @@ func (bs *BlacklistService) AutoRecoverExpired() error {
 
 	// 查询需要恢复的 provider（移除 SQL 时间比较，改为 Go 代码判断）
 	rows, err := db.Query(`
-		SELECT platform, provider_name, blacklisted_until
+		SELECT platform, model_group_id, model_group_name, provider_name, blacklisted_until
 		FROM provider_blacklist
 		WHERE platform = ?
 			AND blacklisted_until IS NOT NULL
@@ -780,17 +816,20 @@ func (bs *BlacklistService) AutoRecoverExpired() error {
 
 	now := time.Now()
 	type RecoverItem struct {
-		Platform     string
-		ProviderName string
+		Platform       string
+		ModelGroupID   int64
+		ModelGroupName string
+		ProviderName   string
 	}
 	var toRecover []RecoverItem
 
 	// 收集所有需要恢复的 provider
 	for rows.Next() {
-		var platform, providerName string
+		var platform, modelGroupName, providerName string
+		var modelGroupID int64
 		var blacklistedUntil sql.NullTime
 
-		if err := rows.Scan(&platform, &providerName, &blacklistedUntil); err != nil {
+		if err := rows.Scan(&platform, &modelGroupID, &modelGroupName, &providerName, &blacklistedUntil); err != nil {
 			log.Printf("⚠️  读取恢复记录失败: %v", err)
 			continue
 		}
@@ -801,9 +840,17 @@ func (bs *BlacklistService) AutoRecoverExpired() error {
 		}
 
 		toRecover = append(toRecover, RecoverItem{
-			Platform:     platform,
-			ProviderName: providerName,
+			Platform:       platform,
+			ModelGroupID:   modelGroupID,
+			ModelGroupName: modelGroupName,
+			ProviderName:   providerName,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("遍历过期黑名单失败: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("关闭过期黑名单查询失败: %w", err)
 	}
 
 	// 如果没有需要恢复的，直接返回
@@ -823,8 +870,8 @@ func (bs *BlacklistService) AutoRecoverExpired() error {
 				failure_count = 0,
 				last_recovered_at = ?,
 				last_degrade_hour = 0
-			WHERE platform = ? AND provider_name = ?
-		`, now, item.Platform, item.ProviderName)
+			WHERE platform = ? AND model_group_id = ? AND provider_name = ?
+		`, now, item.Platform, item.ModelGroupID, item.ProviderName)
 
 		if err != nil {
 			failed = append(failed, fmt.Sprintf("%s/%s", item.Platform, item.ProviderName))
@@ -845,10 +892,18 @@ func (bs *BlacklistService) AutoRecoverExpired() error {
 	return nil
 }
 
-// GetBlacklistStatus 获取所有黑名单状态（用于前端展示，支持等级拉黑）
+// GetBlacklistStatus returns the legacy ungrouped scope.
 func (bs *BlacklistService) GetBlacklistStatus(platform string) ([]BlacklistStatus, error) {
+	return bs.GetGroupBlacklistStatus(platform, 0)
+}
+
+// GetGroupBlacklistStatus 获取指定模型分组的黑名单状态。
+func (bs *BlacklistService) GetGroupBlacklistStatus(platform string, modelGroupID int64) ([]BlacklistStatus, error) {
 	if err := requireCodexPlatform(platform); err != nil {
 		return nil, err
+	}
+	if modelGroupID < 0 {
+		return nil, fmt.Errorf("模型分组 ID 不能小于 0")
 	}
 	platform = CodexPlatform
 	db, err := xdb.DB("default")
@@ -865,6 +920,8 @@ func (bs *BlacklistService) GetBlacklistStatus(platform string) ([]BlacklistStat
 	rows, err := db.Query(`
 		SELECT
 			platform,
+			model_group_id,
+			model_group_name,
 			provider_name,
 			failure_count,
 			blacklisted_at,
@@ -874,9 +931,9 @@ func (bs *BlacklistService) GetBlacklistStatus(platform string) ([]BlacklistStat
 			blacklist_level,
 			last_recovered_at
 		FROM provider_blacklist
-		WHERE platform = ?
+		WHERE platform = ? AND model_group_id = ?
 		ORDER BY last_failure_at DESC
-	`, platform)
+	`, platform, modelGroupID)
 
 	if err != nil {
 		return nil, fmt.Errorf("查询黑名单状态失败: %w", err)
@@ -893,6 +950,8 @@ func (bs *BlacklistService) GetBlacklistStatus(platform string) ([]BlacklistStat
 
 		err := rows.Scan(
 			&s.Platform,
+			&s.ModelGroupID,
+			&s.ModelGroupName,
 			&s.ProviderName,
 			&s.FailureCount,
 			&blacklistedAt,
@@ -940,6 +999,9 @@ func (bs *BlacklistService) GetBlacklistStatus(platform string) ([]BlacklistStat
 		}
 
 		statuses = append(statuses, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历黑名单状态失败: %w", err)
 	}
 
 	return statuses, nil

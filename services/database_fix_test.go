@@ -109,6 +109,8 @@ func TestEnsureBlacklistTablesMigratesOldSchema(t *testing.T) {
 	}
 
 	migratedColumns := []string{
+		"model_group_id",
+		"model_group_name",
 		"blacklist_level",
 		"last_recovered_at",
 		"last_degrade_hour",
@@ -129,5 +131,13 @@ func TestEnsureBlacklistTablesMigratesOldSchema(t *testing.T) {
 	// 补列后典型的黑名单写入不应再报 no such column
 	if _, err := db.Exec(`INSERT INTO provider_blacklist (platform, provider_name, blacklist_level) VALUES ('codex', 'p1', 2)`); err != nil {
 		t.Fatalf("写入含新列的记录失败: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO provider_blacklist (platform, model_group_id, model_group_name, provider_name)
+		VALUES ('codex', 1, 'group-a', 'p1')`); err != nil {
+		t.Fatalf("同一 Provider 应可在不同分组拥有独立记录: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO provider_blacklist (platform, model_group_id, model_group_name, provider_name)
+		VALUES ('codex', 1, 'group-a', 'p1')`); err == nil {
+		t.Fatal("同一分组内重复 Provider 黑名单记录应违反唯一约束")
 	}
 }

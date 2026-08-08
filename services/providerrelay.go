@@ -896,7 +896,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 			}
 
 			// 黑名单检查：跳过已拉黑的 provider
-			if isBlacklisted, until := prs.blacklistService.IsBlacklisted(kind, provider.Name); isBlacklisted {
+			if isBlacklisted, until := prs.blacklistService.IsGroupBlacklisted(kind, selectedGroup.ID, provider.Name); isBlacklisted {
 				fmt.Printf("⛔ Provider %s 已拉黑，过期时间: %v\n", provider.Name, until.Format("15:04:05"))
 				skippedCount++
 				skippedBlacklist++
@@ -957,7 +957,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 			fmt.Printf("[INFO] === 尝试分组 %s（%d 个 Provider）===\n", selectedGroup.Name, len(active))
 			for _, provider := range active {
 				// 检查是否已被拉黑（跳过已拉黑的 provider）
-				if blacklisted, until := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
+				if blacklisted, until := prs.blacklistService.IsGroupBlacklisted(kind, selectedGroup.ID, provider.Name); blacklisted {
 					fmt.Printf("[INFO] ⏭️ 跳过已拉黑的 Provider: %s (解禁时间: %v)\n", provider.Name, until)
 					continue
 				}
@@ -988,7 +988,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 					totalAttempts++
 
 					// 再次检查是否已被拉黑（重试过程中可能被拉黑）
-					if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
+					if blacklisted, _ := prs.blacklistService.IsGroupBlacklisted(kind, selectedGroup.ID, provider.Name); blacklisted {
 						fmt.Printf("[INFO] 🚫 Provider %s 已被拉黑，切换到下一个\n", provider.Name)
 						break
 					}
@@ -1012,7 +1012,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 						trace.MarkSucceeded()
 						fmt.Printf("[INFO] ✓ 成功: %s | 重试 %d 次 | 耗时: %.2fs\n",
 							provider.Name, retryCount+1, duration.Seconds())
-						if err := prs.blacklistService.RecordSuccess(kind, provider.Name); err != nil {
+						if err := prs.blacklistService.RecordGroupSuccess(kind, selectedGroup.ID, selectedGroup.Name, provider.Name); err != nil {
 							fmt.Printf("[WARN] 清零失败计数失败: %v\n", err)
 						}
 						prs.setLastUsedProvider(kind, *selectedGroup, provider.Name)
@@ -1037,7 +1037,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 					// 但必须计入失败，否则半死的供应商永远不会被拉黑
 					if errors.Is(err, errUpstreamStreamAborted) {
 						trace.MarkFailed(err)
-						if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
+						if err := prs.blacklistService.RecordGroupFailureWithReason(kind, selectedGroup.ID, selectedGroup.Name, provider.Name, safeRelayError(err)); err != nil {
 							fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
 						}
 						return
@@ -1053,7 +1053,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 					sawNonClientError = true
 
 					// 记录失败次数（可能触发拉黑）
-					if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
+					if err := prs.blacklistService.RecordGroupFailureWithReason(kind, selectedGroup.ID, selectedGroup.Name, provider.Name, safeRelayError(err)); err != nil {
 						fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
 					}
 					if errors.Is(err, errUpstreamModelCapacity) {
@@ -1062,7 +1062,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 					}
 
 					// 检查是否刚被拉黑
-					if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
+					if blacklisted, _ := prs.blacklistService.IsGroupBlacklisted(kind, selectedGroup.ID, provider.Name); blacklisted {
 						fmt.Printf("[INFO] 🚫 Provider %s 达到失败阈值，已被拉黑，切换到下一个\n", provider.Name)
 						break
 					}
@@ -1127,7 +1127,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 
 		fmt.Printf("[INFO] === 尝试分组 %s（%d 个 Provider）===\n", selectedGroup.Name, len(active))
 		for i, provider := range active {
-			if blacklisted, _ := prs.blacklistService.IsBlacklisted(kind, provider.Name); blacklisted {
+			if blacklisted, _ := prs.blacklistService.IsGroupBlacklisted(kind, selectedGroup.ID, provider.Name); blacklisted {
 				continue
 			}
 			if prs.isDailyCostBlocked(kind, provider) {
@@ -1172,7 +1172,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 				fmt.Printf("[INFO]   ✓ 分组 %s 成功: %s | 耗时: %.2fs\n", selectedGroup.Name, provider.Name, duration.Seconds())
 
 				// 成功：清零连续失败计数
-				if err := prs.blacklistService.RecordSuccess(kind, provider.Name); err != nil {
+				if err := prs.blacklistService.RecordGroupSuccess(kind, selectedGroup.ID, selectedGroup.Name, provider.Name); err != nil {
 					fmt.Printf("[WARN] 清零失败计数失败: %v\n", err)
 				}
 
@@ -1200,7 +1200,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 			// 上游 2xx 后中途断流：响应已部分写出，不能再降级，但必须计入失败
 			if errors.Is(err, errUpstreamStreamAborted) {
 				trace.MarkFailed(err)
-				if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
+				if err := prs.blacklistService.RecordGroupFailureWithReason(kind, selectedGroup.ID, selectedGroup.Name, provider.Name, safeRelayError(err)); err != nil {
 					fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
 				}
 				return
@@ -1211,7 +1211,7 @@ func (prs *ProviderRelayService) proxyHandler(kind string, endpoint string) gin.
 				fmt.Printf("[INFO] 上游拒绝请求内容，不计供应商失败\n")
 			} else {
 				sawNonClientError = true
-				if err := prs.blacklistService.RecordFailureWithReason(kind, provider.Name, safeRelayError(err)); err != nil {
+				if err := prs.blacklistService.RecordGroupFailureWithReason(kind, selectedGroup.ID, selectedGroup.Name, provider.Name, safeRelayError(err)); err != nil {
 					fmt.Printf("[ERROR] 记录失败到黑名单失败: %v\n", err)
 				}
 			}
@@ -1824,7 +1824,7 @@ func (prs *ProviderRelayService) forwardModelsRequest(
 		}
 
 		// 黑名单检查：跳过已拉黑的 provider
-		if isBlacklisted, until := prs.blacklistService.IsBlacklisted(kind, provider.Name); isBlacklisted {
+		if isBlacklisted, until := prs.blacklistService.IsGroupBlacklisted(kind, selectedGroup.ID, provider.Name); isBlacklisted {
 			fmt.Printf("[%s] ⛔ Provider %s 已拉黑，过期时间: %v\n", logPrefix, provider.Name, until.Format("15:04:05"))
 			continue
 		}

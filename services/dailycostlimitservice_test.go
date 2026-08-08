@@ -1,7 +1,6 @@
 package services
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
@@ -45,7 +44,7 @@ func setupDailyLimitTestService(
 	return service, providerService, appSettings
 }
 
-func requireDailyStatus(t *testing.T, service *DailyCostLimitService, providerID int64) DailyCostLimitStatus {
+func requireDailyStatus(t *testing.T, service *DailyCostLimitService, providerID ProviderID) DailyCostLimitStatus {
 	t.Helper()
 	statuses, err := service.GetStatuses(CodexPlatform)
 	if err != nil {
@@ -56,13 +55,13 @@ func requireDailyStatus(t *testing.T, service *DailyCostLimitService, providerID
 			return status
 		}
 	}
-	t.Fatalf("daily limit status for provider %d not found", providerID)
+	t.Fatalf("daily limit status for provider %s not found", providerID)
 	return DailyCostLimitStatus{}
 }
 
 func TestDailyCostLimitResetsAtConfiguredTimezoneMidnight(t *testing.T) {
 	provider := Provider{
-		ID: 1, Name: "limited", Enabled: true,
+		ID: "1", Name: "limited", Enabled: true,
 		DailyCostLimitEnabled: true, DailyCostLimitMicros: 10 * microsPerUSD,
 	}
 	now := time.Date(2026, 8, 5, 15, 59, 0, 0, time.UTC)
@@ -94,7 +93,7 @@ func TestDailyCostLimitResetsAtConfiguredTimezoneMidnight(t *testing.T) {
 
 func TestDailyCostLimitScopeUsesIANATimezoneAcrossDST(t *testing.T) {
 	provider := Provider{
-		ID: 5, Name: "dst", Enabled: true,
+		ID: "5", Name: "dst", Enabled: true,
 		DailyCostLimitEnabled: true, DailyCostLimitMicros: microsPerUSD,
 	}
 	now := time.Date(2026, 3, 8, 12, 0, 0, 0, time.UTC)
@@ -120,52 +119,9 @@ func TestDailyCostLimitScopeUsesIANATimezoneAcrossDST(t *testing.T) {
 	}
 }
 
-func TestDailyCostLimitInitialStateHonorsActiveBlacklistAt95Percent(t *testing.T) {
-	usage := modelpricing.UsageSnapshot{InputTokens: 1_000_000}
-	priced := NewLogService().pricing.CalculateCost("gpt-5", usage)
-	usedMicros := costToMicros(priced.TotalCost)
-	if usedMicros <= 0 {
-		t.Fatal("gpt-5 test usage must have a positive price")
-	}
+func TestDailyCostLimitIsIndependentFromGroupBlacklist(t *testing.T) {
 	provider := Provider{
-		ID: 6, Name: "already-blacklisted", Enabled: true,
-		DailyCostLimitEnabled: true, DailyCostLimitMicros: usedMicros + 1,
-	}
-	now := time.Date(2026, 8, 5, 8, 0, 0, 0, time.UTC)
-	service, _, _ := setupDailyLimitTestService(t, provider, now)
-
-	settingsService := NewSettingsService()
-	setAppSetting(t, "enable_blacklist", "true")
-	db, err := xdb.DB("default")
-	if err != nil {
-		t.Fatalf("get test database: %v", err)
-	}
-	if _, err := db.Exec(`INSERT INTO request_log (
-			platform, model, provider, input_tokens, created_at
-		) VALUES (?, ?, ?, ?, ?)`,
-		CodexPlatform, "gpt-5", provider.Name, usage.InputTokens, now.Format(timeLayout)); err != nil {
-		t.Fatalf("seed priced request log: %v", err)
-	}
-	if _, err := db.Exec(`INSERT INTO provider_blacklist (
-			platform, provider_name, blacklisted_at, blacklisted_until
-		) VALUES (?, ?, ?, ?)`,
-		CodexPlatform, provider.Name, time.Now(), time.Now().Add(time.Hour)); err != nil {
-		t.Fatalf("seed active blacklist: %v", err)
-	}
-	service.SetBlacklistService(NewBlacklistService(settingsService, nil))
-
-	status := requireDailyStatus(t, service, provider.ID)
-	if status.SystemCostMicros != usedMicros || status.UsedMicros >= status.LimitMicros {
-		t.Fatalf("test must start between 95%% and 100%%: %+v", status)
-	}
-	if !status.AutoBlocked {
-		t.Fatalf("initial 95%% usage plus an active blacklist should auto block: %+v", status)
-	}
-}
-
-func TestDailyCostLimitTemporaryUnblockWaitsForNewTrigger(t *testing.T) {
-	provider := Provider{
-		ID: 2, Name: "near-limit", Enabled: true,
+		ID: "2", Name: "near-limit", Enabled: true,
 		DailyCostLimitEnabled: true, DailyCostLimitMicros: microsPerUSD,
 	}
 	service, _, _ := setupDailyLimitTestService(
@@ -177,23 +133,17 @@ func TestDailyCostLimitTemporaryUnblockWaitsForNewTrigger(t *testing.T) {
 	if err := service.SetActualUsage(CodexPlatform, provider.ID, 950_000); err != nil {
 		t.Fatalf("set actual usage: %v", err)
 	}
-	service.OnProviderBlacklisted(CodexPlatform, provider.Name)
-	if status := requireDailyStatus(t, service, provider.ID); !status.AutoBlocked {
-		t.Fatalf("95%% + blacklist should auto block: %+v", status)
+	db, err := xdb.DB("default")
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	if err := service.TemporaryUnblock(CodexPlatform, provider.ID); err != nil {
-		t.Fatalf("temporary unblock: %v", err)
+	if _, err := db.Exec(`INSERT INTO provider_blacklist (
+		platform, model_group_id, model_group_name, provider_name, blacklisted_at, blacklisted_until
+	) VALUES (?, ?, ?, ?, ?, ?)`, CodexPlatform, 1, "group-a", provider.Name, time.Now(), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
 	}
-	firstRead := requireDailyStatus(t, service, provider.ID)
-	secondRead := requireDailyStatus(t, service, provider.ID)
-	if firstRead.Blocked || secondRead.Blocked {
-		t.Fatalf("existing blacklist must not immediately cancel temporary unblock: first=%+v second=%+v", firstRead, secondRead)
-	}
-
-	service.OnProviderBlacklisted(CodexPlatform, provider.Name)
-	if status := requireDailyStatus(t, service, provider.ID); !status.AutoBlocked {
-		t.Fatalf("a new matching blacklist transition should re-block: %+v", status)
+	if status := requireDailyStatus(t, service, provider.ID); status.AutoBlocked || status.Blocked {
+		t.Fatalf("a group blacklist must not promote the global daily-limit gate at 95%%: %+v", status)
 	}
 }
 
@@ -213,7 +163,7 @@ func TestDailyCostLimitSettlementReblocksAfterTemporaryUnblock(t *testing.T) {
 		t.Fatal("gpt-5 test request must have a positive price")
 	}
 	provider := Provider{
-		ID: 7, Name: requestLog.Provider, Enabled: true,
+		ID: "7", Name: requestLog.Provider, Enabled: true,
 		DailyCostLimitEnabled: true, DailyCostLimitMicros: requestCostMicros,
 	}
 	service, _, _ := setupDailyLimitTestService(
@@ -243,70 +193,9 @@ func TestDailyCostLimitSettlementReblocksAfterTemporaryUnblock(t *testing.T) {
 	}
 }
 
-func TestDailyCostLimitFollowsRealBlacklistTransitions(t *testing.T) {
-	tests := []struct {
-		name             string
-		actualMicros     int64
-		failureThreshold int
-		wantBlocked      bool
-	}{
-		{name: "failure_below_blacklist_threshold", actualMicros: 950_000, failureThreshold: 2, wantBlocked: false},
-		{name: "blacklisted_below_95_percent", actualMicros: 949_999, failureThreshold: 1, wantBlocked: false},
-		{name: "blacklisted_at_95_percent", actualMicros: 950_000, failureThreshold: 1, wantBlocked: true},
-	}
-
-	for index, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			setupBlacklistFixEnv(t)
-			setAppSetting(t, "enable_blacklist", "true")
-			setAppSetting(t, "blacklist_failure_threshold", fmt.Sprint(test.failureThreshold))
-			db, err := xdb.DB("default")
-			if err != nil {
-				t.Fatalf("get test database: %v", err)
-			}
-			if err := ensureRequestLogTableWithDB(db); err != nil {
-				t.Fatalf("complete request_log schema: %v", err)
-			}
-			if err := ensureDailyCostLimitTable(); err != nil {
-				t.Fatalf("create daily limit table: %v", err)
-			}
-
-			provider := Provider{
-				ID: int64(20 + index), Name: "observer-" + test.name, Enabled: true,
-				DailyCostLimitEnabled: true, DailyCostLimitMicros: microsPerUSD,
-			}
-			providerService := NewProviderService()
-			saveProviderFixture(t, providerService, []Provider{provider})
-			appSettings, err := NewAppSettingsService()
-			if err != nil {
-				t.Fatalf("create app settings service: %v", err)
-			}
-			settings := appSettings.defaultSettings()
-			if _, err := appSettings.SaveAppSettings(settings); err != nil {
-				t.Fatalf("save app settings: %v", err)
-			}
-
-			blacklist := NewBlacklistService(NewSettingsService(), nil)
-			service := NewDailyCostLimitService(providerService, appSettings, NewLogService(providerService))
-			service.SetBlacklistService(blacklist)
-			blacklist.SetBlacklistObserver(service.OnProviderBlacklisted)
-			if err := service.SetActualUsage(CodexPlatform, provider.ID, test.actualMicros); err != nil {
-				t.Fatalf("set actual usage: %v", err)
-			}
-			if err := blacklist.RecordFailure(CodexPlatform, provider.Name); err != nil {
-				t.Fatalf("record provider failure: %v", err)
-			}
-			status := requireDailyStatus(t, service, provider.ID)
-			if status.AutoBlocked != test.wantBlocked {
-				t.Fatalf("AutoBlocked = %v, want %v: %+v", status.AutoBlocked, test.wantBlocked, status)
-			}
-		})
-	}
-}
-
 func TestDailyCostLimitManualActionsAreExplicit(t *testing.T) {
 	provider := Provider{
-		ID: 3, Name: "manual", Enabled: true,
+		ID: "3", Name: "manual", Enabled: true,
 		DailyCostLimitEnabled: true, DailyCostLimitMicros: 2 * microsPerUSD,
 	}
 	service, _, _ := setupDailyLimitTestService(
@@ -341,7 +230,7 @@ func TestDailyCostLimitManualActionsAreExplicit(t *testing.T) {
 
 func TestDailyCostLimitDisableClearsGateAndReenableReevaluatesUsage(t *testing.T) {
 	provider := Provider{
-		ID: 4, Name: "toggle", Enabled: true,
+		ID: "4", Name: "toggle", Enabled: true,
 		DailyCostLimitEnabled: true, DailyCostLimitMicros: microsPerUSD,
 	}
 	service, providerService, _ := setupDailyLimitTestService(

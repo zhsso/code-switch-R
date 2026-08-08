@@ -43,15 +43,15 @@ func cloneStringListPtr(p *[]string) *[]string {
 }
 
 type Provider struct {
-	ID      int64  `json:"id"` // 修复：使用 int64 支持大 ID 值
-	Name    string `json:"name"`
-	APIURL  string `json:"apiUrl"`
-	APIKey  string `json:"apiKey"`
-	Site    string `json:"officialSite"`
-	Icon    string `json:"icon"`
-	Tint    string `json:"tint"`
-	Accent  string `json:"accent"`
-	Enabled bool   `json:"enabled"`
+	ID      ProviderID `json:"id"`
+	Name    string     `json:"name"`
+	APIURL  string     `json:"apiUrl"`
+	APIKey  string     `json:"apiKey"`
+	Site    string     `json:"officialSite"`
+	Icon    string     `json:"icon"`
+	Tint    string     `json:"tint"`
+	Accent  string     `json:"accent"`
+	Enabled bool       `json:"enabled"`
 
 	// API 端点路径（可选）- 覆盖平台默认端点
 	// 如：兼容网关可能需要使用 /v1/chat/completions 而非 /responses。
@@ -131,12 +131,12 @@ type Provider struct {
 }
 
 type ModelGroup struct {
-	ID          int64    `json:"id"`
-	Name        string   `json:"name"`
-	Enabled     bool     `json:"enabled"`
-	Priority    int      `json:"priority"`
-	Models      []string `json:"models"`
-	ProviderIDs []int64  `json:"providerIds"`
+	ID          int64        `json:"id"`
+	Name        string       `json:"name"`
+	Enabled     bool         `json:"enabled"`
+	Priority    int          `json:"priority"`
+	Models      []string     `json:"models"`
+	ProviderIDs []ProviderID `json:"providerIds"`
 }
 
 type providerEnvelope struct {
@@ -153,7 +153,7 @@ type providerEnvelope struct {
 const defaultModelGroupName = "Default"
 
 func defaultModelGroup(providers []Provider) ModelGroup {
-	providerIDs := make([]int64, 0, len(providers))
+	providerIDs := make([]ProviderID, 0, len(providers))
 	for _, provider := range providers {
 		providerIDs = append(providerIDs, provider.ID)
 	}
@@ -175,7 +175,7 @@ func ensureModelGroups(groups []ModelGroup, providers []Provider) ([]ModelGroup,
 }
 
 func normalizeModelGroups(groups []ModelGroup, providers []Provider) []ModelGroup {
-	providerIDs := make(map[int64]struct{}, len(providers))
+	providerIDs := make(map[ProviderID]struct{}, len(providers))
 	for _, provider := range providers {
 		providerIDs[provider.ID] = struct{}{}
 	}
@@ -190,8 +190,8 @@ func normalizeModelGroups(groups []ModelGroup, providers []Provider) []ModelGrou
 			}
 		}
 		group.Models = models
-		seen := make(map[int64]struct{}, len(group.ProviderIDs))
-		ids := make([]int64, 0, len(group.ProviderIDs))
+		seen := make(map[ProviderID]struct{}, len(group.ProviderIDs))
+		ids := make([]ProviderID, 0, len(group.ProviderIDs))
 		for _, id := range group.ProviderIDs {
 			if _, exists := providerIDs[id]; !exists {
 				continue
@@ -274,7 +274,7 @@ func SelectModelGroup(groups []ModelGroup, model string) *ModelGroup {
 }
 
 func ProvidersForModelGroup(providers []Provider, group ModelGroup) []Provider {
-	byID := make(map[int64]Provider, len(providers))
+	byID := make(map[ProviderID]Provider, len(providers))
 	for _, provider := range providers {
 		byID[provider.ID] = provider
 	}
@@ -285,6 +285,33 @@ func ProvidersForModelGroup(providers []Provider, group ModelGroup) []Provider {
 		}
 	}
 	return ordered
+}
+
+// ModelGroupsForProvider returns enabled, routable groups containing providerID.
+// The returned groups retain configuration order; blacklist state is keyed by
+// group ID, so callers must process each membership independently.
+func ModelGroupsForProvider(groups []ModelGroup, providerID ProviderID) []ModelGroup {
+	matched := make([]ModelGroup, 0)
+	for _, group := range groups {
+		if !group.Enabled || !group.IsComplete() {
+			continue
+		}
+		for _, id := range group.ProviderIDs {
+			if id == providerID {
+				matched = append(matched, group)
+				break
+			}
+		}
+	}
+	return matched
+}
+
+func (ps *ProviderService) LoadModelGroupsForProvider(kind string, providerID ProviderID) ([]ModelGroup, error) {
+	_, groups, _, err := ps.LoadConfigurationWithGen(kind)
+	if err != nil {
+		return nil, err
+	}
+	return ModelGroupsForProvider(groups, providerID), nil
 }
 
 type ProviderService struct {
@@ -484,9 +511,34 @@ func (ps *ProviderService) saveConfigurationLocked(kind string, providers []Prov
 		return err
 	}
 	existingProviders := existing.Providers
-	nameByID := make(map[int64]string, len(existingProviders))
+	nameByID := make(map[ProviderID]string, len(existingProviders))
 	for _, p := range existingProviders {
 		nameByID[p.ID] = p.Name
+	}
+
+	seenIDs := make(map[ProviderID]struct{}, len(providers))
+	seenNames := make(map[string]string, len(providers))
+	for _, provider := range providers {
+		if provider.ID.IsZero() {
+			return fmt.Errorf("provider ID 不能为空")
+		}
+		if _, exists := seenIDs[provider.ID]; exists {
+			return fmt.Errorf("provider ID %s 重复", provider.ID)
+		}
+		seenIDs[provider.ID] = struct{}{}
+
+		trimmedName := strings.TrimSpace(provider.Name)
+		if trimmedName == "" {
+			return fmt.Errorf("provider 名称不能为空")
+		}
+		if trimmedName != provider.Name {
+			return fmt.Errorf("provider 名称 %q 不能包含首尾空格", provider.Name)
+		}
+		nameKey := strings.ToLower(trimmedName)
+		if existingName, exists := seenNames[nameKey]; exists {
+			return fmt.Errorf("provider 名称 %q 与 %q 重复（名称不区分大小写）", provider.Name, existingName)
+		}
+		seenNames[nameKey] = provider.Name
 	}
 
 	// 解析 platform（alias 校验需要）。
@@ -508,7 +560,7 @@ func (ps *ProviderService) saveConfigurationLocked(kind string, providers []Prov
 
 		// 规则：name 不可修改（走独立 RenameProvider 路径,SaveProviders 只允许既有 name）
 		if oldName, ok := nameByID[p.ID]; ok && oldName != p.Name {
-			return fmt.Errorf("provider id %d 的 name 不可修改(请使用 RenameProvider)", p.ID)
+			return fmt.Errorf("provider id %s 的 name 不可修改(请使用 RenameProvider)", p.ID)
 		}
 
 		// 验证 Provider 自身配置。模型归属由分组校验负责。
@@ -657,7 +709,7 @@ func uniqueProviderName(providers []Provider, candidate string) string {
 
 // DuplicateProvider 复制供应商配置，生成新的副本
 // 返回新创建的 Provider 对象
-func (ps *ProviderService) DuplicateProvider(kind string, sourceID int64) (*Provider, error) {
+func (ps *ProviderService) DuplicateProvider(kind string, sourceID ProviderID) (*Provider, error) {
 	// 1. 先加锁，避免并发修改
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
@@ -679,7 +731,7 @@ func (ps *ProviderService) DuplicateProvider(kind string, sourceID int64) (*Prov
 		}
 	}
 	if source == nil {
-		return nil, fmt.Errorf("未找到 ID 为 %d 的供应商", sourceID)
+		return nil, fmt.Errorf("未找到 ID 为 %s 的供应商", sourceID)
 	}
 
 	// 4. 生成新 ID，避开活动 alias 仍占用的历史 ID

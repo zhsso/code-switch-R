@@ -271,10 +271,13 @@ func ensureBlacklistTables() error {
 		return fmt.Errorf("创建 app_settings 表失败: %w", err)
 	}
 
-	// 2. 创建 provider_blacklist 表
+	// 2. 创建 provider_blacklist 表。黑名单以模型分组为作用域；同一个
+	// Provider 可以在一个分组中被拉黑，而不影响它在其他分组中的状态。
 	const createBlacklistSQL = `CREATE TABLE IF NOT EXISTS provider_blacklist (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		platform TEXT NOT NULL,
+		model_group_id INTEGER NOT NULL DEFAULT 0,
+		model_group_name TEXT NOT NULL DEFAULT '',
 		provider_name TEXT NOT NULL,
 		failure_count INTEGER DEFAULT 0,
 		blacklisted_at DATETIME,
@@ -286,7 +289,8 @@ func ensureBlacklistTables() error {
 		last_degrade_hour INTEGER DEFAULT 0,
 		last_failure_window_start DATETIME,
 		auto_recovered INTEGER DEFAULT 0,
-		UNIQUE(platform, provider_name)
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(platform, model_group_id, provider_name)
 	)`
 	if _, err := db.Exec(createBlacklistSQL); err != nil {
 		return fmt.Errorf("创建 provider_blacklist 表失败: %w", err)
@@ -303,10 +307,21 @@ func ensureBlacklistTables() error {
 		{"last_degrade_hour", "INTEGER DEFAULT 0"},
 		{"last_failure_window_start", "DATETIME"},
 		{"last_failure_reason", "TEXT DEFAULT ''"},
+		{"auto_recovered", "INTEGER DEFAULT 0"},
+		{"created_at", "DATETIME"},
+		{"model_group_id", "INTEGER NOT NULL DEFAULT 0"},
+		{"model_group_name", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, m := range blacklistMigrations {
 		if err := ensureBlacklistColumn(db, m.column, m.definition); err != nil {
 			return fmt.Errorf("补齐 provider_blacklist 列 %s 失败: %w", m.column, err)
+		}
+	}
+	if scoped, err := hasScopedBlacklistUnique(db); err != nil {
+		return fmt.Errorf("检查 provider_blacklist 唯一约束失败: %w", err)
+	} else if !scoped {
+		if err := rebuildBlacklistTableForGroups(db); err != nil {
+			return fmt.Errorf("迁移 provider_blacklist 分组作用域失败: %w", err)
 		}
 	}
 
@@ -471,6 +486,131 @@ func ensureBlacklistColumn(db *sql.DB, column string, definition string) error {
 	return nil
 }
 
+func hasScopedBlacklistUnique(db *sql.DB) (bool, error) {
+	rows, err := db.Query(`PRAGMA index_list('provider_blacklist')`)
+	if err != nil {
+		return false, err
+	}
+	var uniqueIndexes []string
+	for rows.Next() {
+		var seq, unique, partial int
+		var name, origin string
+		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			rows.Close()
+			return false, err
+		}
+		if unique != 0 {
+			uniqueIndexes = append(uniqueIndexes, name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return false, err
+	}
+	if err := rows.Close(); err != nil {
+		return false, err
+	}
+
+	want := []string{"platform", "model_group_id", "provider_name"}
+	legacy := []string{"platform", "provider_name"}
+	hasScoped := false
+	hasLegacy := false
+	for _, indexName := range uniqueIndexes {
+		indexRows, err := db.Query(fmt.Sprintf("PRAGMA index_info(%q)", indexName))
+		if err != nil {
+			return false, err
+		}
+		var columns []string
+		for indexRows.Next() {
+			var seq, cid int
+			var column string
+			if err := indexRows.Scan(&seq, &cid, &column); err != nil {
+				indexRows.Close()
+				return false, err
+			}
+			columns = append(columns, column)
+		}
+		if err := indexRows.Err(); err != nil {
+			indexRows.Close()
+			return false, err
+		}
+		if err := indexRows.Close(); err != nil {
+			return false, err
+		}
+		matchesColumns := func(expected []string) bool {
+			if len(columns) != len(expected) {
+				return false
+			}
+			for i := range expected {
+				if columns[i] != expected[i] {
+					return false
+				}
+			}
+			return true
+		}
+		if matchesColumns(want) {
+			hasScoped = true
+		}
+		if matchesColumns(legacy) {
+			hasLegacy = true
+		}
+	}
+	return hasScoped && !hasLegacy, nil
+}
+
+func rebuildBlacklistTableForGroups(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DROP TABLE IF EXISTS provider_blacklist_group_migration`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE TABLE provider_blacklist_group_migration (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		platform TEXT NOT NULL,
+		model_group_id INTEGER NOT NULL DEFAULT 0,
+		model_group_name TEXT NOT NULL DEFAULT '',
+		provider_name TEXT NOT NULL,
+		failure_count INTEGER DEFAULT 0,
+		blacklisted_at DATETIME,
+		blacklisted_until DATETIME,
+		last_failure_at DATETIME,
+		last_failure_reason TEXT DEFAULT '',
+		blacklist_level INTEGER DEFAULT 0,
+		last_recovered_at DATETIME,
+		last_degrade_hour INTEGER DEFAULT 0,
+		last_failure_window_start DATETIME,
+		auto_recovered INTEGER DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(platform, model_group_id, provider_name)
+	)`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO provider_blacklist_group_migration (
+		id, platform, model_group_id, model_group_name, provider_name,
+		failure_count, blacklisted_at, blacklisted_until, last_failure_at,
+		last_failure_reason, blacklist_level, last_recovered_at,
+		last_degrade_hour, last_failure_window_start, auto_recovered, created_at
+	) SELECT
+		id, platform, COALESCE(model_group_id, 0), COALESCE(model_group_name, ''), provider_name,
+		failure_count, blacklisted_at, blacklisted_until, last_failure_at,
+		COALESCE(last_failure_reason, ''), blacklist_level, last_recovered_at,
+		last_degrade_hour, last_failure_window_start, auto_recovered, created_at
+	FROM provider_blacklist`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DROP TABLE provider_blacklist`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`ALTER TABLE provider_blacklist_group_migration RENAME TO provider_blacklist`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // ensureProviderAliasTable 创建 provider_alias 表,用于 rename 后 48h 内承接旧名 in-flight 写入。
 func ensureProviderAliasTable() error {
 	db, err := xdb.DB("default")
@@ -481,7 +621,7 @@ func ensureProviderAliasTable() error {
 	const createSQL = `CREATE TABLE IF NOT EXISTS provider_alias (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		platform TEXT NOT NULL,
-		provider_id INTEGER NOT NULL,
+		provider_id TEXT NOT NULL,
 		alias_name TEXT NOT NULL COLLATE NOCASE,
 		canonical_name TEXT NOT NULL,
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -514,7 +654,7 @@ func ensureDailyCostLimitTable() error {
 
 	const schema = `CREATE TABLE IF NOT EXISTS provider_daily_cost_limit (
 		platform TEXT NOT NULL,
-		provider_id INTEGER NOT NULL,
+		provider_id TEXT NOT NULL,
 		timezone TEXT NOT NULL,
 		day_key TEXT NOT NULL,
 		system_cost_micros INTEGER NOT NULL DEFAULT 0,

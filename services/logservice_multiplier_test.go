@@ -43,7 +43,7 @@ func TestLogServiceAppliesCurrentProviderMultiplierToHistory(t *testing.T) {
 	}
 
 	providerService := NewProviderService()
-	provider := Provider{ID: 1, Name: "priced", CostMultiplier: 2}
+	provider := Provider{ID: "1", Name: "priced", CostMultiplier: 2}
 	saveProviderFixture(t, providerService, []Provider{provider})
 	if _, err := db.Exec(
 		`INSERT INTO provider_alias (platform, provider_id, alias_name, canonical_name, expires_at)

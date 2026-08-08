@@ -3,6 +3,8 @@ import { Call } from '../runtime'
 // 黑名单状态接口
 export interface BlacklistStatus {
   platform: string
+  modelGroupId: number
+  modelGroupName: string
   providerName: string
   failureCount: number
   blacklistedAt?: string  // ISO 时间字符串
@@ -30,17 +32,17 @@ const SETTINGS_SERVICE = 'codeswitch/services.SettingsService'
 /**
  * 获取 Codex 黑名单状态列表
  */
-export const getBlacklistStatus = async (): Promise<BlacklistStatus[]> => {
-  return Call.ByName(`${BLACKLIST_SERVICE}.GetBlacklistStatus`, 'codex')
+export const getBlacklistStatus = async (modelGroupId: number): Promise<BlacklistStatus[]> => {
+  return Call.ByName(`${BLACKLIST_SERVICE}.GetGroupBlacklistStatus`, 'codex', modelGroupId)
 }
 
 /**
  * 手动解除拉黑
- * @param providerName provider 名称
+ * @param modelGroupId 模型分组 ID
  * @param providerName provider 名称
  */
-export const manualUnblock = async (providerName: string): Promise<void> => {
-  return Call.ByName(`${BLACKLIST_SERVICE}.ManualUnblock`, 'codex', providerName)
+export const manualUnblock = async (modelGroupId: number, providerName: string): Promise<void> => {
+  return Call.ByName(`${BLACKLIST_SERVICE}.ManualUnblockGroupAndReset`, 'codex', modelGroupId, providerName)
 }
 
 /**

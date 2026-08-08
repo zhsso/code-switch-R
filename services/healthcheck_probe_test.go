@@ -140,7 +140,7 @@ func TestHealthHistoryIsCodexOnly(t *testing.T) {
 	}
 
 	result := &HealthCheckResult{
-		ProviderID: 1, ProviderName: "mixed", Platform: " CODEX ",
+		ProviderID: "1", ProviderName: "mixed", Platform: " CODEX ",
 		Status: HealthStatusOperational, CheckedAt: time.Now(),
 	}
 	if err := hcs.saveResult(result); err != nil {

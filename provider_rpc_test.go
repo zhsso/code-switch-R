@@ -11,7 +11,7 @@ import (
 func TestMaskProviderDoesNotMarshalCredential(t *testing.T) {
 	const secret = "sk-secret-provider-token"
 	view := maskProvider(services.Provider{
-		ID:              7,
+		ID:              "7",
 		Name:            "provider",
 		APIKey:          secret,
 		APIURL:          "https://user:" + secret + "@example.test/base?api_key=" + secret,
@@ -35,7 +35,7 @@ func TestMaskProviderDoesNotMarshalCredential(t *testing.T) {
 
 func TestMergeProviderViewsPreservesOrReplacesCredentialExplicitly(t *testing.T) {
 	current := []services.Provider{{
-		ID:              7,
+		ID:              "7",
 		Name:            "provider",
 		APIKey:          "existing-secret",
 		APIURL:          "https://example.test?api_key=url-secret",
@@ -56,7 +56,7 @@ func TestMergeProviderViewsPreservesOrReplacesCredentialExplicitly(t *testing.T)
 	}
 
 	replaced := mergeProviderViews(current, []providerRPCView{{
-		Provider:      services.Provider{ID: 7, Name: "provider"},
+		Provider:      services.Provider{ID: "7", Name: "provider"},
 		APIKey:        "replacement-secret",
 		APIKeyChanged: true,
 	}})
@@ -65,7 +65,7 @@ func TestMergeProviderViewsPreservesOrReplacesCredentialExplicitly(t *testing.T)
 	}
 
 	cleared := mergeProviderViews(current, []providerRPCView{{
-		Provider:      services.Provider{ID: 7, Name: "provider"},
+		Provider:      services.Provider{ID: "7", Name: "provider"},
 		APIKeyChanged: true,
 	}})
 	if cleared[0].APIKey != "" {

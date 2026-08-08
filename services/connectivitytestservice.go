@@ -41,15 +41,15 @@ const (
 
 // ConnectivityResult 连通性测试结果
 type ConnectivityResult struct {
-	ProviderID   int64     `json:"providerId"`
-	ProviderName string    `json:"providerName"`
-	Platform     string    `json:"platform"`
-	Status       int       `json:"status"`
-	SubStatus    string    `json:"subStatus"`
-	LatencyMs    int       `json:"latencyMs"`
-	LastChecked  time.Time `json:"lastChecked"`
-	Message      string    `json:"message,omitempty"`
-	HTTPCode     int       `json:"httpCode,omitempty"`
+	ProviderID   ProviderID `json:"providerId"`
+	ProviderName string     `json:"providerName"`
+	Platform     string     `json:"platform"`
+	Status       int        `json:"status"`
+	SubStatus    string     `json:"subStatus"`
+	LatencyMs    int        `json:"latencyMs"`
+	LastChecked  time.Time  `json:"lastChecked"`
+	Message      string     `json:"message,omitempty"`
+	HTTPCode     int        `json:"httpCode,omitempty"`
 }
 
 // ConnectivityTestService 连通性测试服务
@@ -61,7 +61,7 @@ type ConnectivityTestService struct {
 	policy            *DefaultModelPolicy
 
 	mu      sync.RWMutex
-	results map[string]map[int64]*ConnectivityResult // platform -> providerID -> result
+	results map[string]map[ProviderID]*ConnectivityResult // platform -> providerID -> result
 
 	autoTestEnabled bool
 	stopChan        chan struct{}
@@ -88,7 +88,7 @@ func NewConnectivityTestService(
 		blacklistService: blacklistService,
 		settingsService:  settingsService,
 		policy:           policy,
-		results: map[string]map[int64]*ConnectivityResult{
+		results: map[string]map[ProviderID]*ConnectivityResult{
 			CodexPlatform: {},
 		},
 		autoTestEnabled: false,
@@ -441,13 +441,13 @@ func (cts *ConnectivityTestService) testAll(platform string, skipDailyBlocked bo
 			// 保存结果
 			cts.mu.Lock()
 			if cts.results[platform] == nil {
-				cts.results[platform] = make(map[int64]*ConnectivityResult)
+				cts.results[platform] = make(map[ProviderID]*ConnectivityResult)
 			}
 			cts.results[platform][p.ID] = result
 			cts.mu.Unlock()
 
 			// 与拉黑服务联动
-			cts.handleBlacklistIntegration(platform, p.Name, result)
+			cts.handleBlacklistIntegration(platform, p, result)
 
 			mu.Lock()
 			results = append(results, *result)
@@ -463,29 +463,34 @@ func (cts *ConnectivityTestService) testAll(platform string, skipDailyBlocked bo
 }
 
 // handleBlacklistIntegration 处理与拉黑服务的联动
-func (cts *ConnectivityTestService) handleBlacklistIntegration(platform, providerName string, result *ConnectivityResult) {
+func (cts *ConnectivityTestService) handleBlacklistIntegration(platform string, provider Provider, result *ConnectivityResult) {
 	if cts.blacklistService == nil {
 		return
 	}
+	groups, err := cts.providerService.LoadModelGroupsForProvider(platform, provider.ID)
+	if err != nil {
+		log.Printf("[ConnectivityTest] 加载 Provider %s 的模型分组失败: %v", provider.Name, err)
+		return
+	}
 
-	switch result.Status {
-	case StatusAvailable:
-		// 绿色：调用 RecordSuccess 清零失败计数
-		if err := cts.blacklistService.RecordSuccess(platform, providerName); err != nil {
-			log.Printf("[ConnectivityTest] RecordSuccess 失败: %v", err)
+	for _, group := range groups {
+		switch result.Status {
+		case StatusAvailable:
+			if err := cts.blacklistService.RecordGroupSuccess(platform, group.ID, group.Name, provider.Name); err != nil {
+				log.Printf("[ConnectivityTest] 分组 %s RecordSuccess 失败: %v", group.Name, err)
+			}
+		case StatusUnavailable:
+			// 模型不受支持 ≠ 网络故障，不累计拉黑
+			if result.SubStatus == SubStatusModelUnsupported {
+				continue
+			}
+			reason := fmt.Sprintf("connectivity check failed: %s", strings.TrimSpace(result.SubStatus))
+			if err := cts.blacklistService.RecordGroupFailureWithReason(platform, group.ID, group.Name, provider.Name, reason); err != nil {
+				log.Printf("[ConnectivityTest] 分组 %s RecordFailure 失败: %v", group.Name, err)
+			}
+		case StatusDegraded:
+			// 黄色：不操作，避免误判
 		}
-	case StatusUnavailable:
-		// 模型不受支持 ≠ 网络故障，不累计拉黑
-		if result.SubStatus == SubStatusModelUnsupported {
-			return
-		}
-		// 红色：调用 RecordFailure 累计失败
-		reason := fmt.Sprintf("connectivity check failed: %s", strings.TrimSpace(result.SubStatus))
-		if err := cts.blacklistService.RecordFailureWithReason(platform, providerName, reason); err != nil {
-			log.Printf("[ConnectivityTest] RecordFailure 失败: %v", err)
-		}
-	case StatusDegraded:
-		// 黄色：不操作，避免误判
 	}
 }
 
@@ -523,7 +528,7 @@ func (cts *ConnectivityTestService) GetAllResults() map[string][]ConnectivityRes
 }
 
 // RunSingleTest 手动触发单个供应商测试
-func (cts *ConnectivityTestService) RunSingleTest(platform string, providerID int64) (*ConnectivityResult, error) {
+func (cts *ConnectivityTestService) RunSingleTest(platform string, providerID ProviderID) (*ConnectivityResult, error) {
 	if err := requireCodexPlatform(platform); err != nil {
 		return nil, err
 	}
@@ -541,7 +546,7 @@ func (cts *ConnectivityTestService) RunSingleTest(platform string, providerID in
 	}
 
 	if targetProvider == nil {
-		return nil, fmt.Errorf("未找到供应商 ID: %d", providerID)
+		return nil, fmt.Errorf("未找到供应商 ID: %s", providerID)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -552,13 +557,13 @@ func (cts *ConnectivityTestService) RunSingleTest(platform string, providerID in
 	// 保存结果
 	cts.mu.Lock()
 	if cts.results[platform] == nil {
-		cts.results[platform] = make(map[int64]*ConnectivityResult)
+		cts.results[platform] = make(map[ProviderID]*ConnectivityResult)
 	}
 	cts.results[platform][providerID] = result
 	cts.mu.Unlock()
 
 	// 与拉黑服务联动
-	cts.handleBlacklistIntegration(platform, targetProvider.Name, result)
+	cts.handleBlacklistIntegration(platform, *targetProvider, result)
 
 	return result, nil
 }

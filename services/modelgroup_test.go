@@ -1,6 +1,7 @@
 package services
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,9 +14,9 @@ import (
 
 func TestSelectModelGroupPriorityAndManualTieOrder(t *testing.T) {
 	groups := []ModelGroup{
-		{ID: 1, Name: "late", Enabled: true, Priority: 80, Models: []string{"gpt-*"}, ProviderIDs: []int64{1}},
-		{ID: 2, Name: "first tie", Enabled: true, Priority: 10, Models: []string{"gpt-*"}, ProviderIDs: []int64{2}},
-		{ID: 3, Name: "second tie", Enabled: true, Priority: 10, Models: []string{"gpt-5*"}, ProviderIDs: []int64{3}},
+		{ID: 1, Name: "late", Enabled: true, Priority: 80, Models: []string{"gpt-*"}, ProviderIDs: []ProviderID{"1"}},
+		{ID: 2, Name: "first tie", Enabled: true, Priority: 10, Models: []string{"gpt-*"}, ProviderIDs: []ProviderID{"2"}},
+		{ID: 3, Name: "second tie", Enabled: true, Priority: 10, Models: []string{"gpt-5*"}, ProviderIDs: []ProviderID{"3"}},
 	}
 	selected := SelectModelGroup(groups, "gpt-5.6")
 	if selected == nil || selected.ID != 2 {
@@ -45,7 +46,7 @@ func TestModelGroupWildcardIsCaseSensitive(t *testing.T) {
 	}
 	if err := validateModelGroups([]ModelGroup{{
 		ID: 1, Name: "bad", Enabled: true, Priority: 1,
-		Models: []string{"a**b"}, ProviderIDs: []int64{1},
+		Models: []string{"a**b"}, ProviderIDs: []ProviderID{"1"},
 	}}); err == nil {
 		t.Fatal("多星号规则必须拒绝保存")
 	}
@@ -72,7 +73,7 @@ func TestModelGroupMigrationAndLifecycle(t *testing.T) {
 	}
 	if len(groups) != 1 || groups[0].Name != defaultModelGroupName || groups[0].Priority != 100 ||
 		len(groups[0].Models) != 1 || groups[0].Models[0] != "*" ||
-		len(groups[0].ProviderIDs) != 2 || groups[0].ProviderIDs[0] != 11 || groups[0].ProviderIDs[1] != 12 {
+		len(groups[0].ProviderIDs) != 2 || groups[0].ProviderIDs[0] != "11" || groups[0].ProviderIDs[1] != "12" {
 		t.Fatalf("旧配置应迁移为包含现有 Provider 的普通 fallback 分组: %#v", groups)
 	}
 	data, err := os.ReadFile(path)
@@ -86,7 +87,7 @@ func TestModelGroupMigrationAndLifecycle(t *testing.T) {
 	}
 
 	// A provider added after group creation remains ungrouped.
-	providers = append(providers, Provider{ID: 13, Name: "C", APIURL: "https://c.example", APIKey: "c", Enabled: true})
+	providers = append(providers, Provider{ID: "13", Name: "C", APIURL: "https://c.example", APIKey: "c", Enabled: true})
 	if _, _, err := service.UpdateProviders(CodexPlatform, generation, func([]Provider) ([]Provider, error) {
 		return providers, nil
 	}); err != nil {
@@ -110,7 +111,7 @@ func TestModelGroupMigrationAndLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(groups) != 1 || len(groups[0].ProviderIDs) != 1 || groups[0].ProviderIDs[0] != 12 {
+	if len(groups) != 1 || len(groups[0].ProviderIDs) != 1 || groups[0].ProviderIDs[0] != "12" {
 		t.Fatalf("删除 Provider 应原子清理分组引用并保留分组: %#v", groups)
 	}
 
@@ -179,8 +180,8 @@ func TestRelayDoesNotFallThroughMatchingGroups(t *testing.T) {
 
 	providerService := NewProviderService()
 	if err := providerService.SaveProviders(CodexPlatform, []Provider{
-		{ID: 1, Name: "Bound failure", APIURL: first.URL, APIKey: "k1", Enabled: true},
-		{ID: 2, Name: "Later success", APIURL: later.URL, APIKey: "k2", Enabled: true},
+		{ID: "1", Name: "Bound failure", APIURL: first.URL, APIKey: "k1", Enabled: true},
+		{ID: "2", Name: "Later success", APIURL: later.URL, APIKey: "k2", Enabled: true},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -189,8 +190,8 @@ func TestRelayDoesNotFallThroughMatchingGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = providerService.UpdateModelGroups(CodexPlatform, generation, []ModelGroup{
-		{ID: 10, Name: "first", Enabled: true, Priority: 1, Models: []string{"m"}, ProviderIDs: []int64{1}},
-		{ID: 20, Name: "later", Enabled: true, Priority: 2, Models: []string{"m"}, ProviderIDs: []int64{2}},
+		{ID: 10, Name: "first", Enabled: true, Priority: 1, Models: []string{"m"}, ProviderIDs: []ProviderID{"1"}},
+		{ID: 20, Name: "later", Enabled: true, Priority: 2, Models: []string{"m"}, ProviderIDs: []ProviderID{"2"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -218,6 +219,78 @@ func TestRelayDoesNotFallThroughMatchingGroups(t *testing.T) {
 	}
 }
 
+func TestRelayBlacklistDoesNotLeakBetweenGroups(t *testing.T) {
+	setupBlacklistFixEnv(t)
+	gin.SetMode(gin.TestMode)
+	setAppSetting(t, "enable_blacklist", "true")
+	setAppSetting(t, "blacklist_level_enabled", "false")
+	setAppSetting(t, "blacklist_failure_threshold", "1")
+	config := DefaultBlacklistLevelConfig()
+	config.EnableLevelBlacklist = false
+	config.FallbackMode = "fixed"
+	config.FailureThreshold = 1
+	config.RetryWaitSeconds = 0
+	if err := NewSettingsService().SaveBlacklistLevelConfig(config); err != nil {
+		t.Fatal(err)
+	}
+
+	var badHits, goodHits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		if strings.Contains(string(body), `"model":"bad"`) {
+			badHits.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"unavailable"}`))
+			return
+		}
+		goodHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"ok"}`))
+	}))
+	defer upstream.Close()
+
+	providerService := NewProviderService()
+	if err := providerService.SaveProviders(CodexPlatform, []Provider{
+		{ID: "shared", Name: "Shared", APIURL: upstream.URL, APIKey: "key", Enabled: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, generation, err := providerService.LoadConfigurationWithGen(CodexPlatform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := providerService.UpdateModelGroups(CodexPlatform, generation, []ModelGroup{
+		{ID: 11, Name: "bad-group", Enabled: true, Priority: 1, Models: []string{"bad"}, ProviderIDs: []ProviderID{"shared"}},
+		{ID: 22, Name: "good-group", Enabled: true, Priority: 2, Models: []string{"good"}, ProviderIDs: []ProviderID{"shared"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	relay := newTestRelayService(providerService)
+	router := gin.New()
+	router.POST("/responses", relay.proxyHandler(CodexPlatform, "/responses"))
+
+	failed := httptest.NewRecorder()
+	router.ServeHTTP(failed, httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"bad"}`)))
+	if failed.Code == http.StatusOK || badHits.Load() != 1 {
+		t.Fatalf("bad group should fail once and blacklist its Provider: code=%d hits=%d", failed.Code, badHits.Load())
+	}
+	blacklist := NewBlacklistService(NewSettingsService(), nil)
+	if blocked, _ := blacklist.IsGroupBlacklisted(CodexPlatform, 11, "Shared"); !blocked {
+		t.Fatal("shared Provider should be blacklisted in group 11")
+	}
+	if blocked, _ := blacklist.IsGroupBlacklisted(CodexPlatform, 22, "Shared"); blocked {
+		t.Fatal("group 11 blacklist leaked into group 22")
+	}
+
+	succeeded := httptest.NewRecorder()
+	router.ServeHTTP(succeeded, httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"good"}`)))
+	if succeeded.Code != http.StatusOK || goodHits.Load() != 1 {
+		t.Fatalf("group 22 should still route through the shared Provider: code=%d hits=%d body=%s",
+			succeeded.Code, goodHits.Load(), succeeded.Body.String())
+	}
+}
+
 func TestModelsRouteUsesStarGroupAndProviderOrder(t *testing.T) {
 	setupRenameTestEnv(t)
 	gin.SetMode(gin.TestMode)
@@ -240,8 +313,8 @@ func TestModelsRouteUsesStarGroupAndProviderOrder(t *testing.T) {
 
 	providerService := NewProviderService()
 	if err := providerService.SaveProviders(CodexPlatform, []Provider{
-		{ID: 1, Name: "Specific", APIURL: specific.URL, APIKey: "k1", Enabled: true},
-		{ID: 2, Name: "Fallback", APIURL: fallback.URL, APIKey: "k2", Enabled: true},
+		{ID: "1", Name: "Specific", APIURL: specific.URL, APIKey: "k1", Enabled: true},
+		{ID: "2", Name: "Fallback", APIURL: fallback.URL, APIKey: "k2", Enabled: true},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -250,8 +323,8 @@ func TestModelsRouteUsesStarGroupAndProviderOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = providerService.UpdateModelGroups(CodexPlatform, generation, []ModelGroup{
-		{ID: 10, Name: "specific", Enabled: true, Priority: 1, Models: []string{"gpt-*"}, ProviderIDs: []int64{1}},
-		{ID: 20, Name: "fallback", Enabled: true, Priority: 2, Models: []string{"*"}, ProviderIDs: []int64{2, 1}},
+		{ID: 10, Name: "specific", Enabled: true, Priority: 1, Models: []string{"gpt-*"}, ProviderIDs: []ProviderID{"1"}},
+		{ID: 20, Name: "fallback", Enabled: true, Priority: 2, Models: []string{"*"}, ProviderIDs: []ProviderID{"2", "1"}},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -217,12 +217,18 @@ func (ns *NotificationService) emitProviderSwitch(info SwitchNotification) {
 }
 
 func (ns *NotificationService) NotifyProviderBlacklisted(platform, providerName string, level, durationMinutes int) {
+	ns.NotifyGroupProviderBlacklisted(platform, 0, "", providerName, level, durationMinutes)
+}
+
+func (ns *NotificationService) NotifyGroupProviderBlacklisted(platform string, modelGroupID int64, modelGroupName, providerName string, level, durationMinutes int) {
 	if requireCodexPlatform(platform) != nil || !ns.isEnabled() {
 		return
 	}
 	if emitter := ns.currentEmitter(); emitter != nil {
 		emitter.Emit("provider:blacklisted", map[string]any{
 			"platform":        CodexPlatform,
+			"modelGroupId":    modelGroupID,
+			"modelGroupName":  modelGroupName,
 			"providerName":    providerName,
 			"level":           level,
 			"durationMinutes": durationMinutes,
@@ -232,15 +238,21 @@ func (ns *NotificationService) NotifyProviderBlacklisted(platform, providerName 
 }
 
 func (ns *NotificationService) NotifyProviderRecovered(platform, providerName, reason string) {
+	ns.NotifyGroupProviderRecovered(platform, 0, "", providerName, reason)
+}
+
+func (ns *NotificationService) NotifyGroupProviderRecovered(platform string, modelGroupID int64, modelGroupName, providerName, reason string) {
 	if requireCodexPlatform(platform) != nil || !ns.isEnabled() {
 		return
 	}
 	if emitter := ns.currentEmitter(); emitter != nil {
 		emitter.Emit("provider:recovered", map[string]any{
-			"platform":     CodexPlatform,
-			"providerName": providerName,
-			"reason":       reason,
-			"timestamp":    time.Now().UnixMilli(),
+			"platform":       CodexPlatform,
+			"modelGroupId":   modelGroupID,
+			"modelGroupName": modelGroupName,
+			"providerName":   providerName,
+			"reason":         reason,
+			"timestamp":      time.Now().UnixMilli(),
 		})
 	}
 }

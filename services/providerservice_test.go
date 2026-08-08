@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"sort"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // ==================== 通配符匹配测试 ====================
@@ -526,8 +528,8 @@ func TestProviderLevelGrouping(t *testing.T) {
 		{
 			name: "默认 Level（未设置）",
 			providers: []Provider{
-				{ID: 1, Name: "Provider-A", Level: 0}, // 0 应默认为 1
-				{ID: 2, Name: "Provider-B"},           // 未设置应默认为 1
+				{ID: "1", Name: "Provider-A", Level: 0}, // 0 应默认为 1
+				{ID: "2", Name: "Provider-B"},           // 未设置应默认为 1
 			},
 			expected: map[int][]string{
 				1: {"Provider-A", "Provider-B"},
@@ -536,10 +538,10 @@ func TestProviderLevelGrouping(t *testing.T) {
 		{
 			name: "多个 Level 分组",
 			providers: []Provider{
-				{ID: 1, Name: "Provider-L1-A", Level: 1},
-				{ID: 2, Name: "Provider-L2-A", Level: 2},
-				{ID: 3, Name: "Provider-L1-B", Level: 1},
-				{ID: 4, Name: "Provider-L3-A", Level: 3},
+				{ID: "1", Name: "Provider-L1-A", Level: 1},
+				{ID: "2", Name: "Provider-L2-A", Level: 2},
+				{ID: "3", Name: "Provider-L1-B", Level: 1},
+				{ID: "4", Name: "Provider-L3-A", Level: 3},
 			},
 			expected: map[int][]string{
 				1: {"Provider-L1-A", "Provider-L1-B"},
@@ -550,9 +552,9 @@ func TestProviderLevelGrouping(t *testing.T) {
 		{
 			name: "保持同 Level 内顺序",
 			providers: []Provider{
-				{ID: 1, Name: "First", Level: 1},
-				{ID: 2, Name: "Second", Level: 1},
-				{ID: 3, Name: "Third", Level: 1},
+				{ID: "1", Name: "First", Level: 1},
+				{ID: "2", Name: "Second", Level: 1},
+				{ID: "3", Name: "Third", Level: 1},
 			},
 			expected: map[int][]string{
 				1: {"First", "Second", "Third"},
@@ -561,9 +563,9 @@ func TestProviderLevelGrouping(t *testing.T) {
 		{
 			name: "Level 10 到 Level 1 混合",
 			providers: []Provider{
-				{ID: 1, Name: "L10", Level: 10},
-				{ID: 2, Name: "L1", Level: 1},
-				{ID: 3, Name: "L5", Level: 5},
+				{ID: "1", Name: "L10", Level: 10},
+				{ID: "2", Name: "L1", Level: 1},
+				{ID: "3", Name: "L5", Level: 5},
 			},
 			expected: map[int][]string{
 				1:  {"L1"},
@@ -670,7 +672,7 @@ func TestProviderLevelJSON(t *testing.T) {
 		{
 			name: "Level 设置为 2",
 			provider: Provider{
-				ID:    1,
+				ID:    "1",
 				Name:  "Test",
 				Level: 2,
 			},
@@ -679,7 +681,7 @@ func TestProviderLevelJSON(t *testing.T) {
 		{
 			name: "Level 未设置（零值，应 omitempty）",
 			provider: Provider{
-				ID:    1,
+				ID:    "1",
 				Name:  "Test",
 				Level: 0,
 			},
@@ -688,7 +690,7 @@ func TestProviderLevelJSON(t *testing.T) {
 		{
 			name: "Level 设置为 1",
 			provider: Provider{
-				ID:    1,
+				ID:    "1",
 				Name:  "Test",
 				Level: 1,
 			},
@@ -746,7 +748,7 @@ func TestDuplicateProvider(t *testing.T) {
 		{
 			name: "复制基础供应商",
 			source: Provider{
-				ID:                    1,
+				ID:                    "1",
 				Name:                  "Test Provider",
 				APIURL:                "https://api.example.com",
 				APIKey:                "sk-test-key",
@@ -761,7 +763,7 @@ func TestDuplicateProvider(t *testing.T) {
 		{
 			name: "复制带模型映射的供应商",
 			source: Provider{
-				ID:             10,
+				ID:             "10",
 				Name:           "OpenRouter",
 				APIURL:         "https://openrouter.ai/api",
 				APIKey:         "sk-or-xxx",
@@ -816,9 +818,12 @@ func TestDuplicateProvider(t *testing.T) {
 					tt.source.DailyCostLimitEnabled, tt.source.DailyCostLimitMicros)
 			}
 
-			// 验证新 ID 为当前最大 ID + 1
-			if cloned.ID != tt.source.ID+1 {
-				t.Errorf("期望新 ID %d，实际 %d", tt.source.ID+1, cloned.ID)
+			// 新 Provider 使用 UUID，且不能复用源 ID。
+			if cloned.ID == tt.source.ID {
+				t.Errorf("副本复用了源 ID: %s", cloned.ID)
+			}
+			if _, err := uuid.Parse(cloned.ID.String()); err != nil {
+				t.Errorf("副本 ID 不是合法 UUID: %s", cloned.ID)
 			}
 
 			// 验证基础字段复制
@@ -872,9 +877,9 @@ func TestDuplicateProvider(t *testing.T) {
 func TestDuplicateProvider_NotFound(t *testing.T) {
 	setupRenameTestEnv(t)
 	ps := NewProviderService()
-	saveProviderFixture(t, ps, []Provider{{ID: 1, Name: "A", APIURL: "u"}})
+	saveProviderFixture(t, ps, []Provider{{ID: "1", Name: "A", APIURL: "u"}})
 
-	if _, err := ps.DuplicateProvider(CodexPlatform, 999); err == nil {
+	if _, err := ps.DuplicateProvider(CodexPlatform, "999"); err == nil {
 		t.Fatal("源 ID 不存在应报错")
 	}
 

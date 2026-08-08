@@ -290,7 +290,7 @@ func TestDuplicateProviderCopiesTLSAndSanitize(t *testing.T) {
 	ps := NewProviderService()
 
 	source := Provider{
-		ID:                     1,
+		ID:                     "1",
 		Name:                   "src",
 		APIURL:                 "https://api.example.com",
 		APIKey:                 "sk",

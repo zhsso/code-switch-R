@@ -53,7 +53,7 @@ func (service *providerRPCService) SaveModelGroups(kind string, generation int64
 }
 
 func mergeProviderViews(current []services.Provider, views []providerRPCView) []services.Provider {
-	currentByID := make(map[int64]services.Provider, len(current))
+	currentByID := make(map[services.ProviderID]services.Provider, len(current))
 	for _, provider := range current {
 		currentByID[provider.ID] = provider
 	}
@@ -75,7 +75,7 @@ func mergeProviderViews(current []services.Provider, views []providerRPCView) []
 	return providers
 }
 
-func (service *providerRPCService) RevealProviderAPIKey(kind string, id int64) (string, error) {
+func (service *providerRPCService) RevealProviderAPIKey(kind string, id services.ProviderID) (string, error) {
 	providers, err := service.providers.LoadProviders(kind)
 	if err != nil {
 		return "", err
@@ -85,10 +85,10 @@ func (service *providerRPCService) RevealProviderAPIKey(kind string, id int64) (
 			return provider.APIKey, nil
 		}
 	}
-	return "", fmt.Errorf("provider %d not found", id)
+	return "", fmt.Errorf("provider %s not found", id)
 }
 
-func (service *providerRPCService) DuplicateProvider(kind string, sourceID int64) (*providerRPCView, error) {
+func (service *providerRPCService) DuplicateProvider(kind string, sourceID services.ProviderID) (*providerRPCView, error) {
 	provider, err := service.providers.DuplicateProvider(kind, sourceID)
 	if err != nil || provider == nil {
 		return nil, err
@@ -97,7 +97,7 @@ func (service *providerRPCService) DuplicateProvider(kind string, sourceID int64
 	return &view, nil
 }
 
-func (service *providerRPCService) RenameProvider(kind string, id int64, name string) (int64, error) {
+func (service *providerRPCService) RenameProvider(kind string, id services.ProviderID, name string) (int64, error) {
 	return service.providers.RenameProviderWithGeneration(kind, id, name)
 }
 

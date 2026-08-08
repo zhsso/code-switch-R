@@ -66,8 +66,6 @@ func main() {
 	)
 	logService := services.NewLogService(providerService)
 	dailyLimitService := services.NewDailyCostLimitService(providerService, appSettings, logService)
-	dailyLimitService.SetBlacklistService(blacklistService)
-	blacklistService.SetBlacklistObserver(dailyLimitService.OnProviderBlacklisted)
 	providerRelay.SetDailyCostLimitService(dailyLimitService)
 	speedTestService := services.NewSpeedTestService()
 	connectivityTestService := services.NewConnectivityTestService(
@@ -223,7 +221,7 @@ func registerWebServices(registry *rpcRegistry, svc webServices) {
 	registry.Register("codeswitch/services.AppSettingsService", svc.appSettings,
 		"GetAppSettings", "SaveAppSettings")
 	registry.Register("codeswitch/services.BlacklistService", svc.blacklist,
-		"GetBlacklistStatus", "ManualUnblock", "ManualUnblockAndReset", "ManualResetLevel")
+		"GetGroupBlacklistStatus", "ManualUnblockGroupAndReset", "ManualResetGroupLevel")
 	registry.Register("codeswitch/services.DailyCostLimitService", svc.dailyLimits,
 		"GetStatuses", "SetActualUsage", "ManualBlock", "TemporaryUnblock")
 	registry.Register("codeswitch/services.LogService", svc.logs,

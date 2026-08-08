@@ -400,12 +400,18 @@
     >
       <form class="vendor-form" @submit.prevent="submitModal">
                 <label class="form-field">
-                  <span>{{ t('components.main.form.labels.name') }}</span>
+                  <span class="label-row">
+                    {{ t('components.main.form.labels.name') }}
+                    <span v-if="modalState.errors.name" class="field-error">
+                      {{ modalState.errors.name }}
+                    </span>
+                  </span>
                   <BaseInput
                     v-model="modalState.form.name"
                     type="text"
                     :placeholder="t('components.main.form.placeholders.name')"
                     required
+                    :class="{ 'has-error': !!modalState.errors.name }"
                   />
                 </label>
 
@@ -877,7 +883,7 @@ import { useTheme } from '../../composables/useTheme'
 import { useRouter } from 'vue-router'
 import { showToast } from '../../utils/toast'
 import { extractErrorMessage } from '../../utils/error'
-import { getBlacklistStatus, manualUnblock, type BlacklistStatus } from '../../services/blacklist'
+import { getBlacklistStatus, type BlacklistStatus } from '../../services/blacklist'
 import {
   fetchDailyCostLimitStatuses,
   manuallyBlockDaily,
@@ -935,15 +941,15 @@ const blacklistStatusMap = reactive<Record<ProviderTab, Record<string, Blacklist
 })
 let blacklistTimer: number | undefined
 
-const dailyLimitStatusMap = ref<Record<number, DailyCostLimitStatus>>({})
+const dailyLimitStatusMap = ref<Record<string, DailyCostLimitStatus>>({})
 
 // 连通性状态（已废弃，保留用于兼容）
-const connectivityResultsMap = reactive<Record<ProviderTab, Record<number, ConnectivityResult>>>({
+const connectivityResultsMap = reactive<Record<ProviderTab, Record<string, ConnectivityResult>>>({
   codex: {},
 })
 
 // 可用性监控状态（新）
-const availabilityResultsMap = reactive<Record<ProviderTab, Record<number, ProviderTimeline>>>({
+const availabilityResultsMap = reactive<Record<ProviderTab, Record<string, ProviderTimeline>>>({
   codex: {},
 })
 
@@ -1272,13 +1278,18 @@ const loadProviderStats = async (tab: ProviderTab) => {
 
 // 加载黑名单状态
 const loadBlacklistStatus = async (tab: ProviderTab) => {
+  const modelGroupId = activeModelGroupId.value
+  if (modelGroupId === null) {
+    blacklistStatusMap[tab] = {}
+    return
+  }
   try {
-    const statuses = await getBlacklistStatus()
+    const statuses = await getBlacklistStatus(modelGroupId)
     const map: Record<string, BlacklistStatus> = {}
     statuses.forEach(status => {
       map[status.providerName] = status
     })
-    blacklistStatusMap[tab] = map
+    if (activeModelGroupId.value === modelGroupId) blacklistStatusMap[tab] = map
   } catch (err) {
     console.error(`加载 ${tab} 黑名单状态失败:`, err)
   }
@@ -1287,9 +1298,9 @@ const loadBlacklistStatus = async (tab: ProviderTab) => {
 const loadDailyLimitStatuses = async () => {
   try {
     const statuses = await fetchDailyCostLimitStatuses('codex')
-    const next: Record<number, DailyCostLimitStatus> = {}
+    const next: Record<string, DailyCostLimitStatus> = {}
     statuses.forEach((status) => {
-      next[Number(status.providerId)] = status
+      next[status.providerId] = status
     })
     dailyLimitStatusMap.value = next
   } catch (error) {
@@ -1297,7 +1308,7 @@ const loadDailyLimitStatuses = async () => {
   }
 }
 
-const getDailyLimitStatus = (providerId: number): DailyCostLimitStatus | null =>
+const getDailyLimitStatus = (providerId: string): DailyCostLimitStatus | null =>
   dailyLimitStatusMap.value[providerId] || null
 
 const dailyLimitPercent = (status: DailyCostLimitStatus): number =>
@@ -1327,8 +1338,9 @@ const dailyLimitStatusLabel = (status: DailyCostLimitStatus): string => {
 
 // 手动解禁并重置（完全重置）
 const handleUnblockAndReset = async (providerName: string) => {
+  if (activeModelGroupId.value === null) return
   try {
-    await Call.ByName('codeswitch/services.BlacklistService.ManualUnblockAndReset', activeTab, providerName)
+    await Call.ByName('codeswitch/services.BlacklistService.ManualUnblockGroupAndReset', activeTab, activeModelGroupId.value, providerName)
     showToast(t('components.main.blacklist.unblockSuccess', { name: providerName }), 'success')
     await loadBlacklistStatus(activeTab)
   } catch (err) {
@@ -1339,8 +1351,9 @@ const handleUnblockAndReset = async (providerName: string) => {
 
 // 手动清零等级（仅重置等级）
 const handleResetLevel = async (providerName: string) => {
+  if (activeModelGroupId.value === null) return
   try {
-    await Call.ByName('codeswitch/services.BlacklistService.ManualResetLevel', activeTab, providerName)
+    await Call.ByName('codeswitch/services.BlacklistService.ManualResetGroupLevel', activeTab, activeModelGroupId.value, providerName)
     showToast(t('components.main.blacklist.resetLevelSuccess', { name: providerName }), 'success')
     await loadBlacklistStatus(activeTab)
   } catch (err) {
@@ -1364,11 +1377,16 @@ const getProviderBlacklistStatus = (providerName: string): BlacklistStatus | nul
   return blacklistStatusMap[activeTab][providerName] || null
 }
 
+watch(activeModelGroupId, () => {
+  blacklistStatusMap[activeTab] = {}
+  void loadBlacklistStatus(activeTab)
+})
+
 // 加载连通性测试结果（已废弃，保留兼容）
 const loadConnectivityResults = async (tab: ProviderTab) => {
   try {
     const results = await getConnectivityResults()
-    const map: Record<number, ConnectivityResult> = {}
+    const map: Record<string, ConnectivityResult> = {}
     results.forEach((result) => {
       map[result.providerId] = result
     })
@@ -1386,7 +1404,7 @@ const loadAvailabilityResults = async () => {
     // 转换为按平台和 ID 索引的格式
     for (const platform of Object.keys(allResults)) {
       const timelines = allResults[platform] || []
-      const map: Record<number, ProviderTimeline> = {}
+      const map: Record<string, ProviderTimeline> = {}
       timelines.forEach((timeline) => {
         map[timeline.providerId] = timeline
       })
@@ -1398,17 +1416,17 @@ const loadAvailabilityResults = async () => {
 }
 
 // 获取 provider 连通性状态（已废弃）
-const getProviderConnectivityResult = (providerId: number): ConnectivityResult | null => {
+const getProviderConnectivityResult = (providerId: string): ConnectivityResult | null => {
   return connectivityResultsMap[activeTab][providerId] || null
 }
 
 // 获取 provider 可用性状态（新）
-const getProviderAvailabilityResult = (providerId: number): ProviderTimeline | null => {
+const getProviderAvailabilityResult = (providerId: string): ProviderTimeline | null => {
   return availabilityResultsMap[activeTab][providerId] || null
 }
 
 // 获取连通性状态指示器样式（改用可用性监控结果）
-const getConnectivityIndicatorClass = (providerId: number): string => {
+const getConnectivityIndicatorClass = (providerId: string): string => {
   const result = getProviderAvailabilityResult(providerId)
   if (!result || !result.latest) return 'connectivity-gray'
 
@@ -1427,7 +1445,7 @@ const getConnectivityIndicatorClass = (providerId: number): string => {
 }
 
 // 获取连通性状态提示文本（改用可用性监控结果）
-const getConnectivityTooltip = (providerId: number): string => {
+const getConnectivityTooltip = (providerId: string): string => {
   const result = getProviderAvailabilityResult(providerId)
   if (!result || !result.latest) return t('components.main.connectivity.noData')
 
@@ -1651,16 +1669,22 @@ const handleProviderSwitched = (event: { data: { platform: string; toProvider: s
 
 // 处理供应商拉黑事件
 // @author sm
-const handleProviderBlacklisted = (event: { data: { platform: string; providerName: string } }) => {
-  const { platform, providerName } = event.data
+const handleProviderBlacklisted = (event: { data: { platform: string; providerName: string; modelGroupId: number; modelGroupName?: string } }) => {
+  const { platform, providerName, modelGroupId } = event.data
   console.log('[Event] provider:blacklisted', platform, providerName)
-  switchToTabAndHighlight(platform, providerName)
+  if (platform !== activeTab || activeModelGroupId.value !== modelGroupId) return
+  highlightedProvider.value = providerName
+  if (highlightTimer) clearTimeout(highlightTimer)
+  highlightTimer = window.setTimeout(() => {
+    highlightedProvider.value = null
+  }, 3000)
+  void loadBlacklistStatus(activeTab)
 }
 
-const handleProviderRecovered = (event: { data: { platform: string; providerName: string } }) => {
-  const { platform, providerName } = event.data
+const handleProviderRecovered = (event: { data: { platform: string; providerName: string; modelGroupId: number } }) => {
+  const { platform, providerName, modelGroupId } = event.data
   console.log('[Event] provider:recovered', platform, providerName)
-  if (platform !== activeTab) return
+  if (platform !== activeTab || activeModelGroupId.value !== modelGroupId) return
 
   highlightedProvider.value = providerName
   if (highlightTimer) clearTimeout(highlightTimer)
@@ -1974,6 +1998,15 @@ type VendorForm = {
 const iconOptions = Object.keys(lobeIcons).sort((a, b) => a.localeCompare(b))
 const defaultIconKey = iconOptions[0] ?? 'aicoding'
 
+const createProviderID = (): string => {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
 // 图标搜索筛选
 const iconSearchQuery = ref('')
 const filteredIconOptions = computed(() => {
@@ -2018,9 +2051,10 @@ const defaultFormValues = (platform?: string): VendorForm => ({
 const modalState = reactive({
   open: false,
   tabId: activeTab,
-  editingId: null as number | null,
+  editingId: null as string | null,
   form: defaultFormValues(),
   errors: {
+    name: '',
     apiUrl: '',
     fallbackApiUrls: '',
     costMultiplier: '',
@@ -2079,7 +2113,7 @@ const confirmState = reactive({ open: false, card: null as AutomationCard | null
 
 const dailyLimitManager = reactive({
   open: false,
-  providerId: 0,
+  providerId: '',
   providerName: '',
   actualUsageUSD: '',
   status: null as DailyCostLimitStatus | null,
@@ -2165,6 +2199,7 @@ const openCreateModal = () => {
   connectivityTestResult.value = null
   apiKeyVisible.value = false
   apiKeyChanged.value = false
+  modalState.errors.name = ''
   modalState.errors.apiUrl = ''
   modalState.errors.fallbackApiUrls = ''
   modalState.errors.costMultiplier = ''
@@ -2232,6 +2267,7 @@ const openEditModal = (card: AutomationCard) => {
   connectivityTestResult.value = null
   apiKeyVisible.value = false
   apiKeyChanged.value = false
+  modalState.errors.name = ''
   modalState.errors.apiUrl = ''
   modalState.errors.fallbackApiUrls = ''
   modalState.errors.costMultiplier = ''
@@ -2251,7 +2287,7 @@ const closeConfirm = () => {
   confirmState.card = null
 }
 
-const attachProviderToCreateGroup = async (providerId: number) => {
+const attachProviderToCreateGroup = async (providerId: string) => {
   const groupId = pendingCreateGroupId.value
   if (groupId === null) return
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -2287,10 +2323,22 @@ const submitModal = async (): Promise<boolean> => {
   const costMultiplier = Number(modalState.form.costMultiplier)
   const parsedDailyLimitMicros = parseUSDToMicros(modalState.form.dailyCostLimitUSD)
   const dailyCostLimitMicros = parsedDailyLimitMicros ?? 0
+  modalState.errors.name = ''
   modalState.errors.apiUrl = ''
   modalState.errors.fallbackApiUrls = ''
   modalState.errors.costMultiplier = ''
   modalState.errors.dailyCostLimit = ''
+  if (!name) {
+    modalState.errors.name = t('components.main.form.errors.nameRequired')
+    return false
+  }
+  const duplicateName = list.some(card =>
+    card.id !== editingCard.value?.id && card.name.trim().toLowerCase() === name.toLowerCase()
+  )
+  if (duplicateName) {
+    modalState.errors.name = t('components.main.form.errors.duplicateName')
+    return false
+  }
   if (!Number.isFinite(costMultiplier) || costMultiplier < 0.01 || costMultiplier > 100) {
     modalState.errors.costMultiplier = t('components.main.form.errors.invalidCostMultiplier')
     return false
@@ -2384,8 +2432,8 @@ const submitModal = async (): Promise<boolean> => {
     }
   } else {
     const newCard: AutomationCard = {
-      id: Date.now(),
-      name: name || 'Untitled vendor',
+      id: createProviderID(),
+      name,
       apiUrl,
       apiKey,
       apiKeyConfigured: apiKey !== '',
@@ -2447,7 +2495,7 @@ const configure = (card: AutomationCard) => {
   openEditModal(card)
 }
 
-const remove = async (id: number) => {
+const remove = async (id: string) => {
   const list = cards.value
   const index = list.findIndex((card) => card.id === id)
   if (index > -1) {

@@ -1,7 +1,7 @@
 import { Call } from '../runtime'
 
 export type DailyCostLimitStatus = {
-  providerId: number
+  providerId: string
   providerName: string
   enabled: boolean
   timezone: string
@@ -22,11 +22,11 @@ const SERVICE = 'codeswitch/services.DailyCostLimitService'
 export const fetchDailyCostLimitStatuses = async (platform = 'codex') =>
   (await Call.ByName<DailyCostLimitStatus[]>(`${SERVICE}.GetStatuses`, platform)) ?? []
 
-export const setDailyActualUsage = (platform: string, providerId: number, actualMicros: number) =>
+export const setDailyActualUsage = (platform: string, providerId: string, actualMicros: number) =>
   Call.ByName(`${SERVICE}.SetActualUsage`, platform, providerId, actualMicros)
 
-export const manuallyBlockDaily = (platform: string, providerId: number) =>
+export const manuallyBlockDaily = (platform: string, providerId: string) =>
   Call.ByName(`${SERVICE}.ManualBlock`, platform, providerId)
 
-export const temporarilyUnblockDaily = (platform: string, providerId: number) =>
+export const temporarilyUnblockDaily = (platform: string, providerId: string) =>
   Call.ByName(`${SERVICE}.TemporaryUnblock`, platform, providerId)

@@ -3,7 +3,6 @@ package services
 import (
 	"database/sql"
 	"fmt"
-	"log"
 	"math"
 	"strings"
 	"sync"
@@ -22,7 +21,7 @@ const (
 
 type dailyCostLimitKey struct {
 	Platform   string
-	ProviderID int64
+	ProviderID ProviderID
 	Timezone   string
 	Day        string
 }
@@ -39,34 +38,32 @@ type dailyCostLimitState struct {
 
 // DailyCostLimitStatus is the current, timezone-scoped state shown in the WebUI.
 type DailyCostLimitStatus struct {
-	ProviderID             int64   `json:"providerId"`
-	ProviderName           string  `json:"providerName"`
-	Enabled                bool    `json:"enabled"`
-	Timezone               string  `json:"timezone"`
-	Day                    string  `json:"day"`
-	LimitMicros            int64   `json:"limitMicros"`
-	SystemCostMicros       int64   `json:"systemCostMicros"`
-	ManualAdjustmentMicros int64   `json:"manualAdjustmentMicros"`
-	UsedMicros             int64   `json:"usedMicros"`
-	UsagePercent           float64 `json:"usagePercent"`
-	AutoBlocked            bool    `json:"autoBlocked"`
-	ManualBlocked          bool    `json:"manualBlocked"`
-	Blocked                bool    `json:"blocked"`
-	BlockReason            string  `json:"blockReason"`
+	ProviderID             ProviderID `json:"providerId"`
+	ProviderName           string     `json:"providerName"`
+	Enabled                bool       `json:"enabled"`
+	Timezone               string     `json:"timezone"`
+	Day                    string     `json:"day"`
+	LimitMicros            int64      `json:"limitMicros"`
+	SystemCostMicros       int64      `json:"systemCostMicros"`
+	ManualAdjustmentMicros int64      `json:"manualAdjustmentMicros"`
+	UsedMicros             int64      `json:"usedMicros"`
+	UsagePercent           float64    `json:"usagePercent"`
+	AutoBlocked            bool       `json:"autoBlocked"`
+	ManualBlocked          bool       `json:"manualBlocked"`
+	Blocked                bool       `json:"blocked"`
+	BlockReason            string     `json:"blockReason"`
 }
 
 // DailyCostLimitService keeps the per-Provider daily gate separate from both
 // Provider.Enabled and the ordinary timed blacklist.
 type DailyCostLimitService struct {
-	providerService  *ProviderService
-	appSettings      *AppSettingsService
-	logService       *LogService
-	blacklistService *BlacklistService
-
-	mu     sync.Mutex
-	states map[dailyCostLimitKey]*dailyCostLimitState
-	loaded map[dailyCostLimitKey]bool
-	now    func() time.Time
+	providerService *ProviderService
+	appSettings     *AppSettingsService
+	logService      *LogService
+	mu              sync.Mutex
+	states          map[dailyCostLimitKey]*dailyCostLimitState
+	loaded          map[dailyCostLimitKey]bool
+	now             func() time.Time
 }
 
 func NewDailyCostLimitService(
@@ -82,12 +79,6 @@ func NewDailyCostLimitService(
 		loaded:          make(map[dailyCostLimitKey]bool),
 		now:             time.Now,
 	}
-}
-
-func (service *DailyCostLimitService) SetBlacklistService(blacklist *BlacklistService) {
-	service.mu.Lock()
-	service.blacklistService = blacklist
-	service.mu.Unlock()
 }
 
 func (service *DailyCostLimitService) currentScope() (string, string, time.Time, time.Time, error) {
@@ -113,7 +104,7 @@ func (service *DailyCostLimitService) currentScope() (string, string, time.Time,
 
 func (service *DailyCostLimitService) stateKey(
 	platform string,
-	providerID int64,
+	providerID ProviderID,
 	timezone string,
 	day string,
 ) dailyCostLimitKey {
@@ -182,10 +173,7 @@ func (service *DailyCostLimitService) ensureStateLocked(
 		LimitMicros:       provider.DailyCostLimitMicros,
 	}
 	if provider.DailyCostLimitEnabled && provider.DailyCostLimitMicros > 0 {
-		used := state.usedMicros()
-		state.AutoBlocked = used >= provider.DailyCostLimitMicros ||
-			(service.isOrdinaryBlacklisted(provider) &&
-				meetsPercentThreshold(used, provider.DailyCostLimitMicros, 95))
+		state.AutoBlocked = state.usedMicros() >= provider.DailyCostLimitMicros
 	}
 	if err := service.writeStateLocked(state); err != nil {
 		return nil, err
@@ -336,13 +324,11 @@ func (service *DailyCostLimitService) syncConfigurationLocked(
 		// Turning the feature back on starts from today's retained usage, but a
 		// previous manual block is not restored.
 		used := next.usedMicros()
-		next.AutoBlocked = next.LimitMicros > 0 && (used >= next.LimitMicros ||
-			(service.isOrdinaryBlacklisted(provider) && meetsPercentThreshold(used, next.LimitMicros, 95)))
+		next.AutoBlocked = next.LimitMicros > 0 && used >= next.LimitMicros
 		next.ManualBlocked = false
 	} else if limitChanged && next.LimitMicros > 0 {
 		used := next.usedMicros()
-		if used >= next.LimitMicros ||
-			(service.isOrdinaryBlacklisted(provider) && meetsPercentThreshold(used, next.LimitMicros, 95)) {
+		if used >= next.LimitMicros {
 			next.AutoBlocked = true
 		}
 	}
@@ -443,8 +429,6 @@ func (service *DailyCostLimitService) SettleRequest(provider Provider, requestLo
 		used := next.usedMicros()
 		if next.LimitMicros > 0 && used >= next.LimitMicros {
 			next.AutoBlocked = true
-		} else if service.isOrdinaryBlacklisted(provider) && meetsPercentThreshold(used, next.LimitMicros, 95) {
-			next.AutoBlocked = true
 		}
 	}
 	writeErr := service.writeStateLocked(&next)
@@ -452,48 +436,6 @@ func (service *DailyCostLimitService) SettleRequest(provider Provider, requestLo
 	// transient failure. A later successful settlement persists the aggregate.
 	*state = next
 	return writeErr
-}
-
-// OnProviderBlacklisted is registered as the ordinary blacklist transition
-// observer. Failure counts below the blacklist threshold do not reach here.
-func (service *DailyCostLimitService) OnProviderBlacklisted(platform string, providerName string) {
-	provider, err := service.findProvider(platform, 0, providerName)
-	if err != nil {
-		log.Printf("[DailyLimit] 处理拉黑事件失败: %v", err)
-		return
-	}
-	if !provider.DailyCostLimitEnabled {
-		return
-	}
-	timezone, day, start, end, err := service.currentScope()
-	if err != nil {
-		log.Printf("[DailyLimit] 读取拉黑事件时区失败: %v", err)
-		return
-	}
-	key := service.stateKey(CodexPlatform, provider.ID, timezone, day)
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	state, err := service.ensureStateLocked(provider, key, start, end)
-	if err != nil {
-		log.Printf("[DailyLimit] 初始化 Provider %s 当日费用失败: %v", provider.Name, err)
-		return
-	}
-	if !meetsPercentThreshold(state.usedMicros(), provider.DailyCostLimitMicros, 95) {
-		return
-	}
-	next := *state
-	next.AutoBlocked = true
-	next.FeatureEnabled = true
-	next.LimitMicros = provider.DailyCostLimitMicros
-	if err := service.writeStateLocked(&next); err != nil {
-		// A real blacklist transition at 95% is safety-critical. Keep the gate
-		// active in memory even if this persistence attempt failed.
-		*state = next
-		log.Printf("[DailyLimit] Provider %s 升级为当日额度耗尽失败: %v", provider.Name, err)
-		return
-	}
-	*state = next
-	log.Printf("[DailyLimit] Provider %s 当日用量达到 95%% 且进入普通黑名单，已标记额度耗尽", provider.Name)
 }
 
 func (service *DailyCostLimitService) GetStatuses(platform string) ([]DailyCostLimitStatus, error) {
@@ -580,7 +522,7 @@ func buildDailyCostLimitStatus(provider Provider, state *dailyCostLimitState) Da
 	}
 }
 
-func (service *DailyCostLimitService) SetActualUsage(platform string, providerID int64, actualMicros int64) error {
+func (service *DailyCostLimitService) SetActualUsage(platform string, providerID ProviderID, actualMicros int64) error {
 	if actualMicros < 0 || actualMicros > maxMoneyMicros {
 		return fmt.Errorf("今日实际用量必须在 0-%d 微美元之间", maxMoneyMicros)
 	}
@@ -609,9 +551,6 @@ func (service *DailyCostLimitService) SetActualUsage(platform string, providerID
 	next.ManualAdjustmentMicros = actualMicros - next.SystemCostMicros
 	if actualMicros >= provider.DailyCostLimitMicros {
 		next.AutoBlocked = true
-	} else if service.isOrdinaryBlacklisted(provider) &&
-		meetsPercentThreshold(actualMicros, provider.DailyCostLimitMicros, 95) {
-		next.AutoBlocked = true
 	}
 	if err := service.writeStateLocked(&next); err != nil {
 		return err
@@ -620,18 +559,17 @@ func (service *DailyCostLimitService) SetActualUsage(platform string, providerID
 	return nil
 }
 
-func (service *DailyCostLimitService) ManualBlock(platform string, providerID int64) error {
+func (service *DailyCostLimitService) ManualBlock(platform string, providerID ProviderID) error {
 	return service.setBlockState(platform, providerID, true)
 }
 
 // TemporaryUnblock clears today's daily-limit gates only. It does not create an
-// exemption: a later 100% settlement or a new 95% + blacklist transition can
-// block the Provider again.
-func (service *DailyCostLimitService) TemporaryUnblock(platform string, providerID int64) error {
+// exemption: a later 100% settlement can block the Provider again.
+func (service *DailyCostLimitService) TemporaryUnblock(platform string, providerID ProviderID) error {
 	return service.setBlockState(platform, providerID, false)
 }
 
-func (service *DailyCostLimitService) setBlockState(platform string, providerID int64, blocked bool) error {
+func (service *DailyCostLimitService) setBlockState(platform string, providerID ProviderID, blocked bool) error {
 	provider, err := service.findProvider(platform, providerID, "")
 	if err != nil {
 		return err
@@ -667,7 +605,7 @@ func (service *DailyCostLimitService) setBlockState(platform string, providerID 
 	return nil
 }
 
-func (service *DailyCostLimitService) findProvider(platform string, providerID int64, providerName string) (Provider, error) {
+func (service *DailyCostLimitService) findProvider(platform string, providerID ProviderID, providerName string) (Provider, error) {
 	if err := requireCodexPlatform(platform); err != nil {
 		return Provider{}, err
 	}
@@ -677,25 +615,17 @@ func (service *DailyCostLimitService) findProvider(platform string, providerID i
 	}
 	canonicalName := ResolveProviderAlias(CodexPlatform, strings.TrimSpace(providerName))
 	for _, provider := range providers {
-		if providerID != 0 && provider.ID == providerID {
+		if !providerID.IsZero() && provider.ID == providerID {
 			return provider, nil
 		}
-		if providerID == 0 && provider.Name == canonicalName {
+		if providerID.IsZero() && provider.Name == canonicalName {
 			return provider, nil
 		}
 	}
-	if providerID != 0 {
-		return Provider{}, fmt.Errorf("未找到 Provider ID: %d", providerID)
+	if !providerID.IsZero() {
+		return Provider{}, fmt.Errorf("未找到 Provider ID: %s", providerID)
 	}
 	return Provider{}, fmt.Errorf("未找到 Provider: %s", providerName)
-}
-
-func (service *DailyCostLimitService) isOrdinaryBlacklisted(provider Provider) bool {
-	if service.blacklistService == nil {
-		return false
-	}
-	blacklisted, _ := service.blacklistService.IsBlacklisted(CodexPlatform, provider.Name)
-	return blacklisted
 }
 
 func meetsPercentThreshold(usedMicros int64, limitMicros int64, percent int64) bool {

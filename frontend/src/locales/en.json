@@ -286,7 +286,7 @@
         "noIconResults": "No matching icons found",
         "hints": {
           "costMultiplier": "1 uses the model's base price; the current multiplier applies to all cost reports for this provider",
-          "dailyCostLimit": "Stops new requests for the day at 100%, or after ordinary blacklisting at 95%",
+          "dailyCostLimit": "Stops new requests at 100% of the daily limit; independent of group blacklists",
           "fallbackApiUrls": "When the primary URL fails with a switchable error (network/408/421/429/5xx), fallbacks are tried in order within the same request; the provider only counts as failed after all URLs fail",
           "apiEndpoint": "Override the Codex default endpoint. Leave blank to use /responses.",
           "insecureSkipVerify": "When enabled, this provider's TLS certificate is no longer verified (self-signed certs / corporate proxies). Man-in-the-middle risk — enable only for trusted internal endpoints",
@@ -325,6 +325,8 @@
         "confirmDeleteTitle": "Remove provider",
         "confirmDeleteMessage": "Are you sure you want to remove {name}? This action cannot be undone.",
         "errors": {
+          "nameRequired": "Provider name is required",
+          "duplicateName": "Provider names must be unique (case-insensitive)",
           "invalidUrl": "Please enter a valid API URL",
           "tooManyFallbacks": "At most 4 fallback URLs",
           "invalidFallbackUrl": "Fallback URLs must be valid http/https addresses",

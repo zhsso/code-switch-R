@@ -155,12 +155,12 @@ func newEndpointCooldownStore() *endpointCooldownStore {
 	}
 }
 
-func (s *endpointCooldownStore) key(platform string, providerID int64, addr string) string {
-	return platform + "\x00" + strconv.FormatInt(providerID, 10) + "\x00" + normalizeURL(addr)
+func (s *endpointCooldownStore) key(platform string, providerID ProviderID, addr string) string {
+	return platform + "\x00" + providerID.String() + "\x00" + normalizeURL(addr)
 }
 
 // MarkFailure 记录地址失败并进入冷却
-func (s *endpointCooldownStore) MarkFailure(platform string, providerID int64, addr string, d time.Duration) {
+func (s *endpointCooldownStore) MarkFailure(platform string, providerID ProviderID, addr string, d time.Duration) {
 	if d <= 0 {
 		d = defaultEndpointCooldown
 	}
@@ -180,7 +180,7 @@ func (s *endpointCooldownStore) MarkFailure(platform string, providerID int64, a
 }
 
 // MarkSuccess 地址成功即清除冷却
-func (s *endpointCooldownStore) MarkSuccess(platform string, providerID int64, addr string) {
+func (s *endpointCooldownStore) MarkSuccess(platform string, providerID ProviderID, addr string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.expires, s.key(platform, providerID, addr))
@@ -189,7 +189,7 @@ func (s *endpointCooldownStore) MarkSuccess(platform string, providerID int64, a
 // Order 按冷却状态排序地址池：未冷却的保持声明序在前，冷却中的按到期
 // 时间升序排队尾；全部冷却时只返回最早到期的一个（half-open 探测），
 // 避免每个请求把整池死地址重撞一遍。顺带惰性清理已过期条目。
-func (s *endpointCooldownStore) Order(platform string, providerID int64, pool []string) []string {
+func (s *endpointCooldownStore) Order(platform string, providerID ProviderID, pool []string) []string {
 	if len(pool) <= 1 {
 		return pool
 	}

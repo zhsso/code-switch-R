@@ -82,7 +82,7 @@ func TestCaptureFullErrorResponseBody(t *testing.T) {
 	defer upstream.Close()
 
 	prs := newTestRelayService(NewProviderService())
-	provider := Provider{ID: 1, Name: "err-p", APIURL: upstream.URL, APIKey: "k", Enabled: true}
+	provider := Provider{ID: "1", Name: "err-p", APIURL: upstream.URL, APIKey: "k", Enabled: true}
 	if err := prs.SetRequestCapture(true); err != nil {
 		t.Fatal(err)
 	}

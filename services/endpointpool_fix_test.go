@@ -78,40 +78,40 @@ func TestEndpointCooldownStore(t *testing.T) {
 	pool := []string{"https://a.com", "https://b.com", "https://c.com"}
 
 	// 初始：原序
-	if got := store.Order("codex", 1, pool); got[0] != "https://a.com" || len(got) != 3 {
+	if got := store.Order("codex", "1", pool); got[0] != "https://a.com" || len(got) != 3 {
 		t.Fatalf("无冷却时应保持原序: %v", got)
 	}
 
 	// a 失败：排队尾
-	store.MarkFailure("codex", 1, "https://a.com", time.Minute)
-	got := store.Order("codex", 1, pool)
+	store.MarkFailure("codex", "1", "https://a.com", time.Minute)
+	got := store.Order("codex", "1", pool)
 	if got[0] != "https://b.com" || got[2] != "https://a.com" {
 		t.Fatalf("冷却中的地址应排队尾: %v", got)
 	}
 
 	// 不同供应商互不影响。
-	if got := store.Order("codex", 2, pool); got[0] != "https://a.com" {
+	if got := store.Order("codex", "2", pool); got[0] != "https://a.com" {
 		t.Fatalf("冷却不应跨供应商生效: %v", got)
 	}
 
 	// 全冷却：只放最早到期者 half-open
-	store.MarkFailure("codex", 1, "https://b.com", 2*time.Minute)
-	store.MarkFailure("codex", 1, "https://c.com", 3*time.Minute)
-	got = store.Order("codex", 1, pool)
+	store.MarkFailure("codex", "1", "https://b.com", 2*time.Minute)
+	store.MarkFailure("codex", "1", "https://c.com", 3*time.Minute)
+	got = store.Order("codex", "1", pool)
 	if len(got) != 1 || got[0] != "https://a.com" {
 		t.Fatalf("全冷却应只放最早到期地址: %v", got)
 	}
 
 	// 成功清除冷却
-	store.MarkSuccess("codex", 1, "https://a.com")
-	got = store.Order("codex", 1, pool)
+	store.MarkSuccess("codex", "1", "https://a.com")
+	got = store.Order("codex", "1", pool)
 	if got[0] != "https://a.com" || len(got) != 3 {
 		t.Fatalf("成功后应立即恢复参战: %v", got)
 	}
 
 	// 过期惰性清理
 	now = now.Add(10 * time.Minute)
-	got = store.Order("codex", 1, pool)
+	got = store.Order("codex", "1", pool)
 	if len(got) != 3 || got[0] != "https://a.com" {
 		t.Fatalf("过期冷却应自动失效: %v", got)
 	}
@@ -202,7 +202,7 @@ func TestForwardRequestFallsBackToSecondAddress(t *testing.T) {
 
 	ps := NewProviderService()
 	if err := ps.SaveProviders("codex", []Provider{{
-		ID: 1, Name: "MultiAddr", APIURL: upstreamA.URL, APIKey: "sk-x", Enabled: true,
+		ID: "1", Name: "MultiAddr", APIURL: upstreamA.URL, APIKey: "sk-x", Enabled: true,
 		FallbackAPIURLs: []string{upstreamB.URL},
 	}}); err != nil {
 		t.Fatalf("预置供应商失败: %v", err)
@@ -243,7 +243,7 @@ func TestForwardRequestDoesNotSwitchOnAuthError(t *testing.T) {
 
 	ps := NewProviderService()
 	if err := ps.SaveProviders("codex", []Provider{{
-		ID: 1, Name: "AuthFail", APIURL: upstreamA.URL, APIKey: "sk-x", Enabled: true,
+		ID: "1", Name: "AuthFail", APIURL: upstreamA.URL, APIKey: "sk-x", Enabled: true,
 		FallbackAPIURLs: []string{upstreamB.URL},
 	}}); err != nil {
 		t.Fatalf("预置供应商失败: %v", err)
@@ -285,7 +285,7 @@ func TestHealthProbeFallsBackToSecondAddress(t *testing.T) {
 
 	hcs := NewHealthCheckService(NewProviderService(), nil, NewSettingsService(), nil)
 	provider := Provider{
-		ID: 7, Name: "HealthMulti", APIURL: upstreamA.URL, APIKey: "sk-h", Enabled: true,
+		ID: "7", Name: "HealthMulti", APIURL: upstreamA.URL, APIKey: "sk-h", Enabled: true,
 		FallbackAPIURLs: []string{upstreamB.URL},
 	}
 
@@ -309,7 +309,7 @@ func TestHealthProbeFallsBackToSecondAddress(t *testing.T) {
 	defer upstreamNever.Close()
 
 	provider2 := Provider{
-		ID: 8, Name: "HealthAuthFail", APIURL: upstreamAuth.URL, APIKey: "sk-h", Enabled: true,
+		ID: "8", Name: "HealthAuthFail", APIURL: upstreamAuth.URL, APIKey: "sk-h", Enabled: true,
 		FallbackAPIURLs: []string{upstreamNever.URL},
 	}
 	result2 := hcs.checkProvider(context.Background(), provider2, CodexPlatform)

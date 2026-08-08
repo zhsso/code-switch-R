@@ -46,8 +46,8 @@ func TestConnectivityTestAll_FiltersByAvailabilityMonitor(t *testing.T) {
 	defer server.Close()
 
 	setupConnectivityTestHome(t, []Provider{
-		{ID: 1, Name: "Monitored", APIURL: server.URL, APIKey: "k", AvailabilityMonitorEnabled: true},
-		{ID: 2, Name: "NotMonitored", APIURL: server.URL, APIKey: "k"},
+		{ID: "1", Name: "Monitored", APIURL: server.URL, APIKey: "k", AvailabilityMonitorEnabled: true},
+		{ID: "2", Name: "NotMonitored", APIURL: server.URL, APIKey: "k"},
 	})
 
 	cts := NewConnectivityTestService(NewProviderService(), nil, nil, nil)
@@ -56,8 +56,8 @@ func TestConnectivityTestAll_FiltersByAvailabilityMonitor(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("应只测试启用可用性监控的 1 个供应商，实际测试了 %d 个", len(results))
 	}
-	if results[0].ProviderID != 1 {
-		t.Errorf("被测试的应是 ID=1 的 Monitored，实际 ID=%d", results[0].ProviderID)
+	if results[0].ProviderID != "1" {
+		t.Errorf("被测试的应是 ID=1 的 Monitored，实际 ID=%s", results[0].ProviderID)
 	}
 }
 
@@ -115,7 +115,7 @@ func TestConnectivityAutoTest_StopStartLeavesSinglePoller(t *testing.T) {
 	defer server.Close()
 
 	setupConnectivityTestHome(t, []Provider{
-		{ID: 1, Name: "Slow", APIURL: server.URL, APIKey: "k", AvailabilityMonitorEnabled: true},
+		{ID: "1", Name: "Slow", APIURL: server.URL, APIKey: "k", AvailabilityMonitorEnabled: true},
 	})
 
 	cts := NewConnectivityTestService(NewProviderService(), nil, nil, nil)

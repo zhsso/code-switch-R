@@ -15,7 +15,7 @@ export const HealthStatus = {
 // 健康检查结果类型
 export interface HealthCheckResult {
   id: number
-  providerId: number
+  providerId: string
   providerName: string
   platform: string
   model?: string
@@ -28,7 +28,7 @@ export interface HealthCheckResult {
 
 // Provider 时间线类型
 export interface ProviderTimeline {
-  providerId: number
+  providerId: string
   providerName: string
   platform: string
   availabilityMonitorEnabled: boolean
@@ -68,7 +68,7 @@ export async function getHistory(platform: string, providerName: string, limit: 
 /**
  * 手动触发单个 Provider 检测
  */
-export async function runSingleCheck(platform: string, providerId: number): Promise<HealthCheckResult> {
+export async function runSingleCheck(platform: string, providerId: string): Promise<HealthCheckResult> {
   return Call.ByName(`${SERVICE_PATH}.RunSingleCheck`, platform, providerId)
 }
 
@@ -105,7 +105,7 @@ export async function isPollingRunning(): Promise<boolean> {
  */
 export async function setAvailabilityMonitorEnabled(
   platform: string,
-  providerId: number,
+  providerId: string,
   enabled: boolean
 ): Promise<void> {
   return Call.ByName(`${SERVICE_PATH}.SetAvailabilityMonitorEnabled`, platform, providerId, enabled)
@@ -116,7 +116,7 @@ export async function setAvailabilityMonitorEnabled(
  */
 export async function setConnectivityAutoBlacklist(
   platform: string,
-  providerId: number,
+  providerId: string,
   enabled: boolean
 ): Promise<void> {
   return Call.ByName(`${SERVICE_PATH}.SetConnectivityAutoBlacklist`, platform, providerId, enabled)
@@ -127,7 +127,7 @@ export async function setConnectivityAutoBlacklist(
  */
 export async function saveAvailabilityConfig(
   platform: string,
-  providerId: number,
+  providerId: string,
   config: AvailabilityConfig
 ): Promise<void> {
   return Call.ByName(`${SERVICE_PATH}.SaveAvailabilityConfig`, platform, providerId, config)

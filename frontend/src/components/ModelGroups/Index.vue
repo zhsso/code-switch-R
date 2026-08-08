@@ -20,7 +20,7 @@ const notice = ref('')
 const modelDrafts = reactive<Record<number, string>>({})
 const providerDrafts = reactive<Record<number, string>>({})
 const draggedGroupId = ref<number | null>(null)
-const draggedProvider = ref<{ groupId: number; providerId: number } | null>(null)
+const draggedProvider = ref<{ groupId: number; providerId: string } | null>(null)
 let persistRequested = false
 
 const cloneGroups = (value: ModelGroup[]) => value.map(group => ({
@@ -154,19 +154,19 @@ const removeModel = async (group: ModelGroup, model: string) => {
 }
 
 const addProvider = async (group: ModelGroup) => {
-  const providerId = Number(providerDrafts[group.id])
+  const providerId = providerDrafts[group.id]
   if (!providerId || group.providerIds.includes(providerId)) return
   group.providerIds.push(providerId)
   providerDrafts[group.id] = ''
   await persist()
 }
 
-const removeProvider = async (group: ModelGroup, providerId: number) => {
+const removeProvider = async (group: ModelGroup, providerId: string) => {
   group.providerIds = group.providerIds.filter(id => id !== providerId)
   await persist()
 }
 
-const dropProvider = async (group: ModelGroup, targetId: number) => {
+const dropProvider = async (group: ModelGroup, targetId: string) => {
   const source = draggedProvider.value
   draggedProvider.value = null
   if (!source || source.groupId !== group.id || source.providerId === targetId) return

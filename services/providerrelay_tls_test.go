@@ -68,7 +68,7 @@ func TestHealthCheckHonorsInsecureSkipVerify(t *testing.T) {
 
 	hcs := NewHealthCheckService(nil, nil, nil, nil)
 	base := Provider{
-		ID:     1,
+		ID:     "1",
 		Name:   "self-signed",
 		APIURL: ts.URL,
 		APIKey: "k",
@@ -104,7 +104,7 @@ func TestConnectivityHonorsInsecureSkipVerify(t *testing.T) {
 
 	cts := NewConnectivityTestService(nil, nil, nil, nil)
 	base := Provider{
-		ID:     1,
+		ID:     "1",
 		Name:   "self-signed",
 		APIURL: ts.URL,
 		APIKey: "k",

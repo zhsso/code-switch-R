@@ -17,7 +17,7 @@ func TestLoadProviders_MigrationDoesNotClobberConcurrentSave(t *testing.T) {
 
 	// 初始文件带旧字段 connectivityCheck，触发 LoadProviders 的迁移回写路径
 	saveProviderFixture(t, ps, []Provider{
-		{ID: 1, Name: "A", APIURL: "https://a.com", APIKey: "k", ConnectivityCheck: true},
+		{ID: "1", Name: "A", APIURL: "https://a.com", APIKey: "k", ConnectivityCheck: true},
 	})
 
 	// 测试先持有 ps.mu，让 LoadProviders 在锁外读完旧快照后阻塞在拿锁处
@@ -42,8 +42,8 @@ func TestLoadProviders_MigrationDoesNotClobberConcurrentSave(t *testing.T) {
 		t.Fatalf("获取路径失败: %v", err)
 	}
 	newData, _ := serializeProviders([]Provider{
-		{ID: 1, Name: "A", APIURL: "https://a.com", APIKey: "k", AvailabilityMonitorEnabled: true},
-		{ID: 2, Name: "B", APIURL: "https://b.com", APIKey: "k2"},
+		{ID: "1", Name: "A", APIURL: "https://a.com", APIKey: "k", AvailabilityMonitorEnabled: true},
+		{ID: "2", Name: "B", APIURL: "https://b.com", APIKey: "k2"},
 	})
 	if err := os.WriteFile(path, newData, 0o644); err != nil {
 		t.Fatalf("写入新配置失败: %v", err)
@@ -72,7 +72,7 @@ func TestLoadProviders_MigrationDoesNotClobberConcurrentSave(t *testing.T) {
 	}
 	foundB := false
 	for _, p := range envelope.Providers {
-		if p.ID == 2 && p.Name == "B" {
+		if p.ID == "2" && p.Name == "B" {
 			foundB = true
 		}
 	}

@@ -19,7 +19,7 @@ export const SubStatusContentMismatch = 'content_mismatch'
 
 // 连通性测试结果接口
 export interface ConnectivityResult {
-  providerId: number
+  providerId: string
   providerName: string
   platform: string
   status: number
@@ -60,7 +60,7 @@ export const getAllConnectivityResults = async (): Promise<Record<string, Connec
  * Runs a test for one Codex provider.
  * @param providerId provider ID
  */
-export const runSingleTest = async (providerId: number): Promise<ConnectivityResult> => {
+export const runSingleTest = async (providerId: string): Promise<ConnectivityResult> => {
   return Call.ByName(`${SERVICE}.RunSingleTest`, 'codex', providerId)
 }
 

@@ -14,27 +14,27 @@ import (
 // aliasTTL 定义 rename 后旧名保留时长,必须 > in-flight 请求上限(32h)并留 buffer。
 const aliasTTL = 48 * time.Hour
 
-// nextAvailableProviderID 在当前配置最大 ID 之后分配新 ID，同时避开仍被
-// 活动 alias 引用的历史 ID。Provider 删除后 alias 仍需保留到过期，以承接
-// 在途请求；复用这类 ID 会让新副本被误判为刚改过名的旧 Provider。
-func nextAvailableProviderID(platform string, providers []Provider) (int64, error) {
-	maxID := int64(0)
-	for _, provider := range providers {
-		if provider.ID > maxID {
-			maxID = provider.ID
-		}
-	}
-
+// nextAvailableProviderID generates a UUID that is absent from both the live
+// configuration and active rename aliases. The database check is intentionally
+// retained even though UUID collisions are vanishingly unlikely: aliases outlive
+// deleted Providers and must never be rebound to a new identity.
+func nextAvailableProviderID(platform string, providers []Provider) (ProviderID, error) {
 	if err := cleanupExpiredAliases(); err != nil {
-		return 0, fmt.Errorf("清理过期 alias 失败: %w", err)
+		return "", fmt.Errorf("清理过期 alias 失败: %w", err)
 	}
 	db, err := xdb.DB("default")
 	if err != nil {
-		return 0, fmt.Errorf("获取数据库连接失败: %w", err)
+		return "", fmt.Errorf("获取数据库连接失败: %w", err)
 	}
-
-	candidate := maxID + 1
-	for candidate > 0 {
+	used := make(map[ProviderID]struct{}, len(providers))
+	for _, provider := range providers {
+		used[provider.ID] = struct{}{}
+	}
+	for attempts := 0; attempts < 64; attempts++ {
+		candidate := NewProviderID()
+		if _, exists := used[candidate]; exists {
+			continue
+		}
 		var occupied int
 		err := db.QueryRow(
 			`SELECT COUNT(*) FROM provider_alias
@@ -42,15 +42,13 @@ func nextAvailableProviderID(platform string, providers []Provider) (int64, erro
 			platform, candidate,
 		).Scan(&occupied)
 		if err != nil {
-			return 0, fmt.Errorf("查询 provider ID alias 占用失败: %w", err)
+			return "", fmt.Errorf("查询 provider ID alias 占用失败: %w", err)
 		}
 		if occupied == 0 {
 			return candidate, nil
 		}
-		candidate++
 	}
-
-	return 0, fmt.Errorf("没有可用的 provider ID")
+	return "", fmt.Errorf("无法生成未占用的 provider UUID")
 }
 
 // RenameProvider 改名 provider:事务更新 DB 中按 name 存储的历史数据,
@@ -61,12 +59,12 @@ func nextAvailableProviderID(platform string, providers []Provider) (int64, erro
 //   - 同 kind 下不存在其它 provider 用同名(当前 snapshot)
 //   - 48h 内 alias 表未占用该 newName
 //   - 该 provider_id 在 48h 内未 rename 过(禁止链式)
-func (ps *ProviderService) RenameProvider(kind string, id int64, newName string) error {
+func (ps *ProviderService) RenameProvider(kind string, id ProviderID, newName string) error {
 	_, err := ps.RenameProviderWithGeneration(kind, id, newName)
 	return err
 }
 
-func (ps *ProviderService) RenameProviderWithGeneration(kind string, id int64, newName string) (int64, error) {
+func (ps *ProviderService) RenameProviderWithGeneration(kind string, id ProviderID, newName string) (int64, error) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	if err := ps.renameProviderLocked(kind, id, newName); err != nil {
@@ -75,7 +73,7 @@ func (ps *ProviderService) RenameProviderWithGeneration(kind string, id int64, n
 	return ps.configGen.Add(1), nil
 }
 
-func (ps *ProviderService) renameProviderLocked(kind string, id int64, newName string) error {
+func (ps *ProviderService) renameProviderLocked(kind string, id ProviderID, newName string) error {
 	newName = strings.TrimSpace(newName)
 	if newName == "" {
 		return fmt.Errorf("新名字不能为空")
@@ -109,7 +107,7 @@ func (ps *ProviderService) renameProviderLocked(kind string, id int64, newName s
 		}
 	}
 	if target == nil {
-		return fmt.Errorf("未找到 id=%d 的 provider", id)
+		return fmt.Errorf("未找到 id=%s 的 provider", id)
 	}
 	oldName := target.Name
 
@@ -185,7 +183,7 @@ func (ps *ProviderService) renameProviderLocked(kind string, id int64, newName s
 
 // doRenameTx 在 tx 内完成 DB 侧所有改动:
 // request_log.provider / provider_blacklist.provider_name / health_check_history + 写 alias。
-func doRenameTx(tx *sql.Tx, platform string, providerID int64, oldName, newName string) error {
+func doRenameTx(tx *sql.Tx, platform string, providerID ProviderID, oldName, newName string) error {
 	if _, err := tx.Exec(
 		`UPDATE request_log SET provider = ? WHERE platform = ? AND provider = ?`,
 		newName, platform, oldName,
@@ -222,7 +220,7 @@ func doRenameTx(tx *sql.Tx, platform string, providerID int64, oldName, newName 
 // checkAliasConstraints 校验 alias 表层面的约束:
 //   - newName 未被 48h 内其它 alias 占用
 //   - 该 provider_id 48h 内没有产生过 alias(禁止链式 rename)
-func checkAliasConstraints(platform string, providerID int64, newName string) error {
+func checkAliasConstraints(platform string, providerID ProviderID, newName string) error {
 	db, err := xdb.DB("default")
 	if err != nil {
 		return fmt.Errorf("获取数据库连接失败: %w", err)
@@ -261,7 +259,7 @@ func checkAliasConstraints(platform string, providerID int64, newName string) er
 // 用于 SaveProviders 新建/更新时阻止"复用旧名新建 provider 污染历史"。
 // providerID 为当前被保存的 provider id;如果 alias 的 provider_id 等于它本身,则不算冲突
 // (意味着是该 provider 自己的老别名,canonical_name 仍指向它自己,不会误归并)。
-func checkNameNotOccupiedByAlias(platform string, providerID int64, name string) error {
+func checkNameNotOccupiedByAlias(platform string, providerID ProviderID, name string) error {
 	if name == "" {
 		return nil
 	}
@@ -269,7 +267,7 @@ func checkNameNotOccupiedByAlias(platform string, providerID int64, name string)
 	if err != nil {
 		return fmt.Errorf("获取数据库连接失败: %w", err)
 	}
-	var owner int64
+	var owner ProviderID
 	err = db.QueryRow(
 		`SELECT provider_id FROM provider_alias
 		 WHERE platform = ? AND alias_name = ? AND expires_at > CURRENT_TIMESTAMP
@@ -283,7 +281,7 @@ func checkNameNotOccupiedByAlias(platform string, providerID int64, name string)
 		return fmt.Errorf("查询 alias 占用失败: %w", err)
 	}
 	if owner != providerID {
-		log.Printf("[Provider] 名字 %q 被其他 provider(id=%d)的 48h 活动别名占用,拒绝保存", name, owner)
+		log.Printf("[Provider] 名字 %q 被其他 provider(id=%s)的 48h 活动别名占用,拒绝保存", name, owner)
 		return fmt.Errorf("名字 %q 被其他供应商的历史别名暂时占用(48h 内),请换个名字或等待过期", name)
 	}
 	return nil
@@ -305,7 +303,7 @@ func checkNamesNotOccupiedByAlias(platform string, providers []Provider) error {
 	placeholders := make([]string, 0, len(providers))
 	args := make([]interface{}, 0, len(providers)+1)
 	args = append(args, platform)
-	idByFoldedName := make(map[string]int64, len(providers))
+	idByFoldedName := make(map[string]ProviderID, len(providers))
 	for _, p := range providers {
 		if p.Name == "" {
 			continue
@@ -329,7 +327,7 @@ func checkNamesNotOccupiedByAlias(platform string, providers []Provider) error {
 	defer rows.Close()
 	for rows.Next() {
 		var aliasName string
-		var owner int64
+		var owner ProviderID
 		if err := rows.Scan(&aliasName, &owner); err != nil {
 			return fmt.Errorf("查询 alias 占用失败: %w", err)
 		}
@@ -339,7 +337,7 @@ func checkNamesNotOccupiedByAlias(platform string, providers []Provider) error {
 		}
 		// alias 的 provider_id 等于该 provider 自身时不算冲突（自己的老别名）
 		if owner != id {
-			log.Printf("[Provider] 名字 %q 被其他 provider(id=%d)的 48h 活动别名占用,拒绝保存", aliasName, owner)
+			log.Printf("[Provider] 名字 %q 被其他 provider(id=%s)的 48h 活动别名占用,拒绝保存", aliasName, owner)
 			return fmt.Errorf("名字 %q 被其他供应商的历史别名暂时占用(48h 内),请换个名字或等待过期", aliasName)
 		}
 	}

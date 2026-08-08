@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/daodao97/xgo/xdb"
+	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
 
@@ -57,24 +58,25 @@ func setupRenameTestEnv(t *testing.T) string {
 		)`,
 		`CREATE TABLE IF NOT EXISTS provider_blacklist (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			platform TEXT NOT NULL, provider_name TEXT NOT NULL,
+			platform TEXT NOT NULL, model_group_id INTEGER NOT NULL DEFAULT 0,
+			model_group_name TEXT NOT NULL DEFAULT '', provider_name TEXT NOT NULL,
 			failure_count INTEGER DEFAULT 0,
 			blacklisted_at DATETIME, blacklisted_until DATETIME,
 			last_failure_at DATETIME, last_failure_reason TEXT DEFAULT '', blacklist_level INTEGER DEFAULT 0,
 			last_recovered_at DATETIME, last_degrade_hour INTEGER DEFAULT 0,
 			last_failure_window_start DATETIME, auto_recovered INTEGER DEFAULT 0,
-			UNIQUE(platform, provider_name)
+			UNIQUE(platform, model_group_id, provider_name)
 		)`,
 		`CREATE TABLE IF NOT EXISTS health_check_history (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			provider_id INTEGER NOT NULL, provider_name TEXT NOT NULL,
+			provider_id TEXT NOT NULL, provider_name TEXT NOT NULL,
 			platform TEXT NOT NULL, model TEXT, endpoint TEXT,
 			status TEXT NOT NULL, latency_ms INTEGER, error_message TEXT,
 			checked_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS provider_alias (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			platform TEXT NOT NULL, provider_id INTEGER NOT NULL,
+			platform TEXT NOT NULL, provider_id TEXT NOT NULL,
 			alias_name TEXT NOT NULL COLLATE NOCASE,
 			canonical_name TEXT NOT NULL,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -131,7 +133,7 @@ func seedBlacklist(t *testing.T, platform, providerName string) {
 	}
 }
 
-func seedHealthCheck(t *testing.T, platform string, providerID int64, providerName string) {
+func seedHealthCheck(t *testing.T, platform string, providerID ProviderID, providerName string) {
 	t.Helper()
 	db, _ := xdb.DB("default")
 	_, err := db.Exec(
@@ -159,14 +161,14 @@ func TestRenameProvider_HappyPath(t *testing.T) {
 
 	ps := NewProviderService()
 	saveProviderFixture(t, ps, []Provider{
-		{ID: 1, Name: "OldName", APIURL: "https://a.com", APIKey: "k"},
+		{ID: "1", Name: "OldName", APIURL: "https://a.com", APIKey: "k"},
 	})
 
 	seedRequestLog(t, CodexPlatform, "OldName", 5)
 	seedBlacklist(t, CodexPlatform, "OldName")
-	seedHealthCheck(t, CodexPlatform, 1, "OldName")
+	seedHealthCheck(t, CodexPlatform, "1", "OldName")
 
-	if err := ps.RenameProvider(CodexPlatform, 1, "NewName"); err != nil {
+	if err := ps.RenameProvider(CodexPlatform, "1", "NewName"); err != nil {
 		t.Fatalf("RenameProvider 失败: %v", err)
 	}
 
@@ -203,9 +205,9 @@ func TestRenameProvider_HappyPath(t *testing.T) {
 func TestRenameProvider_EmptyName(t *testing.T) {
 	setupRenameTestEnv(t)
 	ps := NewProviderService()
-	saveProviderFixture(t, ps, []Provider{{ID: 1, Name: "X", APIURL: "u"}})
+	saveProviderFixture(t, ps, []Provider{{ID: "1", Name: "X", APIURL: "u"}})
 
-	if err := ps.RenameProvider(CodexPlatform, 1, "  "); err == nil {
+	if err := ps.RenameProvider(CodexPlatform, "1", "  "); err == nil {
 		t.Error("空名字应拒绝")
 	}
 }
@@ -214,9 +216,9 @@ func TestRenameProvider_EmptyName(t *testing.T) {
 func TestRenameProvider_SameName(t *testing.T) {
 	setupRenameTestEnv(t)
 	ps := NewProviderService()
-	saveProviderFixture(t, ps, []Provider{{ID: 1, Name: "X", APIURL: "u"}})
+	saveProviderFixture(t, ps, []Provider{{ID: "1", Name: "X", APIURL: "u"}})
 
-	if err := ps.RenameProvider(CodexPlatform, 1, "x"); err == nil {
+	if err := ps.RenameProvider(CodexPlatform, "1", "x"); err == nil {
 		t.Error("新旧同名(大小写不同)应拒绝")
 	}
 }
@@ -226,11 +228,11 @@ func TestRenameProvider_CurrentConflict(t *testing.T) {
 	setupRenameTestEnv(t)
 	ps := NewProviderService()
 	saveProviderFixture(t, ps, []Provider{
-		{ID: 1, Name: "A", APIURL: "u"},
-		{ID: 2, Name: "B", APIURL: "u"},
+		{ID: "1", Name: "A", APIURL: "u"},
+		{ID: "2", Name: "B", APIURL: "u"},
 	})
 
-	if err := ps.RenameProvider(CodexPlatform, 1, "B"); err == nil {
+	if err := ps.RenameProvider(CodexPlatform, "1", "B"); err == nil {
 		t.Error("冲突名字应拒绝")
 	}
 }
@@ -239,12 +241,12 @@ func TestRenameProvider_CurrentConflict(t *testing.T) {
 func TestRenameProvider_ChainedBlocked(t *testing.T) {
 	setupRenameTestEnv(t)
 	ps := NewProviderService()
-	saveProviderFixture(t, ps, []Provider{{ID: 1, Name: "A", APIURL: "u"}})
+	saveProviderFixture(t, ps, []Provider{{ID: "1", Name: "A", APIURL: "u"}})
 
-	if err := ps.RenameProvider(CodexPlatform, 1, "B"); err != nil {
+	if err := ps.RenameProvider(CodexPlatform, "1", "B"); err != nil {
 		t.Fatalf("首次 rename 应成功: %v", err)
 	}
-	if err := ps.RenameProvider(CodexPlatform, 1, "C"); err == nil {
+	if err := ps.RenameProvider(CodexPlatform, "1", "C"); err == nil {
 		t.Error("48h 内再次 rename 应拒绝")
 	}
 }
@@ -254,16 +256,16 @@ func TestRenameProvider_AliasOccupied(t *testing.T) {
 	setupRenameTestEnv(t)
 	ps := NewProviderService()
 	saveProviderFixture(t, ps, []Provider{
-		{ID: 1, Name: "A", APIURL: "u"},
-		{ID: 2, Name: "X", APIURL: "u"},
+		{ID: "1", Name: "A", APIURL: "u"},
+		{ID: "2", Name: "X", APIURL: "u"},
 	})
 
 	// A -> B,产生 alias A
-	if err := ps.RenameProvider(CodexPlatform, 1, "B"); err != nil {
+	if err := ps.RenameProvider(CodexPlatform, "1", "B"); err != nil {
 		t.Fatalf("A->B 失败: %v", err)
 	}
 	// 此时 X 想改为 A,但 alias 还占着 A
-	if err := ps.RenameProvider(CodexPlatform, 2, "A"); err == nil {
+	if err := ps.RenameProvider(CodexPlatform, "2", "A"); err == nil {
 		t.Error("新名 A 被未过期 alias 占用,应拒绝")
 	}
 }
@@ -273,9 +275,9 @@ func TestRenameProvider_TTLCleanup(t *testing.T) {
 	setupRenameTestEnv(t)
 	ps := NewProviderService()
 	saveProviderFixture(t, ps, []Provider{
-		{ID: 1, Name: "A", APIURL: "u"},
+		{ID: "1", Name: "A", APIURL: "u"},
 	})
-	if err := ps.RenameProvider(CodexPlatform, 1, "B"); err != nil {
+	if err := ps.RenameProvider(CodexPlatform, "1", "B"); err != nil {
 		t.Fatalf("rename 失败: %v", err)
 	}
 
@@ -287,7 +289,7 @@ func TestRenameProvider_TTLCleanup(t *testing.T) {
 	}
 
 	// 现在 rename B -> C 应该过(链式约束看未过期,过期不算)
-	if err := ps.RenameProvider(CodexPlatform, 1, "C"); err != nil {
+	if err := ps.RenameProvider(CodexPlatform, "1", "C"); err != nil {
 		t.Errorf("过期 alias 不应阻塞:%v", err)
 	}
 
@@ -301,7 +303,7 @@ func TestDuplicateProviderSkipsActiveAliasID(t *testing.T) {
 	setupRenameTestEnv(t)
 	ps := NewProviderService()
 	saveProviderFixture(t, ps, []Provider{
-		{ID: 1, Name: "Source", APIURL: "https://source.example.com", APIKey: "key"},
+		{ID: "1", Name: "Source", APIURL: "https://source.example.com", APIKey: "key"},
 	})
 
 	db, err := xdb.DB("default")
@@ -316,12 +318,12 @@ func TestDuplicateProviderSkipsActiveAliasID(t *testing.T) {
 		t.Fatalf("写入活动 alias 失败: %v", err)
 	}
 
-	cloned, err := ps.DuplicateProvider(CodexPlatform, 1)
+	cloned, err := ps.DuplicateProvider(CodexPlatform, "1")
 	if err != nil {
 		t.Fatalf("复制 Provider 失败: %v", err)
 	}
-	if cloned.ID != 3 {
-		t.Fatalf("副本应跳过活动 alias 的 ID 2，实际 ID=%d", cloned.ID)
+	if _, err := uuid.Parse(cloned.ID.String()); err != nil || cloned.ID == "1" || cloned.ID == "2" {
+		t.Fatalf("副本应生成未被配置或 alias 占用的 UUID，实际 ID=%s", cloned.ID)
 	}
 	if err := ps.RenameProvider(CodexPlatform, cloned.ID, "Renamed Copy"); err != nil {
 		t.Fatalf("复制后的 Provider 应可立即改名: %v", err)
@@ -332,9 +334,9 @@ func TestDuplicateProviderSkipsActiveAliasID(t *testing.T) {
 func TestRenameProvider_NotFound(t *testing.T) {
 	setupRenameTestEnv(t)
 	ps := NewProviderService()
-	saveProviderFixture(t, ps, []Provider{{ID: 1, Name: "A", APIURL: "u"}})
+	saveProviderFixture(t, ps, []Provider{{ID: "1", Name: "A", APIURL: "u"}})
 
-	if err := ps.RenameProvider(CodexPlatform, 999, "B"); err == nil {
+	if err := ps.RenameProvider(CodexPlatform, "999", "B"); err == nil {
 		t.Error("id 不存在应报错")
 	}
 }
@@ -344,7 +346,7 @@ func TestRenameProvider_NotFound(t *testing.T) {
 func TestRenameProvider_RollbackOnTxFail(t *testing.T) {
 	setupRenameTestEnv(t)
 	ps := NewProviderService()
-	saveProviderFixture(t, ps, []Provider{{ID: 1, Name: "OldName", APIURL: "u"}})
+	saveProviderFixture(t, ps, []Provider{{ID: "1", Name: "OldName", APIURL: "u"}})
 
 	// 故意破坏表结构:DROP provider_blacklist,让 doRenameTx 的 UPDATE 失败
 	db, _ := xdb.DB("default")
@@ -352,7 +354,7 @@ func TestRenameProvider_RollbackOnTxFail(t *testing.T) {
 		t.Fatalf("drop 失败: %v", err)
 	}
 
-	err := ps.RenameProvider(CodexPlatform, 1, "NewName")
+	err := ps.RenameProvider(CodexPlatform, "1", "NewName")
 	if err == nil {
 		t.Fatal("期望 rename 失败,实际成功")
 	}
@@ -373,17 +375,17 @@ func TestSaveProviders_RejectsAliasReuse(t *testing.T) {
 	setupRenameTestEnv(t)
 	ps := NewProviderService()
 	saveProviderFixture(t, ps, []Provider{
-		{ID: 1, Name: "OldName", APIURL: "https://a.com"},
+		{ID: "1", Name: "OldName", APIURL: "https://a.com"},
 	})
 
 	// A->B 产生 alias OldName->NewName
-	if err := ps.RenameProvider(CodexPlatform, 1, "NewName"); err != nil {
+	if err := ps.RenameProvider(CodexPlatform, "1", "NewName"); err != nil {
 		t.Fatalf("rename 失败: %v", err)
 	}
 
 	// 用户尝试新增 id=2 命名为 OldName,应该被拒绝
 	providers, _ := ps.LoadProviders(CodexPlatform)
-	providers = append(providers, Provider{ID: 2, Name: "OldName", APIURL: "https://b.com"})
+	providers = append(providers, Provider{ID: "2", Name: "OldName", APIURL: "https://b.com"})
 	err := ps.SaveProviders(CodexPlatform, providers)
 	if err == nil {
 		t.Fatal("新建 provider 复用活动 alias 名应该被拒绝")
@@ -396,16 +398,16 @@ func TestSaveProviders_AliasReuseCaseInsensitive(t *testing.T) {
 	setupRenameTestEnv(t)
 	ps := NewProviderService()
 	saveProviderFixture(t, ps, []Provider{
-		{ID: 1, Name: "OldName", APIURL: "https://a.com"},
+		{ID: "1", Name: "OldName", APIURL: "https://a.com"},
 	})
 
-	if err := ps.RenameProvider(CodexPlatform, 1, "NewName"); err != nil {
+	if err := ps.RenameProvider(CodexPlatform, "1", "NewName"); err != nil {
 		t.Fatalf("rename 失败: %v", err)
 	}
 
 	// 使用不同大小写的同名("oldname" vs "OldName")仍应被拒绝
 	providers, _ := ps.LoadProviders(CodexPlatform)
-	providers = append(providers, Provider{ID: 2, Name: "oldname", APIURL: "https://b.com"})
+	providers = append(providers, Provider{ID: "2", Name: "oldname", APIURL: "https://b.com"})
 	if err := ps.SaveProviders(CodexPlatform, providers); err == nil {
 		t.Fatal("大小写不同的同名 alias 也应被拒绝(COLLATE NOCASE)")
 	}
@@ -415,9 +417,9 @@ func TestSaveProviders_AliasReuseCaseInsensitive(t *testing.T) {
 func TestResolveProviderAlias(t *testing.T) {
 	setupRenameTestEnv(t)
 	ps := NewProviderService()
-	saveProviderFixture(t, ps, []Provider{{ID: 1, Name: "A", APIURL: "u"}})
+	saveProviderFixture(t, ps, []Provider{{ID: "1", Name: "A", APIURL: "u"}})
 
-	if err := ps.RenameProvider(CodexPlatform, 1, "B"); err != nil {
+	if err := ps.RenameProvider(CodexPlatform, "1", "B"); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
 	if got := ResolveProviderAlias(CodexPlatform, "A"); got != "B" {

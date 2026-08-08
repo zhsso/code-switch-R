@@ -111,7 +111,7 @@ async function refreshAll() {
 }
 
 // 检测单个 Provider
-async function checkSingle(platform: string, providerId: number) {
+async function checkSingle(platform: string, providerId: string) {
   try {
     await runSingleCheck(platform, providerId)
     await loadData()
@@ -121,7 +121,7 @@ async function checkSingle(platform: string, providerId: number) {
 }
 
 // 切换监控开关（返回是否成功，供调用方决定后续动作）
-async function toggleMonitor(platform: string, providerId: number, enabled: boolean, event?: Event): Promise<boolean> {
+async function toggleMonitor(platform: string, providerId: string, enabled: boolean, event?: Event): Promise<boolean> {
   try {
     await setAvailabilityMonitorEnabled(platform, providerId, enabled)
     await loadData() // 刷新当前页面
